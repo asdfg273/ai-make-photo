@@ -12,15 +12,9 @@ pip install -r requirements.txt
 复制
 (注意：如果画图太慢，说明你的 PyTorch 没装 GPU 版，去 PyTorch 官网找对应的 CUDA 安装命令重新装一下 torch 即可)
 运行程序：
-bash
-复制代码
-收起
 python main.py
-复制
 📂 必须要建的文件夹！(非常重要)
-
 为了防止模型冲突报错，一定要在项目文件夹里建好这几个目录，并把下载好的模型（.safetensors 文件）按规定放进去：
-
 📁 models/ —— 放基础大模型（比如 ChilloutMix、SDXL_Base 等）。
 📁 loras/
 📁 sd1.5/ —— 放 SD 1.5 专用的 LoRA（动漫/写实风通常是这个）。
