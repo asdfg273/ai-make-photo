@@ -2,7 +2,7 @@ import os
 import gc
 import torch
 import cv2           
-import numpy as np  
+import numpy as np   
 from diffusers import (
     StableDiffusionPipeline, 
     StableDiffusionImg2ImgPipeline, 
@@ -15,14 +15,16 @@ from diffusers import (
     StableDiffusionXLControlNetPipeline,
     EulerAncestralDiscreteScheduler,    
     EulerDiscreteScheduler,            
-    DPMSolverMultistepScheduler    
+    DPMSolverMultistepScheduler,
+    DDIMScheduler
 )
 from controlnet_aux import OpenposeDetector
 from compel import Compel, ReturnedEmbeddingsType
 from threading import Lock
 from PIL import Image
+from utils.system_utils import SingletonMeta
 
-class ModelManager:
+class ModelManager(metaclass=SingletonMeta):
     _instance = None
     _lock = Lock()
     
@@ -348,31 +350,64 @@ class ModelManager:
             
         return result
 
-def switch_sampler(self, sampler_name):
-        """动态切换底层采样器(Scheduler)"""
-        if not hasattr(self, 'txt2img_pipe') or self.txt2img_pipe is None:
-            return
+    def switch_sampler(self, sampler_name):
+            """动态切换底层采样器(Scheduler)"""
+            if not hasattr(self, 'txt2img_pipe') or self.txt2img_pipe is None:
+                return
             
-        # 获取当前模型的底层配置参数
-        config = self.txt2img_pipe.scheduler.config
+            # 获取当前模型的底层配置参数
+            config = self.txt2img_pipe.scheduler.config
         
-        try:
-            if sampler_name == "Euler a":
-                new_scheduler = EulerAncestralDiscreteScheduler.from_config(config)
-            elif sampler_name == "Euler":
-                new_scheduler = EulerDiscreteScheduler.from_config(config)
-            elif sampler_name == "DPM++ 2M Karras":
-                new_scheduler = DPMSolverMultistepScheduler.from_config(config, use_karras_sigmas=True)
-            else:
-                return # 保持模型默认，不切换
+            try:
+                if sampler_name == "Euler a":
+                    new_scheduler = EulerAncestralDiscreteScheduler.from_config(config)
+                elif sampler_name == "Euler":
+                    new_scheduler = EulerDiscreteScheduler.from_config(config)
+                elif sampler_name == "DPM++ 2M Karras":
+                    new_scheduler = DPMSolverMultistepScheduler.from_config(config, use_karras_sigmas=True)
+                else:
+                    return # 保持模型默认，不切换
 
-            # 将新算法应用到所有管线
-            self.txt2img_pipe.scheduler = new_scheduler
-            if hasattr(self, 'img2img_pipe') and self.img2img_pipe:
-                self.img2img_pipe.scheduler = new_scheduler
-            if hasattr(self, 'inpaint_pipe') and self.inpaint_pipe:
-                self.inpaint_pipe.scheduler = new_scheduler
+                # 将新算法应用到所有管线
+                self.txt2img_pipe.scheduler = new_scheduler
+                if hasattr(self, 'img2img_pipe') and self.img2img_pipe:
+                    self.img2img_pipe.scheduler = new_scheduler
+                if hasattr(self, 'inpaint_pipe') and self.inpaint_pipe:
+                    self.inpaint_pipe.scheduler = new_scheduler
                 
-            print(f"⚙️ 采样器算法已无缝切换为: {sampler_name}")
-        except Exception as e:
-            print(f"⚠️ 采样器切换失败: {e}")
+                print(f"⚙️ 采样器算法已无缝切换为: {sampler_name}")
+            except Exception as e:
+                print(f"⚠️ 采样器切换失败: {e}")
+
+    def switch_sampler(self, sampler_name):
+            """根据 UI 传来的名称，切换底层的扩散调度器 (Sampler)"""
+            if not hasattr(self, 'txt2img_pipe') or self.txt2img_pipe is None:
+                return
+            
+            # 获取当前模型的 config，确保兼容性
+            config = self.txt2img_pipe.scheduler.config
+        
+            try:
+                if "欧拉A" in sampler_name or "Euler a" in sampler_name:
+                    new_scheduler = EulerAncestralDiscreteScheduler.from_config(config)
+                elif "欧拉" in sampler_name or "Euler" in sampler_name:
+                    new_scheduler = EulerDiscreteScheduler.from_config(config)
+                elif "DPM++ 2M" in sampler_name:
+                    new_scheduler = DPMSolverMultistepScheduler.from_config(config, use_karras_sigmas=True)
+                elif "DDIM" in sampler_name:
+                    new_scheduler = DDIMScheduler.from_config(config)
+                else:
+                    # 默认保底
+                    new_scheduler = EulerAncestralDiscreteScheduler.from_config(config)
+                
+                # 把新采样器挂载到所有的管道上
+                self.txt2img_pipe.scheduler = new_scheduler
+                if hasattr(self, 'img2img_pipe') and self.img2img_pipe is not None:
+                    self.img2img_pipe.scheduler = new_scheduler
+                if hasattr(self, 'inpaint_pipe') and self.inpaint_pipe is not None:
+                    self.inpaint_pipe.scheduler = new_scheduler
+                
+                print(f"🔄 引擎: 采样器已成功切换为 -> {sampler_name}")
+            
+            except Exception as e:
+                print(f"⚠️ 切换采样器失败: {e}，将使用原默认采样器")

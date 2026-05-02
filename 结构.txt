@@ -1,0 +1,28 @@
+📦 ai make photo (项目根目录)
+ ┣ 📂 loras/                     # 存放用户下载的 LoRA 模型 (.safetensors)
+ ┣ 📂 models/                    # 存放 SD 大模型 / ControlNet 模型
+ ┣ 📂 photo/                     # 默认的图像输出保存目录 (OUTPUT_DIR)
+ ┣ 📂 venv/                      # Python 虚拟环境 (依赖库所在位置)
+ ┃
+ ┣ 📂 utils/                     # 核心业务逻辑与界面组件包 (重构后提取)
+ ┃ ┣ 📜 __init__.py              # 模块包声明文件 (空文件)
+ ┃ ┣ 📜 app_events.py            # 界面交互逻辑 (按钮点击、图片选择、模型刷新)
+ ┃ ┣ 📜 app_generation.py        # 图像生成核心任务 (多线程调度、参数收集、进度条)
+ ┃ ┣ 📜 app_utils.py             # 通用工具与常量 (全局路径、预设提示词等)
+ ┃ ┣ 📜 image_processor.py       # 图像后期处理算法 (漫画拼图排版、ADetailer面部修复)
+ ┃ ┗ 📜 ui_builder.py            # 界面排版构建器 (仅负责把按钮和框画出来)
+ ┃  ┗📜system_utils.py         #监测器
+ ┃
+ ┣ 📂 photo_turn/                # 高级图像编辑子模块
+ ┃ ┣ 📜 __init__.py              # 模块包声明文件
+ ┃ ┣ 📜 image_processor.py       # (修图器专属的图像处理脚本)
+ ┃ ┗ 📜 pro_editor_tk.py         # 全功能 Tkinter 涂鸦修图编辑器核心代码
+ ┃
+ ┣ 📜 main.py                    # 🚀 主程序入口 (统筹加载、绑定模块、控制生命周期)
+ ┣ 📜 model_manager.py           # 🧠 底层 AI 引擎核心 (PyTorch 显存调度、Diffusers 管道加载)
+ ┣ 📜 config_manager.py          # 配置文件管理器 (读写用户习惯参数)
+ ┣ 📜 translation_service.py     # 翻译服务 (提示词中英互译)
+ ┣ 📜 lbpcascade_animeface.xml   # OpenCV 二次元人脸识别级联文件 (用于面部修复)
+ ┣ 📜 app_config.json            # 用户参数本地存档 (自动生成)
+ ┣ 📜 zh_to_en_dict.json         # 本地翻译词典缓存
+ ┗ 📜 requirements.txt           # 项目依赖包列表 (pip install -r)
