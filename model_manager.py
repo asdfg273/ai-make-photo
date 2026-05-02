@@ -117,6 +117,33 @@ class ModelManager(metaclass=SingletonMeta):
             pipe.enable_vae_tiling()
 
     def load_model(self, model_name):
+        if self.current_model_name == model_name and self.txt2img_pipe is not None:
+            return  # 模型没变，直接返回
+
+        print(f"🔄 正在卸载旧模型，准备加载新模型...")
+        
+        # ==========================================
+        # 🌟 核心防爆内存魔法：彻底炸毁旧模型！
+        # ==========================================
+        if hasattr(self, 'txt2img_pipe') and self.txt2img_pipe is not None:
+            del self.txt2img_pipe
+        if hasattr(self, 'img2img_pipe') and self.img2img_pipe is not None:
+            del self.img2img_pipe
+        if hasattr(self, 'inpaint_pipe') and self.inpaint_pipe is not None:
+            del self.inpaint_pipe
+            
+        self.txt2img_pipe = None
+        self.img2img_pipe = None
+        self.inpaint_pipe = None
+        
+        # 强制呼叫 Python 垃圾回收车清理残骸
+        import gc
+        gc.collect()
+        
+        # 强制清空显存缓存
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
         if getattr(self, 'current_model_name', None) == model_name:
             print("⚡ 模型未改变，极速跳过加载底层模型。")
             return
@@ -132,9 +159,9 @@ class ModelManager(metaclass=SingletonMeta):
         self.clear_memory()
 
         file_size_gb = os.path.getsize(model_path) / (1024 * 1024 * 1024)
-        self.is_sdxl = any(keyword in model_name.lower() for keyword in ["xl", "sdxl"])
+        self.is_sdxl = any(k in model_name.lower() for k in ["xl", "sdxl", "pony", "turbo", "lightning"])
         if not self.is_sdxl:
-            self.is_sdxl = file_size_gb > 5.0  
+            self.is_sdxl = file_size_gb > 4.2   
         
         try:
             print(f"正在加载 {'SDXL' if self.is_sdxl else 'SD 1.5'} 模型...")
@@ -153,7 +180,7 @@ class ModelManager(metaclass=SingletonMeta):
                 torch_dtype=self.dtype, 
                 use_safetensors=True,
                 safety_checker=None,
-                low_cpu_mem_usage=True  # 🌟 核心魔法：阻止一口气吞掉所有内存！
+                low_cpu_mem_usage=True  
             )
             
             self.apply_optimizations(self.txt2img_pipe)

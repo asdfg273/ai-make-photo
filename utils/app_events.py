@@ -52,25 +52,38 @@ class EventMixin:
         self.destroy()
 
     def refresh_lora_by_model(self):
-        current_model = self.combo_model.get().lower()
+        current_model = self.combo_model.get()
         if not current_model: return
-        is_sdxl = "xl" in current_model 
-        
-        # 统一使用底层引擎去获取列表，不用再自己写 os.listdir 了，更安全
+    
+        # --- 🌟 增强版 SDXL 识别逻辑 ---
+        name_lower = current_model.lower()
+        is_sdxl = any(k in name_lower for k in ["xl", "sdxl", "pony", "turbo", "lightning"])
+    
+        # 通过文件大小补救判定 (大于 4.2GB 必为 SDXL)
+        if not is_sdxl:
+            model_path = os.path.join("models", current_model)
+            if os.path.exists(model_path):
+                file_size_gb = os.path.getsize(model_path) / (1024 * 1024 * 1024)
+                is_sdxl = file_size_gb > 4.2  
+        # --------------------------------
+    
+        # 统一使用底层引擎去获取列表，不再自己写 os.listdir，更安全
+        # 确保传入正确的架构标识给底层的 get_available_loras 函数
         loras = self.ai.get_available_loras("sdxl" if is_sdxl else "sd1.5")
-        
+    
         # 批量更新 3 个下拉框
         for combo in self.combo_loras:
             combo['values'] = loras
             # 如果当前选择的 LoRA 已经不在本地硬盘了（或者刚切换了模型架构），就重置为"无"
             if combo.get() not in loras:
                 combo.set("无")
-                
-        # 更新提示词 Label（保留这行）
-        self.text_lora_info.config(state="normal")
-        self.text_lora_info.delete("1.0", "end")
-        self.text_lora_info.insert("1.0", "LoRA说明: (未选择)")
-        self.text_lora_info.config(state="disabled", fg="gray")
+            
+        # 更新提示词 Label（如果有 text_lora_info 这个组件）
+        if hasattr(self, 'text_lora_info'):
+            self.text_lora_info.config(state="normal")
+            self.text_lora_info.delete("1.0", "end")
+            self.text_lora_info.insert("1.0", f"🔄 已切换至 {'SDXL' if is_sdxl else 'SD1.5'} 的 LoRA 列表")
+            self.text_lora_info.config(state="disabled", fg="gray")
 
     def update_preview_ui(self, preview_img):
         img_tk = ImageTk.PhotoImage(preview_img.resize((512, 512), Image.Resampling.LANCZOS))
