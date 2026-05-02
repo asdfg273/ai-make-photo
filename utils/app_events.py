@@ -8,6 +8,7 @@ import threading
 import warnings
 from utils.app_utils import OUTPUT_DIR, PROMPT_PRESETS
 from photo_turn.pro_editor_tk import ProImageEditor
+import datetime
 class EventMixin:
     """专门负责处理所有按钮点击、滑块拖动、下拉框刷新的逻辑"""
     def apply_config_to_ui(self):
