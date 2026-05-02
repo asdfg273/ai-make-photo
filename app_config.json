@@ -1,0 +1,20 @@
+{
+    "default_steps": 100,
+    "default_strength": 0.5950000000000001,
+    "default_lora_weight": 0.917391304347826,
+    "adetailer_enabled": true,
+    "theme": "darkly",
+    "recent_models": [],
+    "recent_prompts": [],
+    "lora_names": [
+        "无",
+        "",
+        ""
+    ],
+    "lora_weights": [
+        0.917391304347826,
+        0.8,
+        0.8
+    ],
+    "device_preference": "检测中 (Loading...)"
+}
