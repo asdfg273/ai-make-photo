@@ -1,0 +1,7 @@
+photo_turn/
+├── components.py           # 独立的 UI 组件 (CropOverlay)
+├── mixin_history.py        # 撤销/重做/历史记录模块
+├── mixin_filters.py        # 图像调整与滤镜模块
+├── mixin_ai.py             # ADetailer AI 模块
+├── mixin_tools.py          # 鼠标事件、绘图、文字、裁剪模块
+└── pro_editor_tk.py        # 主程序入口及 UI 界面布局

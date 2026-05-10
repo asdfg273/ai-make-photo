@@ -1,24 +1,26 @@
 {
-    "default_steps": 20,
-    "default_strength": 0.5950000000000001,
-    "default_lora_weight": 0.917391304347826,
+    "default_steps": 40,
+    "default_strength": 0.6,
+    "default_lora_weight": 0.7,
     "adetailer_enabled": false,
     "theme": "darkly",
+    "device_preference": "自动 (Auto)",
     "recent_models": [],
     "recent_prompts": [],
-    "default_loras": [
-        [
-            "无",
-            0.917391304347826
-        ],
-        [
-            "无",
-            0.8
-        ],
-        [
-            "无",
-            0.8
-        ]
-    ],
-    "device_preference": "自动 (Auto)"
+    "default_width": 512,
+    "default_height": 768,
+    "default_batch": 10,
+    "default_cfg": 7.0,
+    "default_sampler": "Euler a",
+    "last_prompt": "杰作, 极致画质, 动漫风格, 绚丽的色彩, 京阿尼风格, 精致的五官, 唯美背景",
+    "last_neg": "真实照片, 3d, 丑陋, 崩坏, 多余的手指, 恐怖, 猎奇",
+    "use_adetailer": true,
+    "adetailer_strength": 0.35,
+    "use_ad_hand": true,
+    "ad_hand_strength": 0.25,
+    "ad_hand_blend": 0.65,
+    "use_hires": true,
+    "hires_denoise": 0.45,
+    "output_format": "PNG",
+    "output_dir": "outputs/"
 }

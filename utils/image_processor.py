@@ -42,68 +42,123 @@ def make_comic_strip(image_list):
 
     return comic_bg
 
-def process_adetailer(base_image, prompt, negative_prompt, seed, is_anime, strength, img2img_pipe, device, status_callback=None):
-    """纯净的人脸修复函数，将 UI 状态更新通过 status_callback 回调抛出"""
+def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt, strength=0.35, target="现实脸部"):
+    """
+    工业级 ADetailer 流水线：
+    支持 真人/二次元 面部与手部，自动处理8倍数对齐、提示词截断截流与无缝融合。
+    """
     try:
-        cv_img = cv2.cvtColor(np.array(base_image), cv2.COLOR_RGB2BGR)
-        gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-
-        if is_anime:
-            xml_path = "lbpcascade_animeface.xml"
-            if not os.path.exists(xml_path):
-                url = "https://raw.githubusercontent.com/nagadomi/lbpcascade_animeface/master/lbpcascade_animeface.xml"
-                urllib.request.urlretrieve(url, xml_path)
-            face_cascade = cv2.CascadeClassifier(xml_path)
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=5, minSize=(30, 30))
-        else:
-            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
-
-        if len(faces) == 0:
-            if status_callback: status_callback("🧑‍🎨 ADetailer: 未检测到明显人脸，跳过修复。", "gray")
-            return base_image 
-
-        if status_callback: status_callback(f"🧑‍🎨 ADetailer: 侦测到 {len(faces)} 张人脸，正在逐一精修...", "yellow")
-        result_image = base_image.copy()
+        # 1. 智能精简提示词，防止爆显存和超 77 Token 限制
+        # 只保留原提示词的前 20 个词作为背景参考
+        short_prompt = " ".join(prompt.split(",")[:4]) 
         
-        for idx, (x, y, w, h) in enumerate(faces):
-            try:
-                if status_callback: status_callback(f"🧑‍🎨 ADetailer: 正在修复第 {idx+1}/{len(faces)} 张脸...", "yellow")
-                
-                margin_x, margin_y = int(w * 0.4), int(h * 0.4)
-                x1, y1 = max(0, x - margin_x), max(0, y - int(margin_y * 1.5)) 
-                x2, y2 = min(base_image.width, x + w + margin_x), min(base_image.height, y + h + margin_y)
-                crop_w, crop_h = x2 - x1, y2 - y1
-                
-                face_crop = base_image.crop((x1, y1, x2, y2))
-                face_crop_512 = face_crop.resize((512, 512), Image.Resampling.LANCZOS)
+        if "二次元手部" in target:
+            target_prompt = "perfect anime hands, highly detailed, five fingers, flawless, " + short_prompt
+            target_neg = "bad hands, missing fingers, extra fingers, deformed, mutated, " + negative_prompt
+            model_url = "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt"
+            model_name = "hand_yolov8n.pt"
+        elif "现实手部" in target:
+            target_prompt = "perfect realistic human hands, highly detailed, 5 fingers, pores, " + short_prompt
+            target_neg = "bad hands, missing fingers, extra fingers, deformed, mutated, " + negative_prompt
+            model_url = "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt"
+            model_name = "hand_yolov8n.pt"
+        elif "二次元脸部" in target:
+            target_prompt = "perfect anime face, highly detailed eyes, beautiful face, masterpiece, " + short_prompt
+            target_neg = "bad face, deformed eyes, ugly, poorly drawn face, " + negative_prompt
+            # 专属二次元人脸检测模型！
+            model_url = "https://raw.githubusercontent.com/nagadomi/lbpcascade_animeface/master/lbpcascade_animeface.xml"
+            model_name = "lbpcascade_animeface.xml"
+        else:
+            target_prompt = "perfect human face, highly detailed, realistic skin, beautiful, " + short_prompt
+            target_neg = "bad face, deformed, ugly, poorly drawn face, " + negative_prompt
+            model_url = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
+            model_name = "haarcascade_frontalface_default.xml"
 
-                extra_tag = "highly detailed anime face, perfect eyes, masterpiece" if is_anime else "beautiful detailed face, highly detailed eyes, perfectly symmetrical face, raw photo"
-                enhanced_prompt = prompt + ", " + extra_tag
-                generator = torch.Generator(device).manual_seed(seed)
+        # 2. 准备模型模型
+        model_path = os.path.join("models", model_name)
+        os.makedirs("models", exist_ok=True)
+        if not os.path.exists(model_path):
+            print(f"📥 正在下载 {target} 检测模型: {model_name} ...")
+            try:
+                urllib.request.urlretrieve(model_url, model_path)
+            except Exception as e:
+                print(f"⚠️ 下载失败: {e}，跳过该通道。")
+                return base_image
+
+        open_cv_image = cv2.cvtColor(np.array(base_image), cv2.COLOR_RGB2BGR)
+        boxes = []
+
+        # 3. 目标检测 (区分 YOLO 和 OpenCV Cascade)
+        if "hand" in model_name:
+            try:
+                from ultralytics import YOLO
+                yolo_model = YOLO(model_path)
+                results = yolo_model(open_cv_image, verbose=False)
+                for r in results:
+                    for box in r.boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        boxes.append([int(x1), int(y1), int(x2-x1), int(y2-y1)])
+            except ImportError:
+                print("⚠️ 缺少 ultralytics 库，请在终端运行: pip install ultralytics")
+                return base_image
+        else:
+            detector = cv2.CascadeClassifier(model_path)
+            gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
+            # 针对二次元脸稍微调低阈值，提高识别率
+            min_neighbors = 3 if "anime" in model_name else 5
+            boxes = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=min_neighbors, minSize=(30, 30))
+
+        if len(boxes) == 0:
+            print(f"🤷‍♂️ 未在图中检测到 [{target}]，跳过修复。")
+            return base_image
+
+        print(f"🔍 [ADetailer] 成功定位 {len(boxes)} 处 [{target}]，开始进行局部重绘...")
+        result_image = base_image.copy()
+
+        # 4. 执行逐个区域修复
+        for (x, y, w, h) in boxes:
+            try:
+                # 扩大框选范围，提供更多周围上下文
+                padding = int(max(w, h) * 0.3)
+                x1 = max(0, x - padding)
+                y1 = max(0, y - padding)
+                x2 = min(result_image.width, x + w + padding)
+                y2 = min(result_image.height, y + h + padding)
+
+                crop_img = result_image.crop((x1, y1, x2, y2))
                 
-                with torch.no_grad():
-                    fixed_face_512 = img2img_pipe(
-                        prompt=enhanced_prompt,
-                        negative_prompt=negative_prompt,
-                        image=face_crop_512,
-                        strength=strength, 
-                        num_inference_steps=25,
-                        generator=generator
-                    ).images[0]
+                # 🌟 核心魔法：强制将尺寸调整为 512x512，完美规避 "images do not match" 错误！
+                orig_size = crop_img.size
+                crop_img_512 = crop_img.resize((512, 512), Image.Resampling.LANCZOS)
                 
-                fixed_face = fixed_face_512.resize((crop_w, crop_h), Image.Resampling.LANCZOS)
-                
-                mask = Image.new("L", (crop_w, crop_h), 0)
-                draw = ImageDraw.Draw(mask)
-                blur_radius = max(5, min(50, int(min(crop_w, crop_h) * 0.15))) 
-                draw.rectangle([blur_radius, blur_radius, crop_w-blur_radius, crop_h-blur_radius], fill=255)
-                mask = mask.filter(ImageFilter.GaussianBlur(blur_radius)) 
-                
-                result_image.paste(fixed_face, (x1, y1), mask) 
-            except Exception as inner_e:
-                continue 
+                # 创建全白的 512x512 遮罩
+                mask_512 = Image.new("L", (512, 512), 255)
+                # 边缘羽化，让接缝处不可见
+                mask_512 = mask_512.filter(ImageFilter.GaussianBlur(10))
+
+                # 进行重绘
+                fixed_crop_512 = inpaint_pipe(
+                    prompt=target_prompt,
+                    negative_prompt=target_neg,
+                    image=crop_img_512,
+                    mask_image=mask_512,
+                    strength=strength,
+                    num_inference_steps=20, # ADetailer 固定20步即可
+                    guidance_scale=7.5
+                ).images[0]
+
+                # 将修好的 512x512 缩放回原本的尺寸
+                fixed_crop_orig = fixed_crop_512.resize(orig_size, Image.Resampling.LANCZOS)
+                mask_orig = mask_512.resize(orig_size, Image.Resampling.LANCZOS)
+
+                # 无缝贴回原图
+                result_image.paste(fixed_crop_orig, (x1, y1), mask_orig)
+            except Exception as e:
+                print(f"⚠️ 局部重绘警告: {e}")
+                continue
 
         return result_image
+
     except Exception as e:
+        print(f"⚠️ ADetailer 致命错误: {e}")
         return base_image

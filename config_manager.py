@@ -14,6 +14,7 @@ class AppConfig:
     default_lora_weight: float = 0.7
     adetailer_enabled: bool = False
     theme: str = "darkly"
+    device_preference:    str   = "auto"
     
     # 历史记录
     recent_models: List[str] = field(default_factory=list)
