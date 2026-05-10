@@ -151,9 +151,6 @@ ai  make photo/
 
 ```bash
 # 1. 克隆或下载项目
-git clone <repository_url>
-cd "ai  make photo"
-
 # 2. 创建虚拟环境
 python -m venv venv
 venv\Scripts\activate
