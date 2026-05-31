@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFilter
+import requests
 
 def make_comic_strip(image_list):
     """纯净的漫画排版函数，只负责计算和绘图，返回 PIL Image"""
@@ -42,123 +43,236 @@ def make_comic_strip(image_list):
 
     return comic_bg
 
-def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt, strength=0.35, target="现实脸部"):
+ADETAILER_MODELS = {
+    # 动漫
+    "二次元脸部": {
+        "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8n.pt",
+        "name": "face_yolov8n.pt",
+        "conf": 0.30,
+        "default_strength": 0.25,
+    },
+    "二次元手部": {
+        "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt",
+        "name": "hand_yolov8n.pt",
+        "conf": 0.30,
+        "default_strength": 0.45,
+    },
+    # 现实(共用 YOLOv8 模型,YOLOv8 同时支持真人和动漫)
+    "现实脸部": {
+        "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8n.pt",
+        "name": "face_yolov8n.pt",
+        "conf": 0.35,
+        "default_strength": 0.30,
+    },
+    "现实手部": {
+        "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt",
+        "name": "hand_yolov8n.pt",
+        "conf": 0.35,
+        "default_strength": 0.45,
+    },
+    # 全身分割
+    "全身人物": {
+        "url": "https://huggingface.co/Bingsu/adetailer/resolve/main/person_yolov8n-seg.pt",
+        "name": "person_yolov8n-seg.pt",
+        "conf": 0.30,
+        "default_strength": 0.20,
+    },
+}
+
+
+# ── Prompt 模板 ──
+ADETAILER_PROMPTS = {
+    "二次元脸部": {
+        "pos": "perfect anime face, highly detailed eyes, symmetric eyes, beautiful face, clean linework, masterpiece",
+        "neg": "bad face, deformed eyes, asymmetric eyes, blurry face, poorly drawn face, extra eyes, lowres",
+    },
+    "二次元手部": {
+        "pos": "perfect anime hands, five fingers, detailed fingers, natural pose, masterpiece",
+        "neg": "bad hands, extra fingers, missing fingers, fused fingers, deformed hands, mutation",
+    },
+    "现实脸部": {
+        "pos": "perfect realistic face, detailed skin texture, sharp eyes, photorealistic, 8k",
+        "neg": "bad face, deformed, asymmetric, blurry, low quality, plastic skin",
+    },
+    "现实手部": {
+        "pos": "perfect realistic hands, five fingers, detailed skin, natural anatomy, photorealistic",
+        "neg": "bad hands, extra fingers, missing fingers, fused fingers, deformed hands, mutation",
+    },
+    "全身人物": {
+        "pos": "perfect body, anatomically correct, high quality, masterpiece",
+        "neg": "deformed body, bad anatomy, low quality, lowres",
+    },
+}
+
+
+def _download_adetailer_model(url, save_path):
+    """下载 ADetailer 模型(支持 hf-mirror 加速)。"""
+    if os.path.exists(save_path):
+        return True
+    try:
+        # 走 hf-mirror 加速
+        url_mirror = url.replace("huggingface.co", "hf-mirror.com")
+        print(f"  📥 下载 ADetailer 模型: {os.path.basename(save_path)}")
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        for attempt_url in [url_mirror, url]:
+            try:
+                r = requests.get(attempt_url, stream=True, timeout=30)
+                r.raise_for_status()
+                with open(save_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                print(f"  ✅ 下载完成: {save_path}")
+                return True
+            except Exception as e:
+                print(f"  ⚠️ 从 {attempt_url} 下载失败: {e}")
+                continue
+        return False
+    except Exception as e:
+        print(f"  ❌ 模型下载失败: {e}")
+        return False
+
+
+def _yolo_detect(model_path, cv_image, conf=0.3):
+    """YOLO 通用检测,返回 [(x, y, w, h), ...]"""
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        print("⚠️ 缺少 ultralytics 库,请运行: pip install ultralytics")
+        return []
+    
+    try:
+        model = YOLO(model_path)
+        results = model(cv_image, verbose=False, conf=conf)
+        boxes = []
+        for r in results:
+            if r.boxes is None:
+                continue
+            for box in r.boxes:
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                w = int(x2 - x1)
+                h = int(y2 - y1)
+                # 过滤太小的框(避免误检)
+                if w < 20 or h < 20:
+                    continue
+                boxes.append((int(x1), int(y1), w, h))
+        return boxes
+    except Exception as e:
+        print(f"⚠️ YOLO 检测异常: {e}")
+        return []
+
+
+def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt,
+                     strength=None, target="二次元脸部",
+                     padding_ratio=0.15, mask_blur=8):
     """
-    工业级 ADetailer 流水线：
-    支持 真人/二次元 面部与手部，自动处理8倍数对齐、提示词截断截流与无缝融合。
+    工业级 ADetailer 局部重绘
+    
+    Args:
+        base_image: PIL.Image 输入图
+        inpaint_pipe: 已加载的 SD 修复管线
+        prompt: 用户原始正向提示词
+        negative_prompt: 用户原始负向提示词
+        strength: 重绘强度 (None 则用预设默认值)
+        target: 目标类型,见 ADETAILER_MODELS 的键
+        padding_ratio: 检测框外扩比例 (0.15 = 外扩 15%)
+        mask_blur: 蒙版边缘羽化(像素)
+    
+    Returns:
+        PIL.Image: 修复后的图
     """
     try:
-        # 1. 智能精简提示词，防止爆显存和超 77 Token 限制
-        # 只保留原提示词的前 20 个词作为背景参考
-        short_prompt = " ".join(prompt.split(",")[:4]) 
-        
-        if "二次元手部" in target:
-            target_prompt = "perfect anime hands, highly detailed, five fingers, flawless, " + short_prompt
-            target_neg = "bad hands, missing fingers, extra fingers, deformed, mutated, " + negative_prompt
-            model_url = "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt"
-            model_name = "hand_yolov8n.pt"
-        elif "现实手部" in target:
-            target_prompt = "perfect realistic human hands, highly detailed, 5 fingers, pores, " + short_prompt
-            target_neg = "bad hands, missing fingers, extra fingers, deformed, mutated, " + negative_prompt
-            model_url = "https://huggingface.co/Bingsu/adetailer/resolve/main/hand_yolov8n.pt"
-            model_name = "hand_yolov8n.pt"
-        elif "二次元脸部" in target:
-            target_prompt = "perfect anime face, highly detailed eyes, beautiful face, masterpiece, " + short_prompt
-            target_neg = "bad face, deformed eyes, ugly, poorly drawn face, " + negative_prompt
-            # 专属二次元人脸检测模型！
-            model_url = "https://raw.githubusercontent.com/nagadomi/lbpcascade_animeface/master/lbpcascade_animeface.xml"
-            model_name = "lbpcascade_animeface.xml"
-        else:
-            target_prompt = "perfect human face, highly detailed, realistic skin, beautiful, " + short_prompt
-            target_neg = "bad face, deformed, ugly, poorly drawn face, " + negative_prompt
-            model_url = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
-            model_name = "haarcascade_frontalface_default.xml"
-
-        # 2. 准备模型模型
-        model_path = os.path.join("models", model_name)
-        os.makedirs("models", exist_ok=True)
-        if not os.path.exists(model_path):
-            print(f"📥 正在下载 {target} 检测模型: {model_name} ...")
-            try:
-                urllib.request.urlretrieve(model_url, model_path)
-            except Exception as e:
-                print(f"⚠️ 下载失败: {e}，跳过该通道。")
-                return base_image
-
-        open_cv_image = cv2.cvtColor(np.array(base_image), cv2.COLOR_RGB2BGR)
-        boxes = []
-
-        # 3. 目标检测 (区分 YOLO 和 OpenCV Cascade)
-        if "hand" in model_name:
-            try:
-                from ultralytics import YOLO
-                yolo_model = YOLO(model_path)
-                results = yolo_model(open_cv_image, verbose=False)
-                for r in results:
-                    for box in r.boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        boxes.append([int(x1), int(y1), int(x2-x1), int(y2-y1)])
-            except ImportError:
-                print("⚠️ 缺少 ultralytics 库，请在终端运行: pip install ultralytics")
-                return base_image
-        else:
-            detector = cv2.CascadeClassifier(model_path)
-            gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
-            # 针对二次元脸稍微调低阈值，提高识别率
-            min_neighbors = 3 if "anime" in model_name else 5
-            boxes = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=min_neighbors, minSize=(30, 30))
-
-        if len(boxes) == 0:
-            print(f"🤷‍♂️ 未在图中检测到 [{target}]，跳过修复。")
+        # ── 1. 校验 target ──
+        if target not in ADETAILER_MODELS:
+            print(f"⚠️ 未知 ADetailer 目标: {target},支持: {list(ADETAILER_MODELS.keys())}")
             return base_image
-
-        print(f"🔍 [ADetailer] 成功定位 {len(boxes)} 处 [{target}]，开始进行局部重绘...")
+        
+        cfg = ADETAILER_MODELS[target]
+        prompts_cfg = ADETAILER_PROMPTS.get(target, {"pos": "", "neg": ""})
+        
+        # 用预设默认 strength
+        if strength is None:
+            strength = cfg["default_strength"]
+        
+        # ── 2. 准备模型 ──
+        model_dir = os.path.join("models_cache", "adetailer")
+        model_path = os.path.join(model_dir, cfg["name"])
+        if not _download_adetailer_model(cfg["url"], model_path):
+            print(f"⚠️ ADetailer 模型不可用,跳过 {target}")
+            return base_image
+        
+        # ── 3. 准备图像 ──
+        if base_image.mode != "RGB":
+            base_image = base_image.convert("RGB")
+        cv_image = cv2.cvtColor(np.array(base_image), cv2.COLOR_RGB2BGR)
+        W, H = base_image.size
+        
+        # ── 4. 目标检测 ──
+        boxes = _yolo_detect(model_path, cv_image, conf=cfg["conf"])
+        if not boxes:
+            print(f"🤷‍♂️ 未在图中检测到 [{target}],跳过修复。")
+            return base_image
+        
+        print(f"🔍 [ADetailer] 成功定位 {len(boxes)} 处 [{target}],开始进行局部重绘...")
+        
+        # ── 5. 构建 prompt(融合用户原 prompt + 模板) ──
+        # 取用户 prompt 前 80 字符作为上下文(避免太长被截断)
+        short_prompt = prompt[:80] if prompt else ""
+        target_pos = f"{prompts_cfg['pos']}, {short_prompt}"
+        target_neg = f"{prompts_cfg['neg']}, {negative_prompt}" if negative_prompt else prompts_cfg['neg']
+        
+        # ── 6. 逐个目标修复 ──
         result_image = base_image.copy()
-
-        # 4. 执行逐个区域修复
-        for (x, y, w, h) in boxes:
+        for idx, (x, y, w, h) in enumerate(boxes, 1):
             try:
-                # 扩大框选范围，提供更多周围上下文
-                padding = int(max(w, h) * 0.3)
-                x1 = max(0, x - padding)
-                y1 = max(0, y - padding)
-                x2 = min(result_image.width, x + w + padding)
-                y2 = min(result_image.height, y + h + padding)
-
-                crop_img = result_image.crop((x1, y1, x2, y2))
+                # 6.1 外扩检测框(给修复留余量)
+                pad_x = int(w * padding_ratio)
+                pad_y = int(h * padding_ratio)
+                x1 = max(0, x - pad_x)
+                y1 = max(0, y - pad_y)
+                x2 = min(W, x + w + pad_x)
+                y2 = min(H, y + h + pad_y)
                 
-                # 🌟 核心魔法：强制将尺寸调整为 512x512，完美规避 "images do not match" 错误！
-                orig_size = crop_img.size
-                crop_img_512 = crop_img.resize((512, 512), Image.Resampling.LANCZOS)
+                # 6.2 构建蒙版
+                mask = Image.new("L", (W, H), 0)
+                mask_arr = np.array(mask)
+                mask_arr[y1:y2, x1:x2] = 255
+                mask = Image.fromarray(mask_arr)
+                # 边缘羽化(让修复区域过渡自然)
+                if mask_blur > 0:
+                    mask = mask.filter(ImageFilter.GaussianBlur(radius=mask_blur))
                 
-                # 创建全白的 512x512 遮罩
-                mask_512 = Image.new("L", (512, 512), 255)
-                # 边缘羽化，让接缝处不可见
-                mask_512 = mask_512.filter(ImageFilter.GaussianBlur(10))
-
-                # 进行重绘
-                fixed_crop_512 = inpaint_pipe(
-                    prompt=target_prompt,
+                # 6.3 调用 inpaint pipeline
+                # 🔧 检查 IPA,如有则传占位图避免 NoneType 报错
+                ip_kwargs = {}
+                if hasattr(inpaint_pipe, '_load_ip_adapter_weights') or \
+                   hasattr(inpaint_pipe, 'image_encoder') and inpaint_pipe.image_encoder is not None:
+                    # 用纯黑占位图(IPA scale=0 时不会真的产生影响)
+                    placeholder = Image.new("RGB", (224, 224), (0, 0, 0))
+                    ip_kwargs['ip_adapter_image'] = placeholder
+                    print(f"  🩹 [ADetailer] 检测到 IPA,将传入占位图")
+                
+                output = inpaint_pipe(
+                    prompt=target_pos,
                     negative_prompt=target_neg,
-                    image=crop_img_512,
-                    mask_image=mask_512,
+                    image=result_image,
+                    mask_image=mask,
                     strength=strength,
-                    num_inference_steps=20, # ADetailer 固定20步即可
-                    guidance_scale=7.5
-                ).images[0]
-
-                # 将修好的 512x512 缩放回原本的尺寸
-                fixed_crop_orig = fixed_crop_512.resize(orig_size, Image.Resampling.LANCZOS)
-                mask_orig = mask_512.resize(orig_size, Image.Resampling.LANCZOS)
-
-                # 无缝贴回原图
-                result_image.paste(fixed_crop_orig, (x1, y1), mask_orig)
+                    num_inference_steps=20,
+                    guidance_scale=7.0,
+                    width=W,
+                    height=H,
+                    **ip_kwargs,
+                )
+                result_image = output.images[0]
+                print(f"  ✅ [ADetailer] {target} {idx}/{len(boxes)} 修复完成")
             except Exception as e:
-                print(f"⚠️ 局部重绘警告: {e}")
+                print(f"  ⚠️ [ADetailer] 第 {idx} 处修复异常: {e}")
                 continue
-
+        
         return result_image
-
+    
     except Exception as e:
         print(f"⚠️ ADetailer 致命错误: {e}")
+        import traceback
+        traceback.print_exc()
         return base_image

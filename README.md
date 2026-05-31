@@ -24,7 +24,7 @@
 | **图生图 (Img2Img)**    | 基于参考图生成新图像    | StableDiffusionImg2ImgPipeline         |
 | **局部重绘 (Inpaint)**   | 对图像指定区域进行修复   | StableDiffusionInpaintPipeline         |
 | **ControlNet**       | 姿态/边缘/深度控制生成  | ControlNetModel + OpenPose/Canny/Depth |
-| **修图编辑器**            | 图像调整、滤镜、画笔、裁剪 | Pyqt6 绘图引擎                           |
+| **修图编辑器**            | 图像调整、滤镜、画笔、裁剪 | Tkinter 绘图引擎                           |
 | **人脸修复 (ADetailer)** | 自动人脸检测与修复     | OpenCV + 人脸检测                          |
 
 ### 2.2 扩展功能
@@ -151,6 +151,9 @@ ai  make photo/
 
 ```bash
 # 1. 克隆或下载项目
+git clone <repository_url>
+cd "ai  make photo"
+
 # 2. 创建虚拟环境
 python -m venv venv
 venv\Scripts\activate

@@ -1,8 +1,3 @@
-# app_generation.py
-# ============================================================
-#  PyQt6 GenerationMixin — 修复版 (含 A-1/2/3/4 升级)
-# ============================================================
-
 import os
 import threading
 import datetime
@@ -37,6 +32,7 @@ class _GenBridge(QObject):
     cancel_signal   = pyqtSignal()
     log_signal      = pyqtSignal(str)
     image_signal    = pyqtSignal(object)
+    enhance_done_signal  = pyqtSignal(str) 
 
 
 # ============================================================
@@ -46,6 +42,7 @@ class GenerationMixin:
         self._bridge = _GenBridge()
         self._bridge.status_signal.connect(self._on_status)
         self._bridge.progress_signal.connect(self._on_progress)
+        self._bridge.enhance_done_signal.connect(self._on_enhance_done)
         self._bridge.sub_prog_signal.connect(self._on_sub_progress)
         self._bridge.preview_signal.connect(self.show_preview)
         self._bridge.preview_img_sig.connect(self._on_preview_img)
@@ -157,342 +154,922 @@ class GenerationMixin:
     #  主生成任务
     # ==================================================================
     def generation_task(self):
+        ctx = None
         try:
-            print("\n🚀 [任务开始]")
+            print("\n🚀 [任务开始]", flush=True)
 
-            # --- 设备 ---
-            device_str = self._cbo(getattr(self, 'combo_device', None))
-            if   "CUDA" in device_str: target_device = "cuda"
-            elif "MPS"  in device_str: target_device = "mps"
-            elif "CPU"  in device_str: target_device = "cpu"
-            else: target_device = "cuda" if torch.cuda.is_available() else "cpu"
-
-            if getattr(self.ai, 'device', None) != target_device:
-                print(f"🔄 切换设备: {self.ai.device} -> {target_device}")
-                self.ai.device = target_device
-                if hasattr(self.ai, 'clear_memory'):
-                    self.ai.clear_memory()
-
-            # --- 基础参数 ---
-            model_name   = self._cbo(self.combo_model)
-            raw_prompt   = self._txt(getattr(self, 'txt_prompt', None))
-            raw_neg      = self._txt(getattr(self, 'txt_neg', None))
-            en_neg       = self.translator.translate(raw_neg) if raw_neg else ""
-
-            steps        = self._spn(getattr(self, 'spin_steps', None)) or 30
-            strength     = self._sld(getattr(self, 'scale_str', None))
-            cfg          = self._sld(getattr(self, 'scale_cfg', None))
-            res_text     = self._cbo(getattr(self, 'combo_res', None))
-            if 'x' in res_text:
-                width, height = map(int, res_text.split('x'))
-            else:
-                width, height = 512, 512
-            sampler_name = self._cbo(getattr(self, 'combo_sampler', None))
-
-            # --- 动态提示词 ---
-            parsed_raw_prompts = parse_dynamic_prompt(raw_prompt)
-            base_count         = self._spn(
-                getattr(self, 'spin_count', None)) or 1
-
-            if len(parsed_raw_prompts) > 1:
-                self._bridge.status_signal.emit(
-                    f"📖 侦测到动态组合，将生成 "
-                    f"{len(parsed_raw_prompts)} 页分镜...", "#ffd700")
-                total_generate_count = len(parsed_raw_prompts)
-            else:
-                total_generate_count = base_count
-                parsed_raw_prompts   = [parsed_raw_prompts[0]] * base_count
-
-            en_prompts = [
-                self.translator.translate(p) if p else ""
-                for p in parsed_raw_prompts
-            ]
-
-            # --- 加载模型 ---
-            self._bridge.status_signal.emit(
-                "🧠 正在加载底层大模型...", "#ffd700")
-            self.ai.load_model(model_name)
-
-            # --- LoRA ---
-            lora_config_list = []
-            lora_meta_info   = []
-            if hasattr(self, 'combo_loras') and hasattr(self, 'scale_loras'):
-                for i in range(min(len(self.combo_loras),
-                                   len(self.scale_loras))):
-                    lname   = self._cbo(self.combo_loras[i])
-                    lweight = self._sld(self.scale_loras[i])
-                    if lname and lname != "无":
-                        lora_config_list.append((lname, float(lweight)))
-                        lora_meta_info.append(f"{lname}:{lweight:.2f}")
-
-            sub_dir = "sdxl" if getattr(self.ai, 'is_sdxl', False) else "sd1.5"
-            print(f"👉 LoRA 组合: {lora_config_list}")
-            self.ai.apply_multiple_loras(lora_config_list, sub_dir=sub_dir)
-
-            # --- ControlNet ---
-            pose_image = None
-            use_pose   = self._chk(getattr(self, 'chk_use_pose', None))
-            if use_pose:
-                cn_type = self._cbo(getattr(self, 'combo_cn_type', None))
-                self._bridge.status_signal.emit(
-                    f"⚙️ 解析 {cn_type} 参考图特征...", "#ffd700")
-                self.ai.prepare_controlnet(control_type=cn_type)
-                raw_img    = Image.open(
-                    self.pose_image_path).convert("RGB")
-                pose_image = self.ai.get_control_image(
-                    raw_img, control_type=cn_type)
-                self._bridge.preview_img_sig.emit(pose_image.copy())
-
-            # --- 切采样器 ---
-            self.ai.switch_sampler(sampler_name)
-
-            # --- X/Y 炼丹分支 ---
-            if self._chk(getattr(self, 'chk_enable_xy', None)):
-                self._bridge.status_signal.emit(
-                    "📊 进入 X/Y 炼丹模式...", "#ffd700")
-                generator = torch.Generator(self.ai.device).manual_seed(
-                    random.randint(1, 2_147_483_647))
-                base_kwargs = self.ai.encode_prompt(en_prompts[0], en_neg)
-                base_kwargs.update({
-                    "num_inference_steps": steps,
-                    "guidance_scale": cfg,
-                    "generator": generator,
-                })
-                # 矩阵任务也需要 meta 信息
-                xy_meta = {
-                    "prompt": raw_prompt, "neg": raw_neg,
-                    "en_prompt": en_prompts[0], "en_neg": en_neg,
-                    "steps": steps, "sampler": sampler_name,
-                    "cfg": cfg, "width": width, "height": height,
-                    "model": model_name, "lora": lora_meta_info,
-                }
-                self.run_xy_plot_task(
-                    base_kwargs, width, height,
-                    pose_image=pose_image if use_pose else None,
-                    meta=xy_meta,
-                )
+            # 1. 准备上下文 (设备/参数/翻译)
+            ctx = self._gt_prepare_context()
+            if ctx is None:
                 return
 
-            # --- 进度条 ---
-            self._bridge.progress_signal.emit(0, total_generate_count)
+            # 2. 加载底模
+            self._gt_load_model(ctx)
 
-            generated_images_list = []
+            # 3. 配置 IP-Adapter
+            self._gt_setup_ipa(ctx)
 
-            # ==================== 生成循环 ====================
-            for i in range(total_generate_count):
-                if getattr(self, 'cancel_flag', False):
-                    break
+            # 4. 应用 LoRA
+            self._gt_apply_loras(ctx)
 
-                self._bridge.progress_signal.emit(i, total_generate_count)
+            # 5. Pose Transfer (会修改 ctx['use_pose']/'pose_image')
+            self._gt_run_pose_transfer(ctx)
 
-                current_raw_prompt = parsed_raw_prompts[i]
-                current_en_prompt  = en_prompts[i]
-                current_seed       = random.randint(1, 2_147_483_647)
-                generator          = torch.Generator(
-                    self.ai.device).manual_seed(current_seed)
+            # 6. 切采样器
+            print(f"🟢 step 14: 切采样器 = {ctx['sampler_name']}", flush=True)
+            self.ai.switch_sampler(ctx['sampler_name'])
 
-                self._bridge.status_signal.emit(
-                    f"🔥 第 {i+1}/{total_generate_count} 张 "
-                    f"(Seed: {current_seed}) ...", "#00ffff")
-                self._bridge.sub_prog_signal.emit(0, steps)
+            # 7. X/Y 炼丹分支 (返回 True 表示已处理)
+            if self._gt_try_xy_plot(ctx):
+                return
 
-                embed_kwargs = self.ai.encode_prompt(
-                    current_en_prompt, en_neg)
-
-                # ── ETA 步骤回调 (A-4) ──
-                t0 = time.time()
-
-                def step_cb(pipe, step_index, timestep, callback_kwargs,
-                            _steps=steps, _t0=t0):
-                    if getattr(self, 'cancel_flag', False):
-                        raise InterruptedError()
-                    done = step_index + 1
-                    self._bridge.sub_prog_signal.emit(done, _steps)
-                    # 节流:首帧/末帧/每3步刷新 ETA
-                    if done == 1 or done == _steps or done % 3 == 0:
-                        elapsed = time.time() - _t0
-                        eta = ((elapsed / done) * (_steps - done)
-                               if done > 0 else 0)
-                        self._bridge.status_signal.emit(
-                            f"🎨 第 {done}/{_steps} 步 · "
-                            f"已用 {elapsed:.1f}s · "
-                            f"预估剩余 {eta:.1f}s",
-                            "#89dceb"
-                        )
-                    return self.on_generation_step(
-                        pipe, step_index, timestep, callback_kwargs)
-
-                kwargs = {
-                    "num_inference_steps": steps,
-                    "guidance_scale":      cfg,
-                    "width":               width,
-                    "height":              height,
-                    "generator":           generator,
-                    "callback_on_step_end": step_cb,
-                    "callback_on_step_end_tensor_inputs": ["latents"],
-                }
-                kwargs.update(embed_kwargs)
-
-                with torch.inference_mode():
-
-                    # ── 阶段 1: 基础生成 ──
-                    with performance_timer("🎨 阶段 1: 基础图像生成"):
-                        if use_pose and pose_image:
-                            image = self.ai.controlnet_pipe(
-                                **kwargs, image=pose_image).images[0]
-
-                        elif getattr(self, 'mask_image_path', None):
-                            if getattr(self.ai, 'inpaint_pipe', None) is None:
-                                self._bridge.status_signal.emit(
-                                    "⏳ 正在加载 inpaint 管线...", "#fab387")
-                                self.ai.load_model(model_name)
-                                if getattr(self.ai, 'inpaint_pipe', None) is None:
-                                    raise RuntimeError(
-                                        "inpaint 管线加载失败,请确认模型兼容 inpaint。")
-
-                            # 诊断日志
-                            print(f"🎨 [INPAINT 分支] ref={self.ref_image_path}")
-                            print(f"🎨 [INPAINT 分支] mask={self.mask_image_path}")
-
-                            init_img = Image.open(self.ref_image_path).convert("RGB").resize((width, height))
-                            mask_img = Image.open(self.mask_image_path).convert("L").resize((width, height))
-
-                            # 再检查一次遮罩非空
-                            mn, mx = mask_img.getextrema()
-                            print(f"🎨 [INPAINT 分支] 遮罩 extrema=({mn},{mx})")
-                            if mx == 0:
-                                print("⚠ 遮罩为全黑,退化为 img2img")
-                                image = self.ai.img2img_pipe(
-                                    **kwargs, image=init_img, strength=strength).images[0]
-                            else:
-                                image = self.ai.inpaint_pipe(
-                                    **kwargs, image=init_img, mask_image=mask_img, strength=strength,
-                                ).images[0]
-
-                        elif getattr(self, 'ref_image_path', None):
-                            init_img = Image.open(
-                                self.ref_image_path
-                            ).convert("RGB").resize((width, height))
-                            image = self.ai.img2img_pipe(
-                                **kwargs,
-                                image    = init_img,
-                                strength = strength,
-                            ).images[0]
-
-                        else:
-                            image = self.ai.txt2img_pipe(**kwargs).images[0]
-
-                    # ── 阶段 2: Hires.fix ──
-                    if self._chk(getattr(self, 'chk_hires', None)):
-                        self._bridge.status_signal.emit(
-                            "✨ 阶段 2: Hires.fix 高清放大...", "#ff1493")
-                        with performance_timer("Hires.fix 高清放大"):
-                            hires_str = self._sld(
-                                getattr(self, 'scale_hires', None))
-                            image = self.ai.img2img_pipe(
-                                **kwargs,
-                                image    = image,
-                                strength = hires_str,
-                            ).images[0]
-
-                    # ── 阶段 3: ADetailer 脸部 ──
-                    if self._chk(getattr(self, 'chk_use_adetailer', None)):
-                        self._bridge.status_signal.emit(
-                            "✨ 阶段 3: ADetailer 脸部精修...", "#17a2b8")
-                        face_target = self._cbo(
-                            getattr(self, 'combo_ad_target', None)) or "现实脸部"
-                        face_str    = self._sld(
-                            getattr(self, 'scale_adetailer_strength', None))
-                        with performance_timer("ADetailer 脸部精修"):
-                            image = process_adetailer(
-                                image, self.ai.inpaint_pipe,
-                                current_en_prompt, en_neg,
-                                strength=face_str, target=face_target)
-
-                    # ── 阶段 4: ADetailer 手部 ──
-                    if self._chk(getattr(self, 'chk_use_ad_hand', None)):
-                        self._bridge.status_signal.emit(
-                            "✨ 阶段 4: ADetailer 手部精修...", "#17a2b8")
-                        hand_target = self._cbo(
-                            getattr(self, 'combo_ad_hand', None)) or "现实手部"
-                        hand_str    = self._sld(
-                            getattr(self, 'scale_ad_hand', None))
-                        blend_ratio = self._sld(
-                            getattr(self, 'scale_ad_hand_blend', None))
-                        blend_ratio = max(0.0, min(1.0,
-                            blend_ratio if blend_ratio > 0 else 0.65))
-
-                        with performance_timer("ADetailer 手部精修"):
-                            original_image = image.copy()
-                            repaired_image = process_adetailer(
-                                image, self.ai.inpaint_pipe,
-                                current_en_prompt, en_neg,
-                                strength=hand_str, target=hand_target)
-                            image = Image.blend(
-                                original_image, repaired_image,
-                                alpha=blend_ratio)
-
-                # ── 保存 + 写 PNG 元数据 (A-3) ──
-                generated_images_list.append(image)
-
-                meta = {
-                    "prompt":    current_raw_prompt,
-                    "neg":       raw_neg,
-                    "en_prompt": current_en_prompt,
-                    "en_neg":    en_neg,
-                    "steps":     steps,
-                    "sampler":   sampler_name,
-                    "cfg":       cfg,
-                    "seed":      current_seed,
-                    "width":     width,
-                    "height":    height,
-                    "model":     model_name,
-                    "lora":      lora_meta_info,
-                }
-                filename  = generate_unique_filename(
-                    prefix=f"v4_{current_seed}")
-                save_path = os.path.join(OUTPUT_DIR, filename)
-                os.makedirs(OUTPUT_DIR, exist_ok=True)
-                self._save_with_meta(image, save_path, meta)
-                self.last_generated_path = save_path
-
-                self._bridge.preview_signal.emit(save_path)
-
-            # ── 连环画 ──
-            if (self._chk(getattr(self, 'chk_make_comic', None))
-                    and len(generated_images_list) > 1
-                    and not getattr(self, 'cancel_flag', False)):
-                self.generate_comic_strip(generated_images_list)
-            else:
-                if not getattr(self, 'cancel_flag', False):
-                    self._bridge.status_signal.emit(
-                        "✅ 批量生成任务全部完成！", "#00ff00")
-
-            self._bridge.progress_signal.emit(
-                total_generate_count, total_generate_count)
+            # 8. 主生成循环
+            self._gt_main_loop(ctx)
 
         except InterruptedError:
-            self._bridge.cancel_signal.emit()
+            print("⏸ [generation_task] 用户中断", flush=True)
+            try: self._bridge.cancel_signal.emit()
+            except Exception: pass
 
         except Exception:
             err = traceback.format_exc()
-            print(err)
-            self._bridge.error_signal.emit(err)
+            print("❌ [generation_task] 异常:", flush=True)
+            print(err, flush=True)
+            try: self._bridge.error_signal.emit(err)
+            except Exception: pass
 
         finally:
-            self.is_generating = False
+            self._gt_cleanup()
+
+    def _gt_prepare_context(self):
+        """收集所有参数到一个 ctx 字典,贯穿整个流程。"""
+        # --- 设备 ---
+        device_str = self._cbo(getattr(self, 'combo_device', None))
+        if   "CUDA" in device_str: target_device = "cuda"
+        elif "MPS"  in device_str: target_device = "mps"
+        elif "CPU"  in device_str: target_device = "cpu"
+        else: target_device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"🟢 step 2: 设备 = {target_device}", flush=True)
+
+        if getattr(self.ai, 'device', None) != target_device:
+            print(f"🔄 切换设备: {self.ai.device} -> {target_device}", flush=True)
+            self.ai.device = target_device
+            if hasattr(self.ai, 'clear_memory'):
+                self.ai.clear_memory()
+
+        # --- 基础参数 ---
+        model_name = self._cbo(self.combo_model)
+        raw_prompt = self._txt(getattr(self, 'txt_prompt', None))
+        raw_neg    = self._txt(getattr(self, 'txt_neg', None))
+
+        # --- AI 改写 ---
+        raw_prompt = self._gt_apply_prompt_enhance(raw_prompt)
+
+        # --- 翻译反向词 ---
+        en_neg = self.translator.translate(raw_neg) if raw_neg else ""
+
+        # --- 数值参数 ---
+        steps    = self._spn(getattr(self, 'spin_steps', None)) or 30
+        strength = self._sld(getattr(self, 'scale_str', None))
+        cfg      = self._sld(getattr(self, 'scale_cfg', None))
+        res_text = self._cbo(getattr(self, 'combo_res', None))
+        if 'x' in res_text:
+            width, height = map(int, res_text.split('x'))
+        else:
+            width, height = 512, 512
+        sampler_name = self._cbo(getattr(self, 'combo_sampler', None))
+        cn_strength = self._sld(getattr(self, 'scale_cn_strength', None)) or 1.0
+
+        raw_pt = self._sld(getattr(self, 'slider_pt_cn', None))
+        if raw_pt is None or raw_pt == 0:
+            pt_cn_strength = 0.65
+        elif raw_pt > 5:
+            pt_cn_strength = raw_pt / 100.0
+        else:
+            pt_cn_strength = raw_pt
+
+        # --- 动态提示词 ---
+        parsed_raw_prompts = parse_dynamic_prompt(raw_prompt)
+        base_count = self._spn(getattr(self, 'spin_count', None)) or 1
+        if len(parsed_raw_prompts) > 1:
+            self._bridge.status_signal.emit(
+                f"📖 侦测到动态组合,将生成 {len(parsed_raw_prompts)} 页分镜...", "#ffd700")
+            total_generate_count = len(parsed_raw_prompts)
+        else:
+            total_generate_count = base_count
+            parsed_raw_prompts   = [parsed_raw_prompts[0]] * base_count
+
+        extracted_features = ""
+        ref_img = getattr(self.ai, 'ipa_ref_image', None)
+        auto_extract = self._chk(getattr(self, 'chk_auto_features', None))
+
+        if ref_img is not None and auto_extract:
             try:
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
-            self._bridge.done_signal.emit()
+                from utils.prompt_enhancer import PromptEnhancer
+                enhancer = (PromptEnhancer.instance()
+                            if hasattr(PromptEnhancer, 'instance')
+                            else PromptEnhancer())
+
+                self._bridge.status_signal.emit(
+                    "🔍 正在分析参考图角色特征...", "#7ed957")
+
+                extracted_features = enhancer.extract_character_features(ref_img)
+                if extracted_features:
+                    print(f"✨ 角色特征:\n   {extracted_features}", flush=True)
+            except Exception as e:
+                print(f"⚠️ 特征提取失败(跳过): {e}", flush=True)
+                extracted_features = ""
+
+        # ── 翻译每个 prompt,并把特征拼到最前面 ──
+        en_prompts = []
+        for p in parsed_raw_prompts:
+            en = self.translator.translate(p) if p else ""
+            if extracted_features:
+                # 特征放最前面,权重最高
+                en = f"{extracted_features}, {en}" if en else extracted_features
+            en_prompts.append(en)
+
+        if extracted_features:
+            print(f"📝 注入特征后第一条 prompt:\n   {en_prompts[0][:200]}...", flush=True)
+
+        # ── 返回 ctx ──
+        return {
+        # === 设备/模型 ===
+        'device':            target_device,
+        'model_name':        model_name,
+    
+        # === 提示词 ===
+        'raw_prompt':        raw_prompt,
+        'raw_neg':           raw_neg,
+        'en_neg':            en_neg,
+        'parsed_raw_prompts': parsed_raw_prompts,
+        'en_prompts':        en_prompts,
+    
+        # === 数值 ===
+        'steps':             steps,
+        'strength':          strength,
+        'cfg':               cfg,
+        'width':             width,
+        'height':            height,
+        'sampler_name':      sampler_name,
+        'cn_strength':       cn_strength,
+        'pt_cn_strength':    pt_cn_strength,
+        'total_count':       total_generate_count,
+    
+        # === IP-Adapter ===
+        'use_ipa':           False,
+        'ipa_pil_image':     None,
+        'ipa_scale':         0.9,
+        'ipa_variant':       "plus",
+    
+        # === 流程开关 ===
+        'use_img2img':       False,    
+        'use_pose':          False,
+        'pose_image':        None,
+        'pose_transfer_used': False,
+        'skip_img2img':      False,
+        'init_image_path':   None,     
+        'use_inpaint':       False,
+
+    
+        # === 角色一致性 ===
+        'extracted_features':  "",
+        'use_reference_only':  False,
+        'ref_fidelity':        0.7,
+    
+        # === 其他 ===
+        'lora_meta_info':    [],
+    }
+
+
+
+    def _gt_apply_prompt_enhance(self, raw_prompt):
+        if not self._chk(getattr(self, 'chk_auto_enhance', None)):
+            return raw_prompt
+        try:
+            from utils.prompt_enhancer import PromptEnhancer
+            enhancer = PromptEnhancer()
+            enhancer.load()
+            new_prompt = enhancer.enhance(raw_prompt)
+            if new_prompt and new_prompt.strip():
+                self._bridge.status_signal.emit(
+                    f"✨ 已智能改写: {new_prompt[:60]}...", "#b48ead")
+                return new_prompt
+        except Exception as e:
+            print(f"⚠️ 智能改写失败: {e}", flush=True)
+        return raw_prompt
+
+    def _gt_load_model(self, ctx):
+        self._bridge.status_signal.emit("🧠 正在加载底层大模型...", "#ffd700")
+        print(f"🟢 step 9: 调用 ai.load_model({ctx['model_name']})", flush=True)
+        self.ai.load_model(ctx['model_name'])
+
+    def _gt_setup_ipa(self, ctx):
+        use_ipa = (self.chk_use_ipa.isChecked()
+                   if hasattr(self, 'chk_use_ipa') else False)
+        ipa_image_path = getattr(self, 'ipa_image_path', None)
+        ipa_scale = (self.spin_ipa_scale.value()
+                     if hasattr(self, 'spin_ipa_scale') else 0.6)
+        ipa_variant_text = (self.combo_ipa_variant.currentText()
+                            if hasattr(self, 'combo_ipa_variant') else "plus")
+        ipa_variant = "plus" if "plus" in ipa_variant_text else "standard"
+
+        # 校验
+        if use_ipa and not ipa_image_path:
+            self._bridge.status_signal.emit(
+                "⚠️ IP-Adapter 已开启但未加载参考图,自动跳过", "#fab387")
+            use_ipa = False
+        if use_ipa and ipa_image_path and not os.path.exists(ipa_image_path):
+            self._bridge.status_signal.emit(
+                f"⚠️ 角色参考图丢失: {ipa_image_path},自动跳过", "#fab387")
+            use_ipa = False
+
+        ipa_pil_image = None
+        if use_ipa:
+            ipa_pil_image = Image.open(ipa_image_path).convert("RGB")
+            print(f"🟢 IP-Adapter 参考图已加载 {ipa_pil_image.size}", flush=True)
+
+            self._bridge.status_signal.emit(
+                "🎭 正在加载 IP-Adapter (角色一致性)...", "#fab387")
+            ok = self.ai.prepare_ip_adapter(variant=ipa_variant)
+            if ok:
+                self.ai.set_ip_adapter_scale(ipa_scale)
+                # 诊断
+                try:
+                    from diffusers.models.attention_processor import (
+                        IPAdapterAttnProcessor, IPAdapterAttnProcessor2_0
+                    )
+                    ipa_classes = (IPAdapterAttnProcessor, IPAdapterAttnProcessor2_0)
+                    ipa_count = bad_count = 0
+                    for n, p in self.ai.txt2img_pipe.unet.attn_processors.items():
+                        if 'attn2' in n:
+                            if isinstance(p, ipa_classes): ipa_count += 1
+                            else: bad_count += 1
+                    print(f"🟢 [诊断] IPA attn2: {ipa_count} 正确 / {bad_count} 错误",
+                          flush=True)
+                    if bad_count > 0 or ipa_count == 0:
+                        self._bridge.status_signal.emit(
+                            "⚠️ IP-Adapter 安装异常,自动卸载", "#fab387")
+                        try: self.ai.unload_ip_adapter()
+                        except Exception: pass
+                        use_ipa = False
+                        ipa_pil_image = None
+                except Exception as e:
+                    print(f"⚠️ 诊断 IPA 异常: {e}", flush=True)
+            else:
+                try: self.ai.unload_ip_adapter()
+                except Exception: pass
+                use_ipa = False
+                ipa_pil_image = None
+        else:
+            if getattr(self.ai, 'ip_adapter_loaded', False):
+                self.ai.unload_ip_adapter()
+
+        ctx['use_ipa']        = use_ipa
+        ctx['ipa_pil_image']  = ipa_pil_image
+        ctx['ipa_scale']      = ipa_scale
+        ctx['ipa_variant']    = ipa_variant
+        ctx['ipa_image_path'] = ipa_image_path
+
+    def _gt_apply_loras(self, ctx):
+        lora_config_list = []
+        lora_meta_info   = []
+        if hasattr(self, 'combo_loras') and hasattr(self, 'scale_loras'):
+            for i in range(min(len(self.combo_loras), len(self.scale_loras))):
+                lname   = self._cbo(self.combo_loras[i])
+                lweight = self._sld(self.scale_loras[i])
+                if lname and lname != "无":
+                    lora_config_list.append((lname, float(lweight)))
+                    lora_meta_info.append(f"{lname}:{lweight:.2f}")
+
+        sub_dir = "sdxl" if getattr(self.ai, 'is_sdxl', False) else "sd1.5"
+        if lora_config_list:
+            self.ai.apply_multiple_loras(lora_config_list, sub_dir=sub_dir)
+            print(f"🟢 LoRA 已应用: {lora_config_list}", flush=True)
+        ctx['lora_meta_info'] = lora_meta_info
+
+    def _gt_run_pose_transfer(self, ctx):
+    # 🔧 必须先定义这两个变量
+        use_pose_transfer = self._chk(getattr(self, 'chk_pose_transfer', None))
+        use_pose_manual   = self._chk(getattr(self, 'chk_use_pose', None))
+
+        # ── 分支 A: 手动 ControlNet 模式(用户自己上传骨架图) ──
+        if use_pose_manual and not use_pose_transfer:
+            ctx['use_pose']   = True
+            ctx['pose_image'] = getattr(self, 'pose_image', None)
+            if ctx['pose_image'] is not None:
+                self.ai.prepare_controlnet("openpose")
+                # 🔧 同时开 IPA 时,要同步到 controlnet_pipe
+                if ctx['use_ipa']:
+                    self.ai.sync_ipa_to_controlnet()
+                    try:
+                        self.ai.controlnet_pipe.set_ip_adapter_scale(ctx['ipa_scale'])
+                    except Exception:
+                        pass
+            # ⚠️ 手动模式用基础 CN 滑块的值,不覆盖
+            return
+
+        # ── 分支 B: 不开 Pose Transfer 直接返回 ──
+        if not use_pose_transfer:
+            return
+
+        # ── 分支 C: Pose Transfer 三阶段 ──
+        print("🎬 进入 Pose Transfer 模式", flush=True)
+        ctx['pose_transfer_used'] = True
+
+        # 必须有角色参考图
+        char_ref_path = ctx.get('ipa_image_path') or getattr(self, 'ref_image_path', None)
+        if not char_ref_path:
+            raise RuntimeError(
+                "❌ Pose Transfer 模式需要角色参考图!\n"
+                "请先在【图生图】Tab 上传 IP-Adapter 角色参考图。"
+            )
+
+        # 自动开 IPA(如果用户没勾)
+        if not ctx['use_ipa']:
+            self._bridge.status_signal.emit(
+                "🎭 自动启用 IP-Adapter (Pose Transfer 必需)...", "#fab387")
+            ctx['ipa_pil_image'] = Image.open(char_ref_path).convert("RGB")
+            ok = self.ai.prepare_ip_adapter(variant="plus")
+            if not ok:
+                raise RuntimeError("Pose Transfer 模式需要 IP-Adapter,但加载失败")
+            ctx['ipa_scale']   = 0.9  
+            ctx['use_ipa']     = True
+            ctx['ipa_variant'] = "plus"
+            self.ai.set_ip_adapter_scale(ctx['ipa_scale'])
+
+        # ── Stage 1: 生成动作参考图 ──
+        self._bridge.status_signal.emit(
+            "🎬 [1/3] Pose Transfer: 生成动作参考图...", "#ffd700")
+        print("🎬 [Stage 1/3] 生成动作参考图...", flush=True)
+
+        stage1_prompt = (
+            f"masterpiece, best quality, 1girl, solo, full body, simple white background, "
+            f"{ctx['en_prompts'][0]}"
+        )
+        stage1_gen = torch.Generator(self.ai.device).manual_seed(
+            random.randint(1, 2_147_483_647))
+
+        # 临时关 IPA 生成纯净姿势参考图
+        saved_scale = ctx['ipa_scale']
+        try:
+            self.ai.txt2img_pipe.set_ip_adapter_scale(0.0)
+        except Exception:
+            pass
+
+        dummy_ipa = Image.new("RGB", (224, 224), (0, 0, 0))
+        with torch.inference_mode():
+            pose_ref_img = self.ai.txt2img_pipe(
+                prompt=stage1_prompt,
+                negative_prompt=ctx['en_neg'],
+                width=ctx['width'], height=ctx['height'],
+                num_inference_steps=min(20, ctx['steps']),
+                guidance_scale=ctx['cfg'],
+                generator=stage1_gen,
+                ip_adapter_image=dummy_ipa,
+            ).images[0]
+
+        try:
+            self.ai.txt2img_pipe.set_ip_adapter_scale(saved_scale)
+        except Exception:
+            pass
+
+        try:
+            self._bridge.preview_img_sig.emit(pose_ref_img.copy())
+        except Exception:
+            pass
+
+        # ── Stage 2: 提取骨架 + 同步 IPA 到 ControlNet pipe ──
+        self._bridge.status_signal.emit(
+            "🦴 [2/3] 提取 OpenPose 骨架...", "#ffd700")
+        self.ai.prepare_controlnet("openpose")
+        skeleton_img = self.ai.get_control_image(pose_ref_img, "openpose")
+
+        # 🔧 关键:同步 IPA(否则 Stage 3 会报 tuple 错误)
+        if ctx['use_ipa']:
+            sync_ok = self.ai.sync_ipa_to_controlnet()
+            if not sync_ok:
+                self._bridge.status_signal.emit(
+                    "⚠️ IPA 同步到 CN 失败,Stage 3 不使用角色一致性", "#fab387")
+                ctx['use_ipa'] = False
+                ctx['ipa_pil_image'] = None
+            else:
+                try:
+                    self.ai.controlnet_pipe.set_ip_adapter_scale(ctx['ipa_scale'])
+                except Exception:
+                    pass
+
+        ctx['cn_strength'] = ctx['pt_cn_strength']
+        print(f"🎯 Pose Transfer 参数: CN={ctx['cn_strength']:.2f}, "
+              f"IPA={ctx['ipa_scale']:.2f}", flush=True)
+
+        try:
+            self._bridge.preview_img_sig.emit(skeleton_img.copy())
+        except Exception:
+            pass
+
+        # ── Stage 3: 配置上下文,主循环里完成最终生成 ──
+        ctx['use_pose']     = True
+        ctx['pose_image']   = skeleton_img
+        ctx['skip_img2img'] = True
+        self._bridge.status_signal.emit(
+            "🎨 [3/3] 准备最终生成...", "#ffd700")
+
+
+
+    def _gt_safe_pipe_call(self, pipe, ctx, **call_kwargs):
+        """
+        统一 pipeline 调用入口:
+        1. 自动处理 IPA 占位图 (UNet 被污染时)
+        2. 支持 Compel 长提示词 (>77 tokens)
+        """
+        unet_has_ipa = (
+            pipe is not None
+            and getattr(pipe, 'unet', None) is not None
+            and getattr(pipe.unet, 'encoder_hid_proj', None) is not None
+        )
+
+        if unet_has_ipa:
+            user_provided = call_kwargs.get("ip_adapter_image") is not None
+            if not user_provided:
+                # 喂 dummy + scale=0
+                call_kwargs["ip_adapter_image"] = Image.new("RGB", (224, 224), (0, 0, 0))
+                try:
+                    pipe.set_ip_adapter_scale(0.0)
+                    print("🔧 [safe_call] UNet 含 IPA 但未启用 → dummy + scale=0", flush=True)
+                except Exception:
+                    pass
+            else:
+                # 用户启用了 IPA,设置正确 scale
+                try:
+                    pipe.set_ip_adapter_scale(ctx.get('ipa_scale', 0.6))
+                except Exception:
+                    pass
+
+        if 'prompt' in call_kwargs and call_kwargs['prompt']:
+            compel = None
+        
+            # 根据 pipe 类型选择对应的 Compel 实例
+            if pipe == self.ai.txt2img_pipe:
+                compel = getattr(self.ai, 'compel_txt2img', None)
+            elif pipe == self.ai.img2img_pipe:
+                compel = getattr(self.ai, 'compel_img2img', None)
+            elif pipe == self.ai.controlnet_pipe:
+                compel = getattr(self.ai, 'compel_controlnet', None)
+        
+            if compel is not None:
+                try:
+                    # 正向提示词
+                    prompt_embeds = compel(call_kwargs['prompt'])
+                    call_kwargs['prompt_embeds'] = prompt_embeds
+                    call_kwargs.pop('prompt')  # 删掉原始 prompt
+                
+                    # 负向提示词
+                    if 'negative_prompt' in call_kwargs and call_kwargs['negative_prompt']:
+                        neg_embeds = compel(call_kwargs['negative_prompt'])
+                        call_kwargs['negative_prompt_embeds'] = neg_embeds
+                        call_kwargs.pop('negative_prompt')
+                
+                    print(f"✅ Compel 已处理长提示词 ({prompt_embeds.shape[1]} tokens)", flush=True)
+                except Exception as e:
+                    print(f"⚠️ Compel 处理失败,降级为截断: {e}", flush=True)
+
+        try:
+            output = pipe(**call_kwargs)
+        
+            # 恢复 IPA scale (供下次调用)
+            if unet_has_ipa and ctx.get('use_ipa'):
+                try:
+                    pipe.set_ip_adapter_scale(ctx['ipa_scale'])
+                except Exception:
+                    pass
+        
+            return output
+        
+        except InterruptedError:
+            raise
+        except Exception as e:
+            print(f"❌ Pipeline 调用失败: {e}", flush=True)
+            raise
+
+    def _gt_try_xy_plot(self, ctx):
+        if not self._chk(getattr(self, 'chk_enable_xy', None)):
+            return False
+
+        print("🟢 进入 XY 分支", flush=True)
+        self._bridge.status_signal.emit("📊 进入 X/Y 炼丹模式...", "#ffd700")
+        generator = torch.Generator(self.ai.device).manual_seed(
+            random.randint(1, 2_147_483_647))
+
+        if ctx['use_ipa']:
+            base_kwargs = {"prompt": ctx['en_prompts'][0],
+                           "negative_prompt": ctx['en_neg']}
+        else:
+            base_kwargs = self.ai.encode_prompt(ctx['en_prompts'][0], ctx['en_neg'])
+
+        base_kwargs.update({
+            "num_inference_steps": ctx['steps'],
+            "guidance_scale":      ctx['cfg'],
+            "generator":           generator,
+        })
+        if ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
+            base_kwargs["ip_adapter_image"] = ctx['ipa_pil_image']
+
+        xy_meta = {
+            "prompt": ctx['raw_prompt'], "neg": ctx['raw_neg'],
+            "en_prompt": ctx['en_prompts'][0], "en_neg": ctx['en_neg'],
+            "steps": ctx['steps'], "sampler": ctx['sampler_name'],
+            "cfg": ctx['cfg'], "width": ctx['width'], "height": ctx['height'],
+            "model": ctx['model_name'], "lora": ctx['lora_meta_info'],
+        }
+        self.run_xy_plot_task(
+            base_kwargs, ctx['width'], ctx['height'],
+            pose_image=ctx['pose_image'] if ctx['use_pose'] else None,
+            meta=xy_meta,
+        )
+        return True
+
+    def _gt_main_loop(self, ctx):
+        self._bridge.progress_signal.emit(0, ctx['total_count'])
+        generated_paths = []
+
+        if (ctx['use_ipa'] and getattr(self, 'ref_image_path', None)
+                and not ctx['skip_img2img']):
+            self._bridge.status_signal.emit(
+                "💡 IP-Adapter 已启用,自动忽略图生图参考图(避免冲突)", "#fab387")
+
+        for i in range(ctx['total_count']):
+            if getattr(self, 'cancel_flag', False):
+                break
+
+            print(f"🟢 [{i+1}/{ctx['total_count']}] 开始", flush=True)
+            self._bridge.progress_signal.emit(i, ctx['total_count'])
+
+            current_seed = random.randint(1, 2_147_483_647)
+            self._bridge.status_signal.emit(
+                f"🔥 第 {i+1}/{ctx['total_count']} 张 (Seed: {current_seed}) ...",
+                "#00ffff")
+            self._bridge.sub_prog_signal.emit(0, ctx['steps'])
+
             try:
-                self.cleanup_temp_files(verbose=True)
-            except Exception:
-                pass
-            self._bridge.done_signal.emit()
+                image = self._gt_generate_one(ctx, i, current_seed)
+            except InterruptedError:
+                raise
+            except Exception as e:
+                print(f"❌ 第 {i+1} 张生成失败: {e}", flush=True)
+                traceback.print_exc()
+                continue
+
+            # 保存
+            save_path = self._gt_save_image(image, ctx, i, current_seed)
+            if not save_path:
+                continue
+
+            self.last_generated_path = save_path
+            generated_paths.append(save_path)
+            try: self._bridge.preview_img_sig.emit(image.copy())
+            except Exception: pass
+            try: self._bridge.gallery_add_signal.emit(save_path)
+            except Exception: pass
+            self._bridge.progress_signal.emit(i + 1, ctx['total_count'])
+
+        if not getattr(self, 'cancel_flag', False):
+            self._bridge.status_signal.emit(
+                f"✅ 全部完成! 共生成 {len(generated_paths)} 张", "#00ff00")
+        self._bridge.progress_signal.emit(ctx['total_count'], ctx['total_count'])
+
+    def _gt_generate_one(self, ctx, i, current_seed):
+        generator = torch.Generator(self.ai.device).manual_seed(current_seed)
+        en_prompt = ctx['en_prompts'][i]
+        en_neg    = ctx['en_neg']
+
+        # prompt embeds vs 普通 prompt
+        if ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
+            embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
+        else:
+            embed_kwargs = self.ai.encode_prompt(en_prompt, en_neg)
+
+        # ETA 回调
+        t0 = time.time()
+        def step_cb(pipe, step_index, timestep, callback_kwargs,
+                    _steps=ctx['steps'], _t0=t0):
+            if getattr(self, 'cancel_flag', False):
+                raise InterruptedError()
+            done = step_index + 1
+            self._bridge.sub_prog_signal.emit(done, _steps)
+            if done == 1 or done == _steps or done % 3 == 0:
+                elapsed = time.time() - _t0
+                eta = (elapsed / done) * (_steps - done) if done > 0 else 0
+                self._bridge.status_signal.emit(
+                    f"🎨 第 {done}/{_steps} 步 · 已用 {elapsed:.1f}s · "
+                    f"剩余 {eta:.1f}s", "#89dceb")
+            return self.on_generation_step(pipe, step_index, timestep, callback_kwargs)
+
+        kwargs = {
+            "num_inference_steps": ctx['steps'],
+            "guidance_scale":      ctx['cfg'],
+            "width":               ctx['width'],
+            "height":              ctx['height'],
+            "generator":           generator,
+            "callback_on_step_end": step_cb,
+            "callback_on_step_end_tensor_inputs": ["latents"],
+        }
+        kwargs.update(embed_kwargs)
+        if ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
+            kwargs["ip_adapter_image"] = ctx['ipa_pil_image']
+
+        with torch.inference_mode():
+            # ── 阶段 1: 基础图像生成 ──
+            with performance_timer("🎨 阶段 1: 基础图像生成"):
+                image = self._gt_run_base_pipe(ctx, kwargs)
+
+            # ── 阶段 2: Hires.fix ──
+            if self._chk(getattr(self, 'chk_hires', None)):
+                if ctx['use_ipa']:
+                    self._bridge.status_signal.emit(
+                        "⚠️ IP-Adapter 模式跳过 Hires.fix", "#fab387")
+                else:
+                    self._bridge.status_signal.emit(
+                        "✨ 阶段 2: Hires.fix...", "#ff1493")
+                    with performance_timer("Hires.fix"):
+                        hires_str = self._sld(getattr(self, 'scale_hires', None))
+                        hires_kwargs = {k: v for k, v in kwargs.items()
+                                        if k not in ('width','height','ip_adapter_image')}
+                        image = self._gt_safe_pipe_call(
+                            self.ai.img2img_pipe, ctx,
+                            **hires_kwargs, image=image, strength=hires_str
+                        ).images[0]
+
+            # ── 阶段 3: ADetailer 脸部 ──
+            if self._chk(getattr(self, 'chk_use_adetailer', None)):
+                self._bridge.status_signal.emit(
+                    "✨ 阶段 3: ADetailer 脸部精修...", "#17a2b8")
+                face_target = self._cbo(getattr(self, 'combo_ad_target', None)) or "现实脸部"
+                face_str    = self._sld(getattr(self, 'scale_adetailer_strength', None))
+    
+                # 🔧 ADetailer 前临时禁用 IPA (避免污染)
+                saved_scale, has_ipa = self._adetailer_disable_ipa()
+    
+                try:
+                    with performance_timer("ADetailer 脸部"):
+                        image = process_adetailer(
+                            image, self.ai.inpaint_pipe,
+                            en_prompt, en_neg,
+                            strength=face_str, target=face_target)
+                finally:
+                    self._adetailer_restore_ipa(saved_scale, has_ipa)
+
+            # ── 阶段 4: ADetailer 手部 ──
+            if self._chk(getattr(self, 'chk_use_ad_hand', None)):
+                self._bridge.status_signal.emit(
+                    "✨ 阶段 4: ADetailer 手部精修...", "#17a2b8")
+                hand_target = self._cbo(getattr(self, 'combo_ad_hand', None)) or "现实手部"
+                hand_str    = self._sld(getattr(self, 'scale_ad_hand', None))
+                blend_ratio = self._sld(getattr(self, 'scale_ad_hand_blend', None))
+                blend_ratio = max(0.0, min(1.0, blend_ratio if blend_ratio > 0 else 0.65))
+    
+                # 🔧 ADetailer 前临时禁用 IPA
+                saved_scale, has_ipa = self._adetailer_disable_ipa()
+    
+                try:
+                    with performance_timer("ADetailer 手部"):
+                        original_image = image.copy()
+                        repaired_image = process_adetailer(
+                            image, self.ai.inpaint_pipe,
+                            en_prompt, en_neg,
+                            strength=hand_str, target=hand_target)
+                        image = Image.blend(original_image, repaired_image,
+                                            alpha=blend_ratio)
+                finally:
+                    self._adetailer_restore_ipa(saved_scale, has_ipa)
+
+        # 确保 RGB
+        if not isinstance(image, Image.Image):
+            raise RuntimeError(f"image 类型异常: {type(image)}")
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        return image
+
+    def _gt_run_base_pipe(self, ctx, kwargs):
+        """根据上下文选择合适的 pipeline 调用,统一走 _gt_safe_pipe_call。"""
+        use_pose          = ctx['use_pose']
+        use_img2img       = ctx['use_img2img']
+        use_inpaint       = ctx['use_inpaint']
+        use_reference     = ctx.get('use_reference_only', False)
+        skip_img2img      = ctx.get('skip_img2img', False)
+        use_img2img       = ctx.get('use_img2img', False)
+        init_img          = ctx.get('init_image')
+        inpaint_img       = ctx.get('inpaint_image')
+        inpaint_mask      = ctx.get('inpaint_mask')
+        pose_image        = ctx.get('pose_image')
+        strength          = ctx.get('strength', 0.7)
+        cn_strength       = ctx.get('cn_strength', 0.6)
+        ref_image         = getattr(self.ai, 'ipa_ref_image', None)
+        ref_fidelity      = ctx.get('ref_fidelity', 0.7)
+
+        ip_kwargs = {}
+        if getattr(self.ai, 'ip_adapter_loaded', False) and ref_image is not None:
+            ip_kwargs['ip_adapter_image'] = ref_image
+
+        output = None
+
+        # ── 路径 0: Reference-Only (单图角色一致性最强方案) ──
+        if use_reference and ref_image is not None and not use_pose and not use_inpaint:
+            ref_pipe = getattr(self.ai, 'reference_pipe', None)
+            if ref_pipe is None:
+                print("⏳ 首次使用 Reference-Only,正在准备...", flush=True)
+                self.ai.prepare_reference_only()
+                ref_pipe = self.ai.reference_pipe
+        
+            # Reference-Only 不接受 ip_adapter_image 等参数,得过滤
+            ref_kwargs = {k: v for k, v in kwargs.items() 
+                          if k in ('prompt', 'negative_prompt', 'num_inference_steps',
+                                   'guidance_scale', 'width', 'height', 'generator',
+                                   'prompt_embeds', 'negative_prompt_embeds')}
+        
+            print(f"🪞 [Reference-Only] fidelity={ref_fidelity:.2f}", flush=True)
+            output = ref_pipe(
+                ref_image=ref_image,
+                reference_attn=True,
+                reference_adain=True,
+                style_fidelity=ref_fidelity,
+                **ref_kwargs,
+            )
+
+        # ── 路径 1: ControlNet (Pose Transfer 或手动) ──
+        elif use_pose and pose_image is not None:
+            output = self._gt_safe_pipe_call(
+                self.ai.controlnet_pipe, ctx,
+                **kwargs, **ip_kwargs,
+                image=pose_image,
+                controlnet_conditioning_scale=cn_strength,
+            )
+
+        # ── 路径 2: Inpaint ──
+        elif use_inpaint and inpaint_img is not None and inpaint_mask is not None:
+            output = self._gt_safe_pipe_call(
+                self.ai.inpaint_pipe, ctx,
+                **kwargs, **ip_kwargs,
+                image=inpaint_img, mask_image=inpaint_mask, strength=strength,
+            )
+
+        # ── 路径 3: 跳过 img2img (Pose Transfer 已用 CN) ──
+        elif skip_img2img:
+            output = self._gt_safe_pipe_call(
+                self.ai.txt2img_pipe, ctx, **kwargs, **ip_kwargs)
+
+        # ── 路径 4: img2img ──
+        elif use_img2img and init_img is not None:
+            output = self._gt_safe_pipe_call(
+                self.ai.img2img_pipe, ctx,
+                **kwargs, **ip_kwargs,
+                image=init_img, strength=strength,
+            )
+
+        # ── 路径 5: 纯 txt2img ──
+        else:
+            output = self._gt_safe_pipe_call(
+                self.ai.txt2img_pipe, ctx, **kwargs, **ip_kwargs)
+
+        # ── 统一提取 image ──
+        if output is None:
+            raise RuntimeError("pipeline 返回 None")
+        if hasattr(output, 'images'):
+            return output.images[0]
+        if isinstance(output, (list, tuple)):
+            return output[0]
+        return output
+
+    def _gt_save_image(self, image, ctx, i, current_seed):
+        """成功返回 save_path,失败返回 None。"""
+        # 元数据
+        meta = None
+        try:
+            from PIL.PngImagePlugin import PngInfo
+            meta = PngInfo()
+            def _add(key, val):
+                try:
+                    s = "" if val is None else str(val)
+                    if len(s) > 8000: s = s[:8000] + "...(truncated)"
+                    meta.add_text(key, s)
+                except Exception as e:
+                    print(f"⚠️ 元数据 [{key}] 写入失败: {e}", flush=True)
+
+            _add("prompt",      ctx['parsed_raw_prompts'][i])
+            _add("negative",    ctx['raw_neg'])
+            _add("en_prompt",   ctx['en_prompts'][i])
+            _add("en_negative", ctx['en_neg'])
+            _add("model",       ctx['model_name'])
+            _add("sampler",     ctx['sampler_name'])
+            _add("steps",       ctx['steps'])
+            _add("cfg",         ctx['cfg'])
+            _add("size",        f"{ctx['width']}x{ctx['height']}")
+            _add("seed",        current_seed)
+            _add("lora",        ",".join(ctx['lora_meta_info']))
+            _add("use_ipa",     bool(ctx['use_ipa']))
+            if ctx['use_ipa']:
+                _add("ipa_scale",   f"{ctx['ipa_scale']:.2f}")
+                _add("ipa_variant", ctx['ipa_variant'])
+            _add("use_pose",      bool(ctx['use_pose']))
+            _add("cn_strength",   f"{ctx['cn_strength']:.2f}")
+            _add("pose_transfer", bool(ctx['pose_transfer_used']))
+            _add("timestamp",     datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+            a1111 = (
+                f"{ctx['en_prompts'][i]}\n"
+                f"Negative prompt: {ctx['en_neg']}\n"
+                f"Steps: {ctx['steps']}, Sampler: {ctx['sampler_name']}, "
+                f"CFG scale: {ctx['cfg']}, Seed: {current_seed}, "
+                f"Size: {ctx['width']}x{ctx['height']}, Model: {ctx['model_name']}"
+            )
+            _add("parameters", a1111)
+        except Exception as e:
+            print(f"⚠️ 构建 PngInfo 失败: {e}", flush=True)
+            meta = None
+
+        # 文件名
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_model = "".join(c if c.isalnum() or c in "._-" else "_"
+                             for c in (ctx['model_name'] or "model"))[:40]
+        filename = f"{ts}_{safe_model}_{i+1:02d}.png"
+        save_path = os.path.join(OUTPUT_DIR, filename)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+        try:
+            if meta is not None:
+                image.save(save_path, format="PNG", pnginfo=meta,
+                           optimize=False, compress_level=4)
+            else:
+                image.save(save_path, format="PNG", optimize=False, compress_level=4)
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
+                print(f"💾 已保存: {save_path} "
+                      f"({os.path.getsize(save_path)//1024} KB)", flush=True)
+                return save_path
+            print(f"⚠️ 保存的文件大小异常: {save_path}", flush=True)
+        except Exception as e:
+            print(f"⚠️ 主保存失败: {e},降级保存...", flush=True)
+            try:
+                image.save(save_path, format="PNG")
+                if os.path.exists(save_path):
+                    print(f"💾 [降级] 已保存: {save_path}", flush=True)
+                    return save_path
+            except Exception as e2:
+                print(f"❌ 降级保存也失败: {e2}", flush=True)
+                traceback.print_exc()
+        return None
+
+    def _gt_cleanup(self):
+        print("🏁 [generation_task] 结束", flush=True)
+        self.is_generating = False
+        try:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception: pass
+        try: self.cleanup_temp_files(verbose=True)
+        except Exception: pass
+        try: self._bridge.done_signal.emit()
+        except Exception: pass
+
+    def _adetailer_disable_ipa(self):
+        """
+        ADetailer 前临时禁用 IPA,返回 (saved_scale, has_ipa)
+        用于配合 _adetailer_restore_ipa 恢复
+        """
+        inpaint_pipe = self.ai.inpaint_pipe
+        has_ipa = False
+        saved_scale = None
+    
+        try:
+            for proc in inpaint_pipe.unet.attn_processors.values():
+                if 'IPAdapter' in type(proc).__name__:
+                    has_ipa = True
+                    break
+        except Exception:
+            pass
+    
+        if has_ipa:
+            try:
+                saved_scale = getattr(self.ai, '_ipa_scale', 0.7)
+                inpaint_pipe.set_ip_adapter_scale(0.0)
+                print(f"  🔧 [ADetailer] 临时禁用 IPA (saved scale={saved_scale:.2f})",
+                      flush=True)
+            except Exception as e:
+                print(f"  ⚠️ [ADetailer] 禁用 IPA 失败: {e}", flush=True)
+    
+        return saved_scale, has_ipa
+
+
+    def _adetailer_restore_ipa(self, saved_scale, has_ipa):
+        """ADetailer 跑完后恢复 IPA scale"""
+        if not has_ipa or saved_scale is None:
+            return
+        try:
+            self.ai.inpaint_pipe.set_ip_adapter_scale(saved_scale)
+            print(f"  ✅ [ADetailer] IPA scale 已恢复 ({saved_scale:.2f})",
+                  flush=True)
+        except Exception as e:
+            print(f"  ⚠️ [ADetailer] 恢复 IPA 失败: {e}", flush=True)
 
     # ==================================================================
     #  中断生成

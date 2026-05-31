@@ -5,6 +5,29 @@
 
 import os
 import sys
+
+# 项目根目录
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# 统一缓存目录
+CACHE_ROOT = os.path.join(PROJECT_ROOT, "models_cache")
+os.makedirs(CACHE_ROOT, exist_ok=True)
+
+# HuggingFace 系列 (diffusers / transformers / huggingface_hub)
+os.environ["HF_HOME"]              = os.path.join(CACHE_ROOT, "huggingface")
+os.environ["HUGGINGFACE_HUB_CACHE"] = os.path.join(CACHE_ROOT, "huggingface", "hub")
+os.environ["TRANSFORMERS_CACHE"]   = os.path.join(CACHE_ROOT, "huggingface", "transformers")
+os.environ["DIFFUSERS_CACHE"]      = os.path.join(CACHE_ROOT, "huggingface", "diffusers")
+
+# ModelScope (Qwen 提示词增强用的)
+os.environ["MODELSCOPE_CACHE"]     = os.path.join(CACHE_ROOT, "modelscope")
+
+# Torch Hub (备用)
+os.environ["TORCH_HOME"]           = os.path.join(CACHE_ROOT, "torch")
+
+os.environ["HF_ENDPOINT"]        = "https://hf-mirror.com"
+
+print(f"📦 模型缓存目录: {CACHE_ROOT}")
 import threading
 import warnings
 import subprocess
@@ -46,9 +69,10 @@ torch = None  # 延迟导入
 #  AI 加载阶段专用信号桥
 # ============================================================
 class _AppBridge(QObject):
-    ai_loaded  = pyqtSignal()
-    status_msg = pyqtSignal(str, str)
-
+    """主程序启动 / 引擎加载用信号桥"""
+    ai_loaded  = pyqtSignal()          
+    ai_failed  = pyqtSignal(str)       
+    status_msg = pyqtSignal(str, str) 
 
 # ============================================================
 #  主窗口
@@ -73,6 +97,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin):
         self.pose_image_path        = None
         self.current_generated_path = None
         self.last_generated_path    = None
+        self.ipa_image_path = None
         self._editor_window         = None  # 防止 GC
         self.cleanup_temp_files(verbose=False)
 
@@ -82,19 +107,25 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin):
         # ── App 信号桥 ─────────────────────────────────────
         self._app_bridge = _AppBridge()
         self._app_bridge.ai_loaded.connect(self._on_ai_loaded)
-        self._app_bridge.status_msg.connect(self._set_status)
-
+        self._app_bridge.ai_failed.connect(self._on_ai_failed)
+        self._app_bridge.status_msg.connect(self._set_status) 
         # ── 配置 & UI ──────────────────────────────────────
         self.config = AppConfig()
         self.config.load()
 
         self.setup_ui()
         self.apply_config_to_ui()
-
+        self.cleanup_temp_files(verbose=False)
         # ── 生成信号桥 ─────────────────────────────────────
         self._init_gen_bridge()
         try:
             self._bridge.preview_signal.connect(self._on_new_image_saved)
+        except Exception:
+            pass
+
+        # ⭐ enhance_done_signal 在生成桥上，要在 _init_gen_bridge() 之后连接
+        try:
+            self._bridge.enhance_done_signal.connect(self._on_enhance_done)
         except Exception:
             pass
 
@@ -117,6 +148,13 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin):
         self._app_bridge.status_msg.emit(text, color)
 
     # ----------------------------------------------------------
+    def _on_ai_failed(self, err: str):
+        self.btn_generate.setEnabled(False)
+        self.btn_generate.setText("❌ 引擎加载失败")
+        self._set_status(f"❌ 引擎加载失败: {err}", "#f38ba8")
+        QMessageBox.critical(self, "AI 引擎加载失败",
+                             f"无法加载 AI 引擎：\n\n{err}")
+
     def _async_init_ai(self):
         logger.info("👉 [预热] 后台导入重型库 (PyTorch / Diffusers)...")
         self._emit_status("⏳ 正在导入 PyTorch & Diffusers...", "#f9e2af")
@@ -129,9 +167,10 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin):
             self.ai = ModelManager()
         except Exception as e:
             logger.error(f"❌ AI 引擎加载失败: {e}")
-            self._emit_status(f"❌ 引擎加载失败: {e}", "#f38ba8")
+            self._app_bridge.ai_failed.emit(str(e))   # ⭐ 用信号，而不是直接调 _emit_status
             return
         self._app_bridge.ai_loaded.emit()
+
 
     # ----------------------------------------------------------
     def _on_ai_loaded(self):
@@ -169,10 +208,24 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin):
         if hasattr(self, 'gallery'):
             self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
             self.gallery.image_selected.connect(self._on_gallery_pick)
+    
+    def _on_enhance_done(self, result: str):
+        """改写/识图完成回调"""
+        # 恢复按钮
+        if hasattr(self, 'btn_enhance_prompt'):
+            self.btn_enhance_prompt.setEnabled(True)
+            self.btn_enhance_prompt.setText("✨ 智能改写")
+        if hasattr(self, 'btn_vision_prompt'):
+            self.btn_vision_prompt.setEnabled(True)
+            self.btn_vision_prompt.setText("📷 识图生成")
 
-    # ==========================================================
-    #  ⭐ 关键修复 2：补全预设/修图/PNG 信息 的方法
-    # ==========================================================
+        if result.startswith("[识图失败]") or result.startswith("[改写失败]"):
+            self._set_status(result, "#f38ba8")
+            return
+
+        # 把结果填到正向提示词框
+        self.txt_prompt.setPlainText(result)
+        self._set_status("✨ 提示词生成完成！", "#a6e3a1")
 
     # ---------- 预设提示词 ----------
     def apply_preset(self, idx=None):
@@ -319,14 +372,6 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin):
         """preview_signal 触发时,额外把图片塞进画廊。"""
         if hasattr(self, 'gallery') and path and os.path.exists(path):
             self.gallery.add_image(path, prepend=True)
-
-    def closeEvent(self, event):
-        try:
-            self.cleanup_temp_files(verbose=False)
-        except Exception:
-            pass
-        super().closeEvent(event)
-
 
 # ============================================================
 #  程序入口

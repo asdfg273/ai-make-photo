@@ -9,6 +9,7 @@ import torch
 import cv2
 import numpy as np
 from threading import Lock
+from compel import Compel
 
 from diffusers import (
     StableDiffusionPipeline,
@@ -67,6 +68,12 @@ class ModelManager(metaclass=SingletonMeta):
         self.depth_estimator    = None
         self.loaded_controlnets = {}
         self.current_cn_type    = None
+        self.compel_txt2img = None
+        self.compel_img2img = None
+        self.compel_controlnet = None
+        # ★ IP-Adapter 状态
+        self.ip_adapter_loaded   = False
+        self.ip_adapter_variant  = None
 
         self._compel_cache = {}
         self._model_cache  = {}
@@ -158,7 +165,11 @@ class ModelManager(metaclass=SingletonMeta):
             applied.append("attn_slicing(auto)")
         except Exception:
             try:
-                pipe.enable_attention_slicing()
+                if not getattr(self, 'ip_adapter_loaded', False):
+                    try:
+                        pipe.enable_attention_slicing()
+                    except Exception:
+                        pass
                 applied.append("attn_slicing")
             except Exception:
                 pass
@@ -237,6 +248,22 @@ class ModelManager(metaclass=SingletonMeta):
             self._compel_cache.clear()
             print("✅ 模型加载与显存优化完成！")
 
+            self.compel_txt2img = Compel(
+                tokenizer=self.txt2img_pipe.tokenizer,
+                text_encoder=self.txt2img_pipe.text_encoder,
+            )
+            if self.img2img_pipe:
+                self.compel_img2img = Compel(
+                    tokenizer=self.img2img_pipe.tokenizer,
+                    text_encoder=self.img2img_pipe.text_encoder,
+                )
+            if self.controlnet_pipe:
+                self.compel_controlnet = Compel(
+                    tokenizer=self.controlnet_pipe.tokenizer,
+                    text_encoder=self.controlnet_pipe.text_encoder,
+                )
+            print("✅ Compel 长提示词支持已启用", flush=True)
+
         except Exception as e:
             raise Exception(f"架构加载失败: {str(e)}")
 
@@ -294,13 +321,27 @@ class ModelManager(metaclass=SingletonMeta):
     #  ControlNet
     # ------------------------------------------------------------
     def prepare_controlnet(self, control_type="openpose"):
-        # 已加载同类型 → 直接复用
+        CN_ALIAS = {
+            "openpose": "openpose", "OpenPose": "openpose", "Openpose": "openpose",
+            "OPENPOSE": "openpose", "姿势": "openpose", "骨架": "openpose",
+            "canny": "canny", "Canny": "canny", "CANNY": "canny",
+            "线稿": "canny", "边缘": "canny",
+            "depth": "depth", "Depth": "depth", "DEPTH": "depth",
+            "深度": "depth", "深度图": "depth",
+        }
+
+        raw_type = str(control_type).strip()
+        control_type = CN_ALIAS.get(raw_type, raw_type.lower())
+
+        # 已加载同类型 → 仍需检查 image_encoder 是否需要同步
         if (self.current_cn_type == control_type
                 and getattr(self, 'controlnet_pipe', None) is not None):
+            # 🔧 即便复用,也要确保 image_encoder 同步 (IP-Adapter 可能后加载)
+            self._sync_ipa_components_to_controlnet()
             return
 
-        print(f"🔄 正在配置 ControlNet: {control_type} ... "
-              f"(初次加载会自动下载)")
+        print(f"🔄 正在配置 ControlNet: {control_type} "
+              f"(原始输入: {raw_type})...")
 
         model_id_map = {
             "openpose": "lllyasviel/sd-controlnet-openpose",
@@ -313,15 +354,48 @@ class ModelManager(metaclass=SingletonMeta):
             "depth":    "diffusers/controlnet-depth-sdxl-1.0",
         }
 
-        cn_model_id = (sdxl_model_id_map[control_type]
-                       if getattr(self, 'is_sdxl', False)
-                       else model_id_map[control_type])
+        use_map = (sdxl_model_id_map
+                   if getattr(self, 'is_sdxl', False)
+                   else model_id_map)
+
+        if control_type not in use_map:
+            raise ValueError(
+                f"❌ 未知 ControlNet 类型: '{raw_type}'\n"
+                f"   归一化后: '{control_type}'\n"
+                f"   可用类型: {list(use_map.keys())}"
+            )
 
         if control_type not in self.loaded_controlnets:
-            self.loaded_controlnets[control_type] = \
-                ControlNetModel.from_pretrained(
-                    cn_model_id, torch_dtype=self.dtype
-                ).to(self.device)
+            local_dir = os.path.abspath(
+                f"controlnets/{'sdxl_' if getattr(self, 'is_sdxl', False) else ''}{control_type}"
+            )
+            if os.path.exists(os.path.join(local_dir, "config.json")):
+                print(f"📂 从本地加载 ControlNet: {local_dir}")
+                cn_source = local_dir
+                local_only = True
+            else:
+                cn_model_id = use_map[control_type]
+                print(f"🌐 从在线下载 ControlNet: {cn_model_id} "
+                      f"(via {os.environ.get('HF_ENDPOINT', 'huggingface.co')})")
+                cn_source = cn_model_id
+                local_only = False
+
+            try:
+                self.loaded_controlnets[control_type] = \
+                    ControlNetModel.from_pretrained(
+                        cn_source,
+                        torch_dtype=self.dtype,
+                        local_files_only=local_only,
+                    ).to(self.device)
+            except Exception as e:
+                raise RuntimeError(
+                    f"❌ ControlNet 加载失败: {e}\n\n"
+                    f"💡 解决办法:\n"
+                    f"   1. 检查网络是否通畅,镜像 https://hf-mirror.com 能否访问\n"
+                    f"   2. 或手动下载模型放到: {local_dir}\n"
+                    f"      只需 config.json + diffusion_pytorch_model.safetensors\n"
+                    f"   3. 或在 UI 中关闭 ControlNet,改用普通图生图"
+                ) from e
 
         controlnet = self.loaded_controlnets[control_type]
 
@@ -329,33 +403,54 @@ class ModelManager(metaclass=SingletonMeta):
                       if getattr(self, 'is_sdxl', False)
                       else StableDiffusionControlNetPipeline)
 
-        self.controlnet_pipe = pipe_class(
-            vae           = self.txt2img_pipe.vae,
-            text_encoder  = self.txt2img_pipe.text_encoder,
-            tokenizer     = self.txt2img_pipe.tokenizer,
-            unet          = self.txt2img_pipe.unet,
-            scheduler     = self.txt2img_pipe.scheduler,
-            safety_checker=None,
-            feature_extractor=None,
-            controlnet    = controlnet,
-            text_encoder_2=getattr(self.txt2img_pipe, 'text_encoder_2', None),
-            tokenizer_2   =getattr(self.txt2img_pipe, 'tokenizer_2', None),
-        ).to(self.device)
+        common_kwargs = dict(
+            vae          = self.txt2img_pipe.vae,
+            text_encoder = self.txt2img_pipe.text_encoder,
+            tokenizer    = self.txt2img_pipe.tokenizer,
+            unet         = self.txt2img_pipe.unet,
+            scheduler    = self.txt2img_pipe.scheduler,
+            controlnet   = controlnet,
+        )
 
-        # 轻量优化 (共享 components,不重复 cpu_offload)
-        self._apply_light_optimizations(self.controlnet_pipe,
-                                        name="controlnet")
+        if getattr(self, 'is_sdxl', False):
+            self.controlnet_pipe = pipe_class(
+                **common_kwargs,
+                text_encoder_2 = self.txt2img_pipe.text_encoder_2,
+                tokenizer_2    = self.txt2img_pipe.tokenizer_2,
+            ).to(self.device)
+        else:
+            self.controlnet_pipe = pipe_class(
+                **common_kwargs,
+                safety_checker          = None,
+                feature_extractor       = None,
+                requires_safety_checker = False,
+            ).to(self.device)
+
+        # 轻量优化
+        self._apply_light_optimizations(self.controlnet_pipe, name="controlnet")
 
         self.current_cn_type = control_type
+        print(f"✅ ControlNet ({control_type}) 加载完成")
 
-        # 预处理器
+        # 🔧 关键修复:同步 IP-Adapter 相关组件
+        self._sync_ipa_components_to_controlnet()
+
+        # ===== 预处理器(检测器) =====
         if control_type == "openpose" and not self.pose_detector:
             print("⏳ 正在加载 OpenPose 骨架提取器...")
-            try:
-                self.pose_detector = OpenposeDetector.from_pretrained(
-                    "lllyasviel/Annotators")
-            except Exception as e:
-                print(f"⚠️ 加载 OpenPose 失败: {e}")
+            local_annot = os.path.abspath("controlnets/Annotators")
+            if os.path.exists(os.path.join(local_annot, "body_pose_model.pth")):
+                print(f"📂 从本地加载 OpenPose 检测器: {local_annot}")
+                try:
+                    self.pose_detector = OpenposeDetector.from_pretrained(local_annot)
+                except Exception as e:
+                    print(f"⚠️ 本地 OpenPose 加载失败: {e}")
+            else:
+                try:
+                    self.pose_detector = OpenposeDetector.from_pretrained(
+                        "lllyasviel/Annotators")
+                except Exception as e:
+                    print(f"⚠️ 加载 OpenPose 失败: {e}")
 
         elif control_type == "depth" and not self.depth_estimator:
             print("⏳ 正在加载 Depth 深度图提取器...")
@@ -365,7 +460,48 @@ class ModelManager(metaclass=SingletonMeta):
             except Exception as e:
                 print(f"⚠️ 加载 Depth 失败: {e}")
 
+    def _sync_ipa_components_to_controlnet(self):
+        """
+        把 txt2img_pipe 上的 IP-Adapter 组件 (image_encoder/feature_extractor)
+        同步给 controlnet_pipe。
+    
+        IP-Adapter 加载在 txt2img_pipe 上时,会注入 image_encoder。
+        controlnet_pipe 共享了 unet (含 attn processor),但 image_encoder 是
+        pipeline 级别的属性,不会自动共享 → 需要手动赋值。
+        """
+        if getattr(self, 'controlnet_pipe', None) is None:
+            return
+        if getattr(self, 'txt2img_pipe', None) is None:
+            return
+
+        src = self.txt2img_pipe
+        dst = self.controlnet_pipe
+
+        # 1. image_encoder (IP-Adapter 的视觉编码器)
+        src_img_enc = getattr(src, 'image_encoder', None)
+        if src_img_enc is not None:
+            dst.image_encoder = src_img_enc
+            print("🔧 [sync] image_encoder → controlnet_pipe", flush=True)
+
+        # 2. feature_extractor (CLIP 图像预处理器)
+        src_feat = getattr(src, 'feature_extractor', None)
+        if src_feat is not None:
+            dst.feature_extractor = src_feat
+            print("🔧 [sync] feature_extractor → controlnet_pipe", flush=True)
+
+        # 3. 同步 IP-Adapter scale (UNet 共享,所以会自动生效,这里只为保险)
+        try:
+            if getattr(self, 'ip_adapter_loaded', False):
+                current_scale = getattr(self, 'current_ipa_scale', 0.6)
+                dst.set_ip_adapter_scale(current_scale)
+                print(f"🔧 [sync] IPA scale={current_scale} → controlnet_pipe",
+                      flush=True)
+        except Exception as e:
+            print(f"⚠️ [sync] 设置 controlnet_pipe IPA scale 失败: {e}", flush=True)
+
+
     def get_control_image(self, input_image, control_type="openpose"):
+        control_type = str(control_type).strip().lower()
         if self.current_cn_type != control_type:
             self.prepare_controlnet(control_type)
 
@@ -383,6 +519,210 @@ class ModelManager(metaclass=SingletonMeta):
             return self.depth_estimator(input_image)['depth']
 
         return input_image
+
+    def prepare_ip_adapter(self, variant="plus"):
+        """
+        加载 IP-Adapter 到 txt2img / img2img 管线
+        🔧 inpaint_pipe 不装载 IPA,避免 ADetailer 局部重绘冲突
+           (ADetailer 只需修手/脸细节,不需要参考角色特征)
+        """
+        if getattr(self, 'ip_adapter_loaded', False) \
+           and getattr(self, 'ip_adapter_variant', None) == variant:
+            print("✅ IP-Adapter 已加载,复用", flush=True)
+            return True
+
+        weight_name = (
+            "ip-adapter-plus_sd15.safetensors"
+            if variant == "plus"
+            else "ip-adapter_sd15.safetensors"
+        )
+        print(f"🎭 加载 IP-Adapter ({variant}) ...", flush=True)
+
+        # 🔧 关键修改: inpaint_pipe 排除在装载列表外
+        pipes = []
+        for attr in ("txt2img_pipe", "img2img_pipe"):    # ← 去掉 "inpaint_pipe"
+            pipe = getattr(self, attr, None)
+            if pipe is not None:
+                pipes.append((attr, pipe))
+
+        # ── 重置 attn processor (只对装载 IPA 的 pipe) ──
+        print("  → 重置 attn processor (关闭 attention slicing) ...", flush=True)
+        try:
+            from diffusers.models.attention_processor import (
+                AttnProcessor2_0, AttnProcessor
+            )
+            import torch.nn.functional as F
+            proc_class = (
+                AttnProcessor2_0
+                if hasattr(F, 'scaled_dot_product_attention')
+                else AttnProcessor
+            )
+            for attr, pipe in pipes:
+                try:
+                    if hasattr(pipe, 'disable_attention_slicing'):
+                        pipe.disable_attention_slicing()
+                except Exception:
+                    pass
+                try:
+                    pipe.unet.set_attn_processor(proc_class())
+                except Exception as e:
+                    print(f"    ⚠️ {attr} 重置 processor 失败: {e}", flush=True)
+        except Exception as e:
+            print(f"  ⚠️ 重置 processor 异常: {e}", flush=True)
+
+        # ── 装载 IP-Adapter (仅 txt2img / img2img) ──
+        try:
+            for attr, pipe in pipes:
+                print(f"  → 装载 IP-Adapter 到 {attr} ...", flush=True)
+                pipe.load_ip_adapter(
+                    "h94/IP-Adapter",
+                    subfolder="models",
+                    weight_name=weight_name,
+                )
+
+            # 🆕 inpaint_pipe 只同步 encoder/feature_extractor,不装载 IPA
+            # 这样它能正常推理,且 ADetailer 不会触发 IPA 冲突
+            inpaint_pipe = getattr(self, 'inpaint_pipe', None)
+            if inpaint_pipe is not None:
+                try:
+                    # 同步基础组件 (复用显存)
+                    if getattr(self.txt2img_pipe, 'image_encoder', None) is not None:
+                        inpaint_pipe.image_encoder = self.txt2img_pipe.image_encoder
+                    if getattr(self.txt2img_pipe, 'feature_extractor', None) is not None:
+                        inpaint_pipe.feature_extractor = self.txt2img_pipe.feature_extractor
+
+                    # 🔑 关键: 强制重置为标准 attn_processor,
+                    #   防止 inpaint_pipe 共享了 txt2img 的 UNet 而被污染
+                    from diffusers.models.attention_processor import (
+                        AttnProcessor2_0, AttnProcessor
+                    )
+                    import torch.nn.functional as F
+                    proc_class = (
+                        AttnProcessor2_0
+                        if hasattr(F, 'scaled_dot_product_attention')
+                        else AttnProcessor
+                    )
+
+                    # 检查 inpaint 是否和 txt2img 共享 UNet
+                    shares_unet = (inpaint_pipe.unet is self.txt2img_pipe.unet)
+                    if shares_unet:
+                        print("  ⚠️ inpaint_pipe 与 txt2img 共享 UNet,"
+                              "ADetailer 时需在调用层处理 IPA 占位", flush=True)
+                    else:
+                        # 独立 UNet,直接重置回干净的 processor
+                        inpaint_pipe.unet.set_attn_processor(proc_class())
+                        print("  ✅ inpaint_pipe 已重置为标准 attn_processor "
+                              "(无 IPA 干扰)", flush=True)
+                except Exception as e:
+                    print(f"  ⚠️ inpaint_pipe 同步失败: {e}", flush=True)
+
+            # 🆕 设置所有状态标志(统一两套变量名)
+            self.ip_adapter_loaded  = True
+            self.ip_adapter_variant = variant
+            self._ipa_loaded        = True
+            self._ipa_variant       = variant
+            self._ipa_scale         = 0.7
+
+            print("✅ IP-Adapter 加载完成 (inpaint_pipe 已排除)", flush=True)
+
+            # 🆕 如果 controlnet_pipe 已存在,自动同步
+            if getattr(self, 'controlnet_pipe', None) is not None:
+                try:
+                    self.sync_ipa_to_controlnet()
+                except Exception as e:
+                    print(f"⚠️ 自动同步 IPA 到 controlnet 失败: {e}", flush=True)
+
+            return True
+
+        except Exception as e:
+            print(f"❌ IP-Adapter 加载失败: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+
+            try:
+                self.unload_ip_adapter()
+            except Exception as e2:
+                print(f"⚠️ 清理失败: {e2}", flush=True)
+
+            self.ip_adapter_loaded  = False
+            self.ip_adapter_variant = None
+            self._ipa_loaded        = False
+            self._ipa_variant       = None
+            return False
+
+
+    def unload_ip_adapter(self):
+        """彻底卸载 IP-Adapter,恢复 UNet 到普通模式"""
+        print("🧹 卸载 IP-Adapter ...", flush=True)
+        for attr in ("txt2img_pipe", "img2img_pipe", "inpaint_pipe"):
+            pipe = getattr(self, attr, None)
+            if pipe is None:
+                continue
+            try:
+                # 方式1: diffusers 0.31+ 提供的官方接口
+                if hasattr(pipe, 'unload_ip_adapter'):
+                    pipe.unload_ip_adapter()
+                else:
+                    # 方式2: 手动恢复 attn processor
+                    from diffusers.models.attention_processor import AttnProcessor2_0, AttnProcessor
+                    proc_class = AttnProcessor2_0 if hasattr(__import__('torch.nn.functional', fromlist=['scaled_dot_product_attention']), 'scaled_dot_product_attention') else AttnProcessor
+                    pipe.unet.set_attn_processor(proc_class())
+                    pipe.unet.encoder_hid_proj = None
+                    pipe.unet.config.encoder_hid_dim_type = None
+            except Exception as e:
+                print(f"  ⚠️ {attr} 卸载异常: {e}", flush=True)
+
+        self.ip_adapter_loaded  = False
+        self.ip_adapter_variant = None
+        print("✅ IP-Adapter 卸载完成", flush=True)
+
+
+    def set_ip_adapter_scale(self, scale: float):
+        """调整 IP-Adapter 影响强度 0.0~1.5"""
+        self._ipa_scale = scale
+        scale = max(0.0, min(1.5, float(scale)))
+        for attr in ("txt2img_pipe", "img2img_pipe", "inpaint_pipe"):
+            pipe = getattr(self, attr, None)
+            if pipe is not None and hasattr(pipe, 'set_ip_adapter_scale'):
+                try:
+                    pipe.set_ip_adapter_scale(scale)
+                except Exception:
+                    pass
+        print(f"🎛️ IP-Adapter scale = {scale}", flush=True)
+
+    def unload_ip_adapter(self):
+        """卸载所有 pipeline 的 IP-Adapter"""
+        pipes = [
+            self.txt2img_pipe,
+            self.img2img_pipe,
+            self.inpaint_pipe,
+            self.controlnet_pipe,
+        ]
+        for pipe in pipes:
+            if pipe is not None and hasattr(pipe, 'unload_ip_adapter'):
+                try:
+                    pipe.unload_ip_adapter()
+                except Exception:
+                    pass
+        self.ip_adapter_loaded = False
+        self.ip_adapter_variant = None
+        print("🎭 IP-Adapter 已卸载")
+
+    def set_ip_adapter_scale(self, scale=0.6):
+        """设置 IP-Adapter 影响力, 0.0~1.0"""
+        if not self.ip_adapter_loaded:
+            return
+        targets = [
+            self.txt2img_pipe, self.img2img_pipe,
+            self.inpaint_pipe, self.controlnet_pipe,
+        ]
+        for pipe in targets:
+            if pipe is None:
+                continue
+            try:
+                pipe.set_ip_adapter_scale(scale)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------
     #  提示词编码 (Compel,支持 SD1.5 / SDXL)
@@ -515,3 +855,169 @@ class ModelManager(metaclass=SingletonMeta):
         except Exception:
             pass
         return "cpu"
+
+    def unload_all(self):
+        """彻底释放所有管线和内存"""
+        print("🧹 开始释放所有模型...")
+
+        # 释放管线
+        for attr in ['txt2img_pipe', 'img2img_pipe', 'inpaint_pipe',
+                     'controlnet_pipe']:
+            pipe = getattr(self, attr, None)
+            if pipe is not None:
+                try:
+                    # 解绑组件,加速 GC
+                    for sub in ['unet', 'vae', 'text_encoder',
+                                'text_encoder_2', 'tokenizer',
+                                'tokenizer_2', 'scheduler', 'safety_checker',
+                                'feature_extractor']:
+                        if hasattr(pipe, sub):
+                            try:
+                                setattr(pipe, sub, None)
+                            except Exception:
+                                pass
+                    del pipe
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+        # 释放 ControlNet
+        if hasattr(self, 'loaded_controlnets'):
+            for k in list(self.loaded_controlnets.keys()):
+                try:
+                    del self.loaded_controlnets[k]
+                except Exception:
+                    pass
+            self.loaded_controlnets = {}
+
+        # 释放检测器
+        for attr in ['pose_detector', 'depth_estimator']:
+            if getattr(self, attr, None) is not None:
+                try:
+                    del self.__dict__[attr]
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+        # 释放 IP-Adapter 参考图
+        if hasattr(self, 'ipa_ref_image'):
+            self.ipa_ref_image = None
+
+        # 释放缓存
+        if hasattr(self, '_compel_cache'):
+            self._compel_cache = {}
+        if hasattr(self, '_model_cache'):
+            self._model_cache = {}
+
+        self.current_model_name = None
+        self.current_lora_name = None
+        self.current_cn_type = None
+
+        # 强制 GC
+        gc.collect()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+
+        print("✅ 所有模型已释放")
+
+    def sync_ipa_to_controlnet(self):
+        """
+        给 controlnet_pipe 独立装载 IP-Adapter（不依赖共享 UNet）。
+        """
+        if self.controlnet_pipe is None:
+            print("⚠️ controlnet_pipe 未初始化", flush=True)
+            return False
+
+        if self.txt2img_pipe is None or not getattr(self, '_ipa_loaded', False):
+            print("⚠️ txt2img_pipe 未加载 IPA，无法同步", flush=True)
+            return False
+
+        print("🔄 给 controlnet_pipe 独立装载 IP-Adapter...", flush=True)
+
+        try:
+            # ── 1. 关闭 attention slicing（IPA 不兼容） ──
+            try:
+                self.controlnet_pipe.disable_attention_slicing()
+                print("  → 关闭 controlnet_pipe attention_slicing", flush=True)
+            except Exception:
+                pass
+
+            # ── 2. 共享 image_encoder 和 feature_extractor（节省显存） ──
+            if hasattr(self.txt2img_pipe, 'image_encoder') and self.txt2img_pipe.image_encoder is not None:
+                self.controlnet_pipe.image_encoder = self.txt2img_pipe.image_encoder
+                print("  → 共享 image_encoder", flush=True)
+
+            if hasattr(self.txt2img_pipe, 'feature_extractor') and self.txt2img_pipe.feature_extractor is not None:
+                self.controlnet_pipe.feature_extractor = self.txt2img_pipe.feature_extractor
+                print("  → 共享 feature_extractor", flush=True)
+
+            # ── 3. 关键：独立装载 IP-Adapter 到 controlnet_pipe ──
+            variant = getattr(self, '_ipa_variant', 'plus')
+            weight_map = {
+                'plus':      'ip-adapter-plus_sd15.safetensors',
+                'plus-face': 'ip-adapter-plus-face_sd15.safetensors',
+                'base':      'ip-adapter_sd15.safetensors',
+            }
+            weight_name = weight_map.get(variant, 'ip-adapter-plus_sd15.safetensors')
+
+            # 优先用本地缓存
+            local_dir = os.path.join("models_cache", "ip_adapter")
+            if os.path.exists(os.path.join(local_dir, "models", weight_name)):
+                print(f"  → 从本地装载: {weight_name}", flush=True)
+                self.controlnet_pipe.load_ip_adapter(
+                    local_dir,
+                    subfolder="models",
+                    weight_name=weight_name,
+                )
+            else:
+                print(f"  → 从 HuggingFace 装载: {weight_name}", flush=True)
+                self.controlnet_pipe.load_ip_adapter(
+                    "h94/IP-Adapter",
+                    subfolder="models",
+                    weight_name=weight_name,
+                )
+
+            # ── 4. 设置 scale ──
+            scale = getattr(self, '_ipa_scale', 0.7)
+            self.controlnet_pipe.set_ip_adapter_scale(scale)
+            print(f"  → set scale = {scale}", flush=True)
+
+            # ── 5. 验证 ──
+            ok_count = 0
+            err_count = 0
+            for name, proc in self.controlnet_pipe.unet.attn_processors.items():
+                if 'attn2' in name:
+                    if 'IPAdapter' in type(proc).__name__:
+                        ok_count += 1
+                    else:
+                        err_count += 1
+
+            print(f"✅ ControlNet IPA 装载完成: {ok_count} 正确 / {err_count} 错误", flush=True)
+            return ok_count > 0 and err_count == 0
+
+        except Exception as e:
+            print(f"❌ IPA 装载失败: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def prepare_reference_only(self):
+        """加载 Reference-Only ControlNet (无需额外模型)"""
+        # Reference-Only 不需要下载额外模型
+        # 它通过修改 attention 实现,集成在 diffusers 的 community pipeline 里
+    
+        from diffusers import StableDiffusionReferencePipeline
+    
+        self.reference_pipe = StableDiffusionReferencePipeline(
+            unet=self.txt2img_pipe.unet,
+            vae=self.txt2img_pipe.vae,
+            text_encoder=self.txt2img_pipe.text_encoder,
+            tokenizer=self.txt2img_pipe.tokenizer,
+            scheduler=self.txt2img_pipe.scheduler,
+            safety_checker=None,
+            feature_extractor=None,
+            requires_safety_checker=False,
+        )
+        self.reference_pipe.to(self.device)

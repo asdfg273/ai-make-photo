@@ -12,6 +12,7 @@ from PyQt6.QtGui import QPixmap, QImage, QColor
 from PyQt6.QtCore import Qt
 
 from utils.app_utils import OUTPUT_DIR, PROMPT_PRESETS
+from utils.prompt_enhancer import *
 
 try:
     from photo_turn.pro_editor_qt import ProImageEditor
@@ -69,6 +70,12 @@ class EventMixin:
         if hasattr(self, 'spin_batch'):
             self.spin_batch.setValue(
                 getattr(cfg, 'default_batch', 1))
+
+        if hasattr(self, 'btn_enhance_prompt'):
+            self.btn_enhance_prompt.clicked.connect(self.on_enhance_prompt)
+
+        if hasattr(self, 'btn_vision_prompt'):
+            self.btn_vision_prompt.clicked.connect(self.on_vision_prompt)
 
         # ── 采样器 ───────────────────────────────────────────
         if hasattr(self, 'combo_sampler'):
@@ -332,25 +339,82 @@ class EventMixin:
         self.mask_image_path = None
         _set_label_style(self.lbl_img_path, "未选择参考图", "#585b70")
 
+    def cleanup_temp_files(self, verbose=True):
+        """清理 outputs/temp 下的 inpaint 中转文件,并清空内存引用"""
+        try:
+            temp_dir = os.path.join(OUTPUT_DIR, "temp")
+            if not os.path.isdir(temp_dir):
+                return
+
+            # 只清理已知中转文件,避免误删其他内容
+            targets = ["inpaint_ref.png", "inpaint_mask.png"]
+            removed = []
+            for name in targets:
+                p = os.path.join(temp_dir, name)
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                        removed.append(name)
+                    except Exception as e:
+                        if verbose:
+                            print(f"⚠️ 删除 {name} 失败: {e}")
+
+            # 清空内存引用,避免下次生图误用旧路径
+            if getattr(self, "ref_image_path", None) and \
+                    os.path.basename(self.ref_image_path) in targets:
+                self.ref_image_path = None
+            if getattr(self, "mask_image_path", None) and \
+                    os.path.basename(self.mask_image_path) in targets:
+                self.mask_image_path = None
+
+            # UI 同步(如果界面上仍挂着那张临时图)
+            if hasattr(self, "lbl_img_path") and not self.ref_image_path:
+                _set_label_style(self.lbl_img_path, "未选择参考图", "#585b70")
+
+            if verbose and removed:
+                print(f"🧹 已清理 temp 文件: {', '.join(removed)}")
+        except Exception as e:
+            if verbose:
+                print(f"⚠️ cleanup_temp_files 异常: {e}")
+
     def load_pose_image(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "选择骨架/线稿图", "",
-            "Images (*.png *.jpg *.jpeg)"
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp)"
         )
-        if path:
-            self.pose_image_path = path
+        if not path:
+            return
+
+        self.pose_image_path = path
+
+        # 更新路径标签
+        try:
             _set_label_style(
                 self.lbl_pose_path,
                 "已加载动作图: " + os.path.basename(path),
                 "#f9e2af",
             )
-            self.var_use_pose.set(True)
-            # 同步显示骨架预览
-            try:
-                img = Image.open(path)
-                self.show_pose_preview(img)
-            except Exception as e:
-                print(f"骨架图预览失败: {e}")
+        except Exception:
+            self.lbl_pose_path.setText("已加载动作图: " + os.path.basename(path))
+
+        if hasattr(self, 'chk_use_pose'):
+            self.chk_use_pose.setChecked(True)
+
+        # 同步显示骨架预览缩略图
+        try:
+            img = Image.open(path)
+            self.show_pose_preview(img)
+        except Exception as e:
+            print(f"⚠️ 骨架图预览失败: {e}")
+
+        # 状态栏提示
+        try:
+            self._set_status(
+                f"📂 已加载 ControlNet 参考图: {os.path.basename(path)}",
+                "#a6e3a1"
+            )
+        except Exception:
+            pass
 
     def stop_generation(self):
         if self.is_generating:
@@ -367,7 +431,6 @@ class EventMixin:
             self.btn_edit.setEnabled(True)
             self.btn_upscale.setEnabled(True)
 
-            # ★ 去重:同一路径只加入画廊一次
             if hasattr(self, 'gallery') and img_path:
                 if not hasattr(self, '_gallery_seen_paths'):
                     self._gallery_seen_paths = set()
@@ -386,12 +449,23 @@ class EventMixin:
             print(f"实时预览更新失败: {e}")
 
     def show_pose_preview(self, img: Image.Image):
-        """在左侧骨架画布显示 ControlNet 参考图"""
+        """在 ControlNet 缩略图区域显示参考图"""
         try:
-            img.thumbnail((450, 600), Image.Resampling.LANCZOS)
-            self.pose_canvas.set_pixmap(_pil_to_pixmap(img))
+            # 缩略
+            thumb = img.copy()
+            thumb.thumbnail((300, 180), Image.Resampling.LANCZOS)
+
+            # PIL → QPixmap
+            from PIL.ImageQt import ImageQt
+            from PyQt6.QtGui import QPixmap, QImage
+
+            qimg = ImageQt(thumb.convert("RGBA"))
+            pix = QPixmap.fromImage(QImage(qimg))
+
+            if hasattr(self, 'lbl_cn_thumb'):
+                self.lbl_cn_thumb.set_pixmap(pix)
         except Exception as e:
-            print(f"骨架预览失败: {e}")
+            print(f"⚠️ show_pose_preview 失败: {e}")
 
     def open_editor(self):
         print(f"[DEBUG] open_editor 来自文件: {__file__}")
@@ -594,3 +668,210 @@ class EventMixin:
         except Exception as e:
             if verbose:
                 print(f"⚠️ cleanup_temp_files 异常: {e}")
+
+    def on_enhance_prompt(self):
+        """智能改写提示词(后台线程,通过信号回主线程更新)"""
+        raw = self.txt_prompt.toPlainText().strip()
+        if not raw:
+            QMessageBox.information(self, "提示", "请先输入要改写的提示词")
+            return
+
+        # 主线程: 切换按钮状态
+        self.btn_enhance_prompt.setText("改写中...")
+        self.btn_enhance_prompt.setEnabled(False)
+        self._set_status("✨ 正在调用提示词增强器...", "#b48ead")
+
+        def task():
+            try:
+                from utils.prompt_enhancer import PromptEnhancer
+                enhancer = PromptEnhancer()
+
+                def progress(msg):
+                    # 状态栏更新走 _app_bridge
+                    self._app_bridge.status_msg.emit(msg, "#b48ead")
+
+                if not enhancer.is_loaded():
+                    ok = enhancer.load(progress_cb=progress)
+                    if not ok:
+                        self._app_bridge.enhance_done_signal.emit("")
+                        return
+
+                result = enhancer.enhance(raw)
+                self._app_bridge.enhance_done_signal.emit(result or "")
+
+            except Exception:
+                import traceback
+                err = traceback.format_exc()
+                print(err)
+                try:
+                    self._bridge.error_signal.emit(err)
+                except Exception:
+                    pass
+                # 失败也要恢复按钮
+                self._app_bridge.enhance_done_signal.emit("")
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def load_ipa_image(self):
+        """加载 IP-Adapter 角色参考图"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择角色参考图", "",
+            "Images (*.png *.jpg *.jpeg *.webp)"
+        )
+        if path:
+            self.ipa_image_path = path
+            self.lbl_ipa_image.setText(os.path.basename(path))
+            self.lbl_ipa_image.setStyleSheet("color:#a6e3a1; padding:4px;")
+            self.chk_use_ipa.setChecked(True)
+            self._set_status(
+                f"✅ 已加载角色参考图: {os.path.basename(path)}", "#a6e3a1")
+
+    def on_unload_models(self):
+        """点击'释放内存'按钮"""
+        if self.is_generating:
+            QMessageBox.warning(self, "提示", "请先停止当前生成任务")
+            return
+
+        try:
+            self._set_status("🧹 正在释放模型...", "#fab387")
+            if hasattr(self, 'ai'):
+                self.ai.unload_all()
+            self._set_status("✅ 模型已释放,内存空闲", "#a6e3a1")
+
+            # UI 反馈: 给一个内存占用提示
+            try:
+                import psutil
+                mem = psutil.Process().memory_info().rss / 1024 / 1024
+                print(f"📊 当前内存: {mem:.1f} MB", flush=True)
+            except ImportError:
+                pass
+
+        except Exception as e:
+            QMessageBox.critical(self, "释放失败", str(e))
+
+  
+
+    def _on_enhance_done(self, result: str):
+        """
+        改写 / 识图 完成的统一回调（运行在主线程，可安全操作 UI）
+    
+        result 内容约定:
+            - 正常结果 → 直接是 prompt 字符串
+            - 失败时   → "[识图失败] xxx" 或 "[改写失败] xxx"
+        """
+        # ── 恢复按钮状态 ──────────────────────────────────────
+        if hasattr(self, 'btn_enhance_prompt'):
+            self.btn_enhance_prompt.setEnabled(True)
+            self.btn_enhance_prompt.setText("✨ 智能改写")
+
+        if hasattr(self, 'btn_vision_prompt'):
+            self.btn_vision_prompt.setEnabled(True)
+            self.btn_vision_prompt.setText("📷 识图生成")
+
+        # ── 失败 ─────────────────────────────────────────────
+        if result.startswith("[识图失败]") or result.startswith("[改写失败]"):
+            self._set_status(result, "#f38ba8")
+            try:
+                QMessageBox.warning(self, "提示词生成失败", result)
+            except Exception:
+                pass
+            return
+
+        # ── 成功：把结果填入正向提示词框 ─────────────────────
+        if hasattr(self, 'txt_prompt'):
+            self.txt_prompt.setPlainText(result)
+    
+        self._set_status("✨ 提示词生成完成！", "#a6e3a1")
+
+
+    def on_vision_prompt(self):
+        """📷 识图生成 —— 让 Qwen2-VL 看图后输出 SD 提示词"""
+        user_hint = self.txt_prompt.toPlainText().strip() if hasattr(self, 'txt_prompt') else ""
+        # 选择参考图
+        from PyQt6.QtWidgets import QFileDialog
+    
+        img_path, _ = QFileDialog.getOpenFileName(
+            self, "选择要识别的图片", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
+        )
+        if not img_path:
+            return
+
+        # 锁定按钮防重入
+        if hasattr(self, 'btn_vision_prompt'):
+            self.btn_vision_prompt.setEnabled(False)
+            self.btn_vision_prompt.setText("识图中...")
+
+        self._set_status("📷 正在识别图片，请稍候（首次需下载约 4GB 模型）...",
+                         "#f9e2af")
+
+        def task():
+            try:
+                from utils.prompt_enhancer import PromptEnhancer
+                from PIL import Image
+
+                enhancer = PromptEnhancer()
+            
+                # 强制使用视觉模型
+                if enhancer.wd_session is None:
+                    enhancer.load_wd_tagger()
+                # 如果用户输入了 hint,还需要 LLM
+                if user_hint and enhancer.llm_model is None:
+                    enhancer.load_llm()
+                    enhancer.unload()
+            
+                # 读图（限制大小防 OOM）
+                img = Image.open(img_path).convert("RGB")
+            
+                # 调用识图接口
+                result = enhancer.describe_image(img)
+            
+                # 通过信号回到主线程更新 UI
+                self._bridge.enhance_done_signal.emit(result)
+
+            except Exception as e:
+                import traceback
+                err = traceback.format_exc()
+                print(f"❌ [vision_prompt] 异常:\n{err}")
+                self._bridge.enhance_done_signal.emit(f"[识图失败] {str(e)}")
+
+        import threading
+        threading.Thread(target=task, daemon=True).start()
+
+
+    def on_enhance_prompt(self):
+        """✨ 智能改写 —— 把自然语言转为 SD 标签"""
+        raw = self.txt_prompt.toPlainText().strip()
+        if not raw:
+            QMessageBox.information(self, "提示", "请先输入要改写的提示词")
+            return
+
+        # 锁定按钮
+        if hasattr(self, 'btn_enhance_prompt'):
+            self.btn_enhance_prompt.setEnabled(False)
+            self.btn_enhance_prompt.setText("改写中...")
+
+        self._set_status("✨ 正在改写提示词，请稍候...", "#f9e2af")
+
+        def task():
+            try:
+                from utils.prompt_enhancer import PromptEnhancer
+            
+                enhancer = PromptEnhancer()
+            
+                if enhancer.model is None:
+                    enhancer.load(model_id="qwen/Qwen2-VL-2B-Instruct")
+            
+                result = enhancer.enhance(raw)
+            
+                self._bridge.enhance_done_signal.emit(result)
+
+            except Exception as e:
+                import traceback
+                err = traceback.format_exc()
+                print(f"❌ [enhance_prompt] 异常:\n{err}")
+                self._bridge.enhance_done_signal.emit(f"[改写失败] {str(e)}")
+
+        import threading
+        threading.Thread(target=task, daemon=True).start()
+ 
