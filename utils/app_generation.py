@@ -26,12 +26,14 @@ class _GenBridge(QObject):
     progress_signal = pyqtSignal(int, int)
     sub_prog_signal = pyqtSignal(int, int)
     preview_signal  = pyqtSignal(str)
+    live_preview_signal = pyqtSignal(str) 
     preview_img_sig = pyqtSignal(object)
     done_signal     = pyqtSignal()
     error_signal    = pyqtSignal(str)
     cancel_signal   = pyqtSignal()
     log_signal      = pyqtSignal(str)
     image_signal    = pyqtSignal(object)
+    gallery_add_signal  = pyqtSignal(str)
     enhance_done_signal  = pyqtSignal(str) 
 
 
@@ -154,6 +156,10 @@ class GenerationMixin:
     #  主生成任务
     # ==================================================================
     def generation_task(self):
+        from utils.vram_manager import VRAMManager
+        VRAMManager.cleanup()
+        VRAMManager.print_status()
+
         ctx = None
         try:
             print("\n🚀 [任务开始]", flush=True)
@@ -203,6 +209,9 @@ class GenerationMixin:
 
     def _gt_prepare_context(self):
         """收集所有参数到一个 ctx 字典,贯穿整个流程。"""
+        import torch
+        from utils.app_utils import parse_dynamic_prompt
+
         # --- 设备 ---
         device_str = self._cbo(getattr(self, 'combo_device', None))
         if   "CUDA" in device_str: target_device = "cuda"
@@ -217,16 +226,30 @@ class GenerationMixin:
             if hasattr(self.ai, 'clear_memory'):
                 self.ai.clear_memory()
 
-        # --- 基础参数 ---
-        model_name = self._cbo(self.combo_model)
+        model_data = self.combo_model.currentData() if hasattr(self, 'combo_model') else None
+        if isinstance(model_data, dict) and 'name' in model_data:
+            model_name = model_data['name']
+            model_type = model_data.get('type', '')  # 顺便记录类型
+            print(f"🟢 模型: [{model_type}] {model_name}", flush=True)
+        else:
+            # 兜底:剥离 [xxGB] 后缀
+            raw = self._cbo(getattr(self, 'combo_model', None))
+            model_name = raw.split('  [')[0].strip() if raw else ""
+            model_type = ''
+            print(f"🟢 模型(兜底): {model_name}", flush=True)
+
         raw_prompt = self._txt(getattr(self, 'txt_prompt', None))
         raw_neg    = self._txt(getattr(self, 'txt_neg', None))
+
+        mode_idx = self.combo_trans_mode.currentIndex() if hasattr(self, 'combo_trans_mode') else 2
+        trans_mode = ["dict", "ai", "auto"][mode_idx]
+        print(f"🌐 翻译模式: {trans_mode}", flush=True)
 
         # --- AI 改写 ---
         raw_prompt = self._gt_apply_prompt_enhance(raw_prompt)
 
         # --- 翻译反向词 ---
-        en_neg = self.translator.translate(raw_neg) if raw_neg else ""
+        en_neg = self.translator.translate(raw_neg, mode=trans_mode) if raw_neg else ""
 
         # --- 数值参数 ---
         steps    = self._spn(getattr(self, 'spin_steps', None)) or 30
@@ -248,13 +271,31 @@ class GenerationMixin:
         else:
             pt_cn_strength = raw_pt
 
-        # --- 动态提示词 ---
+        # --- 动态提示词 (Wildcards 批量) ---
         parsed_raw_prompts = parse_dynamic_prompt(raw_prompt)
         base_count = self._spn(getattr(self, 'spin_count', None)) or 1
-        if len(parsed_raw_prompts) > 1:
+        combo_count = len(parsed_raw_prompts)
+
+        if combo_count > 1:
+            total_generate_count = combo_count * base_count
+
+            SAFETY_THRESHOLD = 12
+            if total_generate_count > SAFETY_THRESHOLD:
+                if not self._gt_confirm_batch(combo_count, base_count, total_generate_count):
+                    print(f"⏸ 用户取消批量队列 ({total_generate_count} 张)", flush=True)
+                    self._bridge.status_signal.emit("⏸ 已取消批量生成", "#f38ba8")
+                    return None
+
+            expanded = []
+            for p in parsed_raw_prompts:
+                expanded.extend([p] * base_count)
+            parsed_raw_prompts = expanded
+
             self._bridge.status_signal.emit(
-                f"📖 侦测到动态组合,将生成 {len(parsed_raw_prompts)} 页分镜...", "#ffd700")
-            total_generate_count = len(parsed_raw_prompts)
+                f"📖 批量队列启动: {combo_count} 组合 × {base_count} 张 = {total_generate_count} 张",
+                "#ffd700"
+            )
+            print(f"🎯 [批量] {combo_count} 组合 × {base_count} 张/组 = 共 {total_generate_count} 张", flush=True)
         else:
             total_generate_count = base_count
             parsed_raw_prompts   = [parsed_raw_prompts[0]] * base_count
@@ -283,9 +324,8 @@ class GenerationMixin:
         # ── 翻译每个 prompt,并把特征拼到最前面 ──
         en_prompts = []
         for p in parsed_raw_prompts:
-            en = self.translator.translate(p) if p else ""
+            en = self.translator.translate(p, mode=trans_mode) if p else ""
             if extracted_features:
-                # 特征放最前面,权重最高
                 en = f"{extracted_features}, {en}" if en else extracted_features
             en_prompts.append(en)
 
@@ -294,54 +334,52 @@ class GenerationMixin:
 
         # ── 返回 ctx ──
         return {
-        # === 设备/模型 ===
-        'device':            target_device,
-        'model_name':        model_name,
-    
-        # === 提示词 ===
-        'raw_prompt':        raw_prompt,
-        'raw_neg':           raw_neg,
-        'en_neg':            en_neg,
-        'parsed_raw_prompts': parsed_raw_prompts,
-        'en_prompts':        en_prompts,
-    
-        # === 数值 ===
-        'steps':             steps,
-        'strength':          strength,
-        'cfg':               cfg,
-        'width':             width,
-        'height':            height,
-        'sampler_name':      sampler_name,
-        'cn_strength':       cn_strength,
-        'pt_cn_strength':    pt_cn_strength,
-        'total_count':       total_generate_count,
-    
-        # === IP-Adapter ===
-        'use_ipa':           False,
-        'ipa_pil_image':     None,
-        'ipa_scale':         0.9,
-        'ipa_variant':       "plus",
-    
-        # === 流程开关 ===
-        'use_img2img':       False,    
-        'use_pose':          False,
-        'pose_image':        None,
-        'pose_transfer_used': False,
-        'skip_img2img':      False,
-        'init_image_path':   None,     
-        'use_inpaint':       False,
+            # === 设备/模型 ===
+            'device':            target_device,
+            'model_name':        model_name,
+            'model_type':        model_type,   
 
-    
-        # === 角色一致性 ===
-        'extracted_features':  "",
-        'use_reference_only':  False,
-        'ref_fidelity':        0.7,
-    
-        # === 其他 ===
-        'lora_meta_info':    [],
-    }
+            # === 提示词 ===
+            'raw_prompt':        raw_prompt,
+            'raw_neg':           raw_neg,
+            'en_neg':            en_neg,
+            'parsed_raw_prompts': parsed_raw_prompts,
+            'en_prompts':        en_prompts,
 
+            # === 数值 ===
+            'steps':             steps,
+            'strength':          strength,
+            'cfg':               cfg,
+            'width':             width,
+            'height':            height,
+            'sampler_name':      sampler_name,
+            'cn_strength':       cn_strength,
+            'pt_cn_strength':    pt_cn_strength,
+            'total_count':       total_generate_count,
 
+            # === IP-Adapter ===
+            'use_ipa':           False,
+            'ipa_pil_image':     None,
+            'ipa_scale':         0.9,
+            'ipa_variant':       "plus",
+
+            # === 流程开关 ===
+            'use_img2img':       False,
+            'use_pose':          False,
+            'pose_image':        None,
+            'pose_transfer_used': False,
+            'skip_img2img':      False,
+            'init_image_path':   None,
+            'use_inpaint':       False,
+
+            # === 角色一致性 ===
+            'extracted_features':  extracted_features,
+            'use_reference_only':  False,
+            'ref_fidelity':        0.7,
+
+            # === 其他 ===
+            'lora_meta_info':    [],
+        }
 
     def _gt_apply_prompt_enhance(self, raw_prompt):
         if not self._chk(getattr(self, 'chk_auto_enhance', None)):
@@ -750,9 +788,12 @@ class GenerationMixin:
             embed_kwargs = self.ai.encode_prompt(en_prompt, en_neg)
 
         # ETA 回调
+        cur_prompt = ctx['en_prompts'][i] if i < len(ctx['en_prompts']) else ""
+        prompt_preview = cur_prompt[:35] + "..." if len(cur_prompt) > 35 else cur_prompt
+
         t0 = time.time()
         def step_cb(pipe, step_index, timestep, callback_kwargs,
-                    _steps=ctx['steps'], _t0=t0):
+                    _steps=ctx['steps'], _t0=t0, _preview=prompt_preview):
             if getattr(self, 'cancel_flag', False):
                 raise InterruptedError()
             done = step_index + 1
@@ -761,8 +802,10 @@ class GenerationMixin:
                 elapsed = time.time() - _t0
                 eta = (elapsed / done) * (_steps - done) if done > 0 else 0
                 self._bridge.status_signal.emit(
-                    f"🎨 第 {done}/{_steps} 步 · 已用 {elapsed:.1f}s · "
-                    f"剩余 {eta:.1f}s", "#89dceb")
+                    f"🔥 [{i+1}/{ctx['total_count']}] {done}/{_steps} | "
+                    f"ETA {eta:.1f}s | Seed:{current_seed} | {_preview}",
+                    "#00ffff"
+                )
             return self.on_generation_step(pipe, step_index, timestep, callback_kwargs)
 
         kwargs = {
@@ -1088,6 +1131,72 @@ class GenerationMixin:
     def on_generation_step(self, pipe, step_index, timestep, callback_kwargs):
         if getattr(self, 'cancel_flag', False):
             raise InterruptedError("用户中断")
+    
+        try:
+            enable = (
+                hasattr(self, "chk_use_preview")
+                and self.chk_use_preview.isChecked()
+            )
+        
+            if not enable:
+                return callback_kwargs
+        
+            interval = (
+                self.spin_preview_interval.value()
+                if hasattr(self, "spin_preview_interval")
+                else 10
+            )
+            step_now = step_index + 1
+        
+            if step_now % interval != 0:
+                return callback_kwargs
+        
+            latents = callback_kwargs.get("latents")
+        
+            if latents is None:
+                return callback_kwargs
+        
+            import torch
+            from PIL import Image
+            import numpy as np
+        
+            with torch.no_grad():
+                scale = getattr(pipe.vae.config, "scaling_factor", 0.18215)
+                lat = latents / scale
+                img = pipe.vae.decode(lat).sample
+                img = (img / 2 + 0.5).clamp(0, 1)
+                img = img.cpu().permute(0, 2, 3, 1).float().numpy()[0]
+                img = (img * 255).astype(np.uint8)
+                pil = Image.fromarray(img)
+            
+            
+                print(f"[PREVIEW-5] 准备发图 size={pil.size}", flush=True)
+
+                try:
+                    import os, tempfile
+                    if not hasattr(self, "_preview_tmp_dir"):
+                        self._preview_tmp_dir = os.path.join(
+                            tempfile.gettempdir(), "ai_preview"
+                        )
+                        os.makedirs(self._preview_tmp_dir, exist_ok=True)
+    
+                    tmp_path = os.path.join(
+                        self._preview_tmp_dir, "live_preview.png"
+                    )
+                    pil.save(tmp_path, "PNG")
+    
+                    if hasattr(self, "_bridge"):
+                        self._bridge.live_preview_signal.emit(tmp_path)
+                        print(f"[PREVIEW-6] live_preview_signal 已发送: {tmp_path}", flush=True)
+
+                except Exception as e:
+                    print(f"❌ [PREVIEW-SAVE-EXC] {e}", flush=True)
+
+        except Exception as e:
+            import traceback
+            print(f"❌ [PREVIEW-EXC] {e}", flush=True)
+            traceback.print_exc()
+    
         return callback_kwargs
 
     # ==================================================================
@@ -1231,7 +1340,10 @@ class GenerationMixin:
                 grid_img.save(save_path)
 
             self.last_generated_path = save_path
+            print(f"[EMIT-1341] preview_signal: {save_path}", flush=True)
+            self._bridge.preview_signal.emit(save_path)
             self._bridge.preview_signal.emit(save_path) 
+
             self._bridge.status_signal.emit(
                 "✅ X/Y 矩阵生成完成！", "#00ff00")
 
@@ -1319,6 +1431,8 @@ class GenerationMixin:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             os.makedirs(OUTPUT_DIR, exist_ok=True)
             save_path = os.path.join(OUTPUT_DIR, f"comic_{ts}.png")
+            print(f"[EMIT-1432] preview_signal: {save_path}", flush=True)
+            self._bridge.preview_signal.emit(save_path)
             comic = make_comic_strip(image_list)
             comic.save(save_path)
             self.last_generated_path = save_path   
@@ -1541,6 +1655,70 @@ class GenerationMixin:
             except Exception:
                 pass
             self._bridge.done_signal.emit()
+
+    #各类辅助函数
+
+    def _gt_confirm_batch(self, combo_count: int, per_count: int, total: int) -> bool:
+        """
+        子线程请求主线程弹出确认对话框。
+        使用 QMetaObject.invokeMethod 阻塞等待返回。
+        """
+        from PyQt6.QtCore import QMetaObject, Qt, Q_RETURN_ARG, Q_ARG
+    
+        import threading
+        result_event = threading.Event()
+        result_holder = {'ok': False}
+    
+        def _ask_on_main():
+            from PyQt6.QtWidgets import QMessageBox
+            msg = (
+                f"⚠️ 批量队列确认\n\n"
+                f"侦测到 {combo_count} 个 prompt 组合\n"
+                f"每个组合生成 {per_count} 张\n"
+                f"共计 {total} 张图\n\n"
+                f"预估耗时: 约 {total * 8} 秒\n\n"
+                f"是否继续？"
+            )
+            reply = QMessageBox.question(
+                self, "批量队列确认", msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No  
+            )
+            result_holder['ok'] = (reply == QMessageBox.StandardButton.Yes)
+            result_event.set()
+
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, _ask_on_main)
+
+        result_event.wait(timeout=300)
+        return result_holder['ok']
+
+    def _start_batch_queue(self, prompt_list: list):
+        """批量生成队列"""
+        self._batch_queue = prompt_list.copy()
+        self._batch_total = len(prompt_list)
+        self._batch_done = 0
+        self._run_next_in_queue()
+
+    def _run_next_in_queue(self):
+        """跑队列里的下一个"""
+        if not self._batch_queue:
+            self._set_status(f"✅ 批量完成: {self._batch_total} 张", "#a6e3a1")
+            return
+    
+        next_prompt = self._batch_queue.pop(0)
+        self._batch_done += 1
+    
+        # 更新 UI 提示词框（让用户看到当前在跑哪个）
+        self.txt_prompt.setPlainText(next_prompt)
+    
+        self._set_status(
+            f"🎯 队列 [{self._batch_done}/{self._batch_total}]: {next_prompt[:30]}...",
+            "#89b4fa"
+        )
+    
+        # 调用原有单次生成，结束后回调跑下一个
+        self._start_single_generation(next_prompt, on_done=self._run_next_in_queue)
 
     # ==================================================================
     #  动态提示词解析 (备用版)

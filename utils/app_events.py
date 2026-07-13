@@ -4,14 +4,15 @@ import io
 import datetime
 import threading
 import warnings
-
+from utils.prompt_enhancer import get_enhancer
 from PIL import Image
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from PyQt6.QtGui import QPixmap, QImage, QColor
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt,pyqtSlot
+from utils.app_utils import OUTPUT_DIR
+from core.presets         import PROMPT_PRESETS
 
-from utils.app_utils import OUTPUT_DIR, PROMPT_PRESETS
 from utils.prompt_enhancer import *
 
 try:
@@ -76,6 +77,9 @@ class EventMixin:
 
         if hasattr(self, 'btn_vision_prompt'):
             self.btn_vision_prompt.clicked.connect(self.on_vision_prompt)
+
+        if hasattr(self, 'btn_gen_video'):
+            self.btn_gen_video.clicked.connect(self.on_generate_video)
 
         # ── 采样器 ───────────────────────────────────────────
         if hasattr(self, 'combo_sampler'):
@@ -151,6 +155,9 @@ class EventMixin:
 
     def refresh_lora_by_model(self):
         """切换主模型时同步刷新 LoRA 下拉框（按架构过滤）"""
+        if self.ai is None:
+            print("[LoRA] AI 未加载，跳过刷新")
+            return
         current_model = self.combo_model.currentText()
         if not current_model:
             return
@@ -284,14 +291,6 @@ class EventMixin:
                 )
 
         self.text_lora_info.setReadOnly(True)
-
-    def apply_preset(self, index=None):
-        """下拉框选择预设时填入提示词"""
-        preset_name = self.combo_preset.currentText()
-        if preset_name in PROMPT_PRESETS:
-            self.txt_prompt.setPlainText(PROMPT_PRESETS[preset_name]["p"])
-            self.txt_neg.setPlainText(PROMPT_PRESETS[preset_name]["n"])
-            self._set_status(f"✨ 已应用预设: {preset_name}", "#89dceb")
 
     def read_png_info(self):
         """从 AI 生成的 PNG 中提取 parameters 元数据"""
@@ -428,9 +427,14 @@ class EventMixin:
             img.thumbnail((900, 1200), Image.Resampling.LANCZOS)
             self.preview_canvas.set_pixmap(_pil_to_pixmap(img))
             self.current_generated_path = img_path
-            self.btn_edit.setEnabled(True)
-            self.btn_upscale.setEnabled(True)
 
+            # 兼容旧版按钮（可能已废弃）
+            for btn_name in ('btn_edit', 'btn_upscale'):
+                btn = getattr(self, btn_name, None)
+                if btn is not None:
+                    btn.setEnabled(True)
+
+            # 画廊去重添加
             if hasattr(self, 'gallery') and img_path:
                 if not hasattr(self, '_gallery_seen_paths'):
                     self._gallery_seen_paths = set()
@@ -628,8 +632,41 @@ class EventMixin:
         editor.exec()
 
     def on_model_selected(self, index: int = 0):
+        """模型切换统一入口 - 信息+LoRA+备注"""
         self.load_model_info(index)
         self.refresh_lora_by_model()
+        self._refresh_model_note()  # 备注独立刷新
+
+    def _refresh_model_note(self):
+        """从 currentData 读 txt 备注,刷新 lbl_model_info"""
+        label = getattr(self, 'lbl_model_info', None)
+        if not label:
+            return
+    
+        data = self.combo_model.currentData()
+        if not data or not isinstance(data, dict):
+            return
+    
+        note = (data.get('note') or '').strip()
+        mtype = data.get('type', '')
+        fname = data.get('name', '')
+    
+        # 组合信息: [类型] 文件名 + 备注
+        lines = []
+        if mtype and fname:
+            lines.append(f"📦 [{mtype}] {fname}")
+        if note:
+            lines.append(f"📌 {note}")
+        else:
+            lines.append("💡 可建同名 .txt 文件添加备注")
+    
+        label.setText("\n".join(lines))
+        label.setStyleSheet(
+            f"color:{'#89dceb' if note else '#a6adc8'}; "
+            "padding:4px; font-family:Consolas; font-size:11px;"
+        )
+
+
 
     def cleanup_temp_files(self, verbose=True):
         """清理 outputs/temp 下的 inpaint 中转文件,并清空内存引用"""
@@ -670,47 +707,61 @@ class EventMixin:
                 print(f"⚠️ cleanup_temp_files 异常: {e}")
 
     def on_enhance_prompt(self):
-        """智能改写提示词(后台线程,通过信号回主线程更新)"""
-        raw = self.txt_prompt.toPlainText().strip()
-        if not raw:
-            QMessageBox.information(self, "提示", "请先输入要改写的提示词")
+        """智能改写：同时润色正面和负面提示词"""
+        raw_pos = self.txt_prompt.toPlainText().strip()
+        raw_neg = self.txt_neg.toPlainText().strip()
+
+        if not raw_pos and not raw_neg:
+            self._set_status("⚠️ 提示词为空", "#f9e2af")
             return
 
-        # 主线程: 切换按钮状态
-        self.btn_enhance_prompt.setText("改写中...")
         self.btn_enhance_prompt.setEnabled(False)
-        self._set_status("✨ 正在调用提示词增强器...", "#b48ead")
+        self.btn_enhance_prompt.setText("改写中...")
 
         def task():
             try:
-                from utils.prompt_enhancer import PromptEnhancer
-                enhancer = PromptEnhancer()
+                enhancer = get_enhancer()
+                if enhancer.model is None:
+                    enhancer.load(model_id="qwen/Qwen2-VL-2B-Instruct")
 
-                def progress(msg):
-                    # 状态栏更新走 _app_bridge
-                    self._app_bridge.status_msg.emit(msg, "#b48ead")
+                print(f"[ENHANCE] 正面输入: {raw_pos!r}")
+                print(f"[ENHANCE] 负面输入: {raw_neg!r}")
 
-                if not enhancer.is_loaded():
-                    ok = enhancer.load(progress_cb=progress)
-                    if not ok:
-                        self._app_bridge.enhance_done_signal.emit("")
-                        return
+                result_pos = enhancer.enhance(raw_pos, mode="positive") if raw_pos else ""
+                result_neg = enhancer.enhance(raw_neg, mode="negative") if raw_neg else ""
 
-                result = enhancer.enhance(raw)
-                self._app_bridge.enhance_done_signal.emit(result or "")
+                print(f"[ENHANCE] 正面输出: {result_pos!r}")
+                print(f"[ENHANCE] 负面输出: {result_neg!r}")
 
-            except Exception:
-                import traceback
-                err = traceback.format_exc()
-                print(err)
-                try:
-                    self._bridge.error_signal.emit(err)
-                except Exception:
-                    pass
-                # 失败也要恢复按钮
-                self._app_bridge.enhance_done_signal.emit("")
+                from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+                QMetaObject.invokeMethod(
+                    self, "_apply_enhance_result",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, result_pos),
+                    Q_ARG(str, result_neg),
+                )
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                print(f"❌ [enhance_prompt] 异常: {e}")
+                
 
+        import threading
         threading.Thread(target=task, daemon=True).start()
+
+    @pyqtSlot(str, str)
+    def _apply_enhance_result(self, pos: str, neg: str):
+        if pos.strip():
+            self.txt_prompt.setPlainText(pos.strip())
+        if neg.strip():
+            self.txt_neg.setPlainText(neg.strip())
+        self._restore_enhance_button()
+        self._set_status("✨ 改写完成", "#a6e3a1")
+
+    @pyqtSlot()
+    def _restore_enhance_button(self):
+        self.btn_enhance_prompt.setEnabled(True)
+        self.btn_enhance_prompt.setText("✨ 智能改写")
+
 
     def load_ipa_image(self):
         """加载 IP-Adapter 角色参考图"""
@@ -810,7 +861,7 @@ class EventMixin:
                 from utils.prompt_enhancer import PromptEnhancer
                 from PIL import Image
 
-                enhancer = PromptEnhancer()
+                enhancer = get_enhancer()
             
                 # 强制使用视觉模型
                 if enhancer.wd_session is None:
@@ -839,39 +890,96 @@ class EventMixin:
         threading.Thread(target=task, daemon=True).start()
 
 
-    def on_enhance_prompt(self):
-        """✨ 智能改写 —— 把自然语言转为 SD 标签"""
-        raw = self.txt_prompt.toPlainText().strip()
-        if not raw:
-            QMessageBox.information(self, "提示", "请先输入要改写的提示词")
+    def run_tiled_diffusion(self):
+        from utils.tiled_diffusion import tiled_img2img
+        from utils.app_utils import OUTPUT_DIR
+        from PIL import Image
+        import os, glob, threading, traceback, datetime
+    
+        # ---- 1. 找最后一张图 ----
+        last_path = getattr(self, "last_generated_path", None)
+        if not last_path or not os.path.exists(last_path):
+            pngs = glob.glob(os.path.join(OUTPUT_DIR, "*.png"))
+            if not pngs:
+                self._set_status("⚠️ 没有可用的图，请先生成一张", "#f9e2af")
+                return
+            last_path = max(pngs, key=os.path.getmtime)
+            print(f"📌 自动选择最新图: {last_path}")
+    
+        # ---- 2. 检查 pipe ----
+        if not getattr(self.ai, "img2img_pipe", None):
+            self._set_status("⚠️ img2img pipeline 未加载，请先跑一次普通生成", "#f38ba8")
             return
-
-        # 锁定按钮
-        if hasattr(self, 'btn_enhance_prompt'):
-            self.btn_enhance_prompt.setEnabled(False)
-            self.btn_enhance_prompt.setText("改写中...")
-
-        self._set_status("✨ 正在改写提示词，请稍候...", "#f9e2af")
-
+    
+        # ---- 3. 收集 prompt (兼容多种控件名) ----
+        def _get_text(*names):
+            for n in names:
+                w = getattr(self, n, None)
+                if w is not None:
+                    if hasattr(w, "toPlainText"):
+                        return w.toPlainText().strip()
+                    if hasattr(w, "text"):
+                        return w.text().strip()
+            return ""
+    
+        prompt = _get_text("txt_prompt", "edit_prompt", "input_prompt")
+        neg    = _get_text("txt_negative", "txt_neg", "edit_neg", "edit_negative",
+                           "input_negative", "negative_prompt")
+    
+        # ---- 4. 收集参数 ----
+        init_img  = Image.open(last_path).convert("RGB")
+        target_w  = self.spin_tiled_w.value()
+        target_h  = self.spin_tiled_h.value()
+        tile_size = int(self.combo_tile_size.currentText())
+        overlap   = self.spin_tile_overlap.value()
+        strength  = self.scale_tile_strength.value()
+    
+        self._set_status(
+            f"🧩 大图生成中: {target_w}×{target_h} (tile={tile_size})",
+            "#89dceb"
+        )
+    
+        # ---- 5. 后台线程 ----
         def task():
             try:
-                from utils.prompt_enhancer import PromptEnhancer
+                def progress_cb(cur, tot):
+                    self._bridge.progress_signal.emit(cur, tot)
+                    self._bridge.status_signal.emit(
+                        f"🧩 大图进度: {cur}/{tot} 块", "#89dceb"
+                    )
+                def cancel_cb():
+                    return getattr(self, "cancel_flag", False)
             
-                enhancer = PromptEnhancer()
+                result = tiled_img2img(
+                    pipe=self.ai.img2img_pipe,
+                    init_image=init_img,
+                    prompt=prompt,
+                    negative_prompt=neg,
+                    target_width=target_w,
+                    target_height=target_h,
+                    tile_size=tile_size,
+                    overlap=overlap,
+                    strength=strength,
+                    num_inference_steps=20,
+                    guidance_scale=7.0,
+                    seed=-1,
+                    callback=progress_cb,
+                    cancel_check=cancel_cb,
+                )
             
-                if enhancer.model is None:
-                    enhancer.load(model_id="qwen/Qwen2-VL-2B-Instruct")
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_path = os.path.join(OUTPUT_DIR, f"{ts}_tiled_{target_w}x{target_h}.png")
+                result.save(out_path)
             
-                result = enhancer.enhance(raw)
-            
-                self._bridge.enhance_done_signal.emit(result)
-
+                self._bridge.image_signal.emit(result)
+                self._bridge.status_signal.emit(
+                    f"✅ 大图已保存: {os.path.basename(out_path)}", "#a6e3a1"
+                )
+                self.last_generated_path = out_path
+            except InterruptedError:
+                self._bridge.status_signal.emit("⏹️ 大图生成已取消", "#f9e2af")
             except Exception as e:
-                import traceback
-                err = traceback.format_exc()
-                print(f"❌ [enhance_prompt] 异常:\n{err}")
-                self._bridge.enhance_done_signal.emit(f"[改写失败] {str(e)}")
-
-        import threading
+                traceback.print_exc()
+                self._bridge.error_signal.emit(f"大图生成失败: {e}")
+    
         threading.Thread(target=task, daemon=True).start()
- 
