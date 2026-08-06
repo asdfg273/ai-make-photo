@@ -1,0 +1,54 @@
+# ---- ?? ----
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.claudiaideconfig
+.claude/
+
+# ---- ???????? clone?????----
+third_party/
+
+# ---- ????? ----
+models/*
+!models/.gitkeep
+loras/*
+!loras/.gitkeep
+weights/*
+!weights/.gitkeep
+models_cache/
+tools/
+
+# ---- ??????? ----
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+
+# ---- ???? ----
+photo/
+output/
+outputs/
+logs/
+*.log
+*.wav
+*.mp4
+
+# ---- ????? ----
+app_config.json
+config.json
+weight.json
+.config/
+data/app_config.json
+
+# ---- IDE ----
+.vs/
+.idea/
+.vscode/
+*.suo
+*.user
+
+# ---- ????? ----
+data/gallery_favs.json

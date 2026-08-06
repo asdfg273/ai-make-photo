@@ -1,0 +1,99 @@
+ai make photo/
+│
+├── 📄 main.py                    # PyQt6 主入口
+├── 📄 README.md
+├── 📄 requirements.txt
+├── 📄 app_config.json            # 应用配置
+├── 📄 aiUsemono.md               # 使用说明
+├── 📄 结构.txt                   # 项目结构图
+│
+├── 📁 core/                      # 核心模块
+│   ├── __init__.py
+│   ├── config_manager.py         # 配置管理
+│   ├── downup.py                 # 图像放大/缩小
+│   ├── model_manager.py          # 模型加载管理
+│   ├── presets.py                # 预设管理
+│   └── translation_service.py    # 翻译服务
+│
+├── 📁 utils/                     # 工具模块
+│   ├── __init__.py
+│   ├── app_events.py             # 事件处理
+│   ├── app_generation.py         # 生成流程
+│   ├── app_utils.py              # 应用工具函数
+│   ├── gallery_panel.py          # 画廊面板
+│   ├── image_processor.py        # 图像处理
+│   ├── model_scanner.py          # 模型扫描
+│   ├── paths.py                  # 路径管理
+│   ├── preset_manager.py         # 预设管理
+│   ├── prompt_enhancer.py        # Qwen 智能改写
+│   ├── rife_interpolate.py       # RIFE 帧插值
+│   ├── system_utils.py           # 系统工具
+│   ├── tiled_diffusion.py        # 分块扩散
+│   ├── tooltips.py               # 工具提示
+│   ├── ui_builder.py             # UI 构建（含动画界面）
+│   ├── video_gen.py              # 视频生成服务
+│   └── vram_manager.py           # 显存管理
+│
+├── 📁 photo_turn/                # 图像编辑模块（自包含）
+│   ├── __init__.py
+│   ├── components.py
+│   ├── mixin_ai.py
+│   ├── mixin_filters.py
+│   ├── mixin_history.py
+│   ├── mixin_tools.py
+│   ├── pro_editor_qt.py
+│   └── 结构图.txt
+│
+├── 📁 models/                    # AI 模型存储
+│   ├── adetailer/                # 面部/手部修复模型
+│   │   └── hand_yolov8n.pt
+│   ├── loras/                    # LoRA 权重
+│   │   ├── sd1.5/
+│   │   └── sdxl/
+│   ├── motion_lora/              # Motion LoRA（运镜特效）
+│   │   ├── pan-left/
+│   │   ├── tilt-up/
+│   │   ├── zoom-in/
+│   │   └── zoom-out/
+│   └── sd15/                     # SD1.5 底模及相关
+│       ├── abyssorangemix2_Hard.txt
+│       ├── meinahentai_v5Final.txt
+│       ├── meinamix_v12Final.txt
+│       ├── hand_yolov8n.pt
+│       └── lbpcascade_animeface.xml
+│
+├── 📁 tools/                     # 外部可执行工具
+│   └── rife/                     # RIFE 帧插值工具
+│       ├── rife-ncnn-vulkan.exe
+│       └── rife-v4.6/
+│           ├── flownet.bin
+│           └── flownet.param
+│
+├── 📁 data/                      # 运行时数据
+│   ├── dictionaries/             # 分类词典
+│   │   ├── general.json          # 通用词汇
+│   │   ├── nsfw.json             # NSFW 词汇
+│   │   ├── outfit.json           # 服装词汇
+│   │   ├── style.json            # 风格词汇
+│   │   └── user_custom.json      # 用户自定义词汇
+│   ├── app_config.json           # 应用配置
+│   └── zh_to_en_dict.json        # 翻译词典
+│
+├── 📁 logs/                      # 日志文件
+│   └── app.log
+│
+├── 📁 video/                     # 生成视频输出
+│   ├── *.gif                     # 生成的 GIF 视频
+│   └── *.mp4                     # 生成的 MP4 视频
+│
+├── 📁 weights/                   # 预训练权重
+│   └── lbpcascade_animeface.xml  # 人脸检测级联分类器
+│
+├── 📁 logo/                      # 应用图标和资源
+│   ├── dzbut-9fc5g-001.ico
+│   ├── n9pbg-dikvy-001.ico
+│   └── 69ff22c827c53bd759497331.png
+│
+└── 📁 venv/                      # Python 虚拟环境
+    ├── Lib/site-packages/        # 第三方依赖包
+    └── Scripts/                  # 虚拟环境脚本
