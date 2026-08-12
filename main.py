@@ -23,6 +23,9 @@ os.environ["HF_ENDPOINT"]          = "https://hf-mirror.com"
 
 print(f"📦 模型缓存目录: {CACHE_ROOT}")
 
+from utils.system_utils import setup_logging, log_system_info, logger
+setup_logging()
+
 import threading
 import warnings
 
@@ -38,7 +41,7 @@ from PyQt6.QtWidgets import (
     QWidget, QGroupBox, QScrollArea, QComboBox, QCheckBox,
     QListWidget, QListWidgetItem, QTextEdit, QDoubleSpinBox
 )
-from PyQt6.QtCore import QTimer, pyqtSignal, QObject, Qt, QSize, pyqtSlot
+from PyQt6.QtCore import QTimer, pyqtSignal, QObject, Qt, QSize, pyqtSlot,QMetaObject
 from PyQt6.QtGui  import QCloseEvent, QIcon, QPixmap, QImage
 from PIL import Image
 
@@ -49,7 +52,6 @@ from ui.splash          import create_splash
 from ui.design_tokens   import DARK_STYLE
 from utils.app_events     import EventMixin
 from utils.app_generation import GenerationMixin
-from utils.system_utils   import log_system_info, logger
 from ui.preset_manager import PresetManagerMixin, TooltipMixin
 from ui.video_panel_mixin import VideoPanelMixin
 from core.presets import PROMPT_PRESETS
@@ -57,11 +59,6 @@ from utils.prompt_enhancer import get_enhancer
 from utils.paths import OUTPUT_DIR
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 torch = None  # 延迟导入
-try:
-    from utils.model_downloader import print_scan_report
-    print_scan_report()
-except Exception as e:
-    print(f"⚠️ 模型扫描失败(忽略): {e}")
 
 # ============================================================
 #  AI 加载阶段专用信号桥
@@ -114,7 +111,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
         self._app_bridge.status_msg.connect(self._set_status)
 
         # ── 配置 & UI ──
-        self.config = AppConfig()
+        self.config = AppConfig.load()
         self.config.load()
 
         self.setup_ui()
@@ -179,17 +176,24 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
                              f"无法加载 AI 引擎：\n\n{err}")
 
     def _async_init_ai(self):
+        try:
+            from utils.model_downloader import print_scan_report
+            print_scan_report()
+        except Exception as e:
+            logger.warning(f"模型扫描失败(忽略): {e}")
         logger.info("👉 [预热] 后台导入重型库 (PyTorch / Diffusers)...")
         self._emit_status("⏳ 正在导入 PyTorch & Diffusers...", "#f9e2af")
         try:
             global torch
             import torch
+            from utils.system_utils import log_gpu_info
+            log_gpu_info()
             from core.model_manager import ModelManager
             self._emit_status(
                 "⏳ 正在加载大模型,首次启动可能需要数分钟...", "#f9e2af")
             self.ai = ModelManager()
         except Exception as e:
-            logger.error(f"❌ AI 引擎加载失败: {e}")
+            logger.exception("❌ AI 引擎加载失败")   # exception 会带完整 traceback
             self._app_bridge.ai_failed.emit(str(e))
             return
         self._app_bridge.ai_loaded.emit()
@@ -204,6 +208,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
         self.btn_generate.setText("🚀 开始生成")
         self._set_status("✅ 系统就绪,等待生成指令...", "#a6e3a1")
         logger.info("✅ [预热] 引擎就绪!")
+        QMetaObject.invokeMethod(self, "refresh_models", Qt.ConnectionType.QueuedConnection)
 
         if not hasattr(self, 'combo_device'):
             return

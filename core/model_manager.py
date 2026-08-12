@@ -36,19 +36,8 @@ from utils.system_utils import SingletonMeta
 
 # ============================================================
 class ModelManager(metaclass=SingletonMeta):
-    _instance = None
-    _lock = Lock()
-
-    def __new__(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-
     def __init__(self):
-        if self._initialized:
+        if getattr(self, '_initialized', False):
             return
         self._initialized = True
 
@@ -81,19 +70,18 @@ class ModelManager(metaclass=SingletonMeta):
     # ------------------------------------------------------------
     #  资源枚举
     # ------------------------------------------------------------
-    def get_available_models(self):
-        if not os.path.exists("models"):
-            return []
-        return [f for f in os.listdir("models")
-                if f.endswith((".safetensors", ".ckpt"))]
+    def get_available_models(self, model_type="sd15"):
+        from utils.model_scanner import scan_models
+        return [m["name"] for m in scan_models(model_type)]
 
     def get_available_loras(self, model_type="sd1.5"):
-        base_dir = os.path.join("loras", model_type)
+        from utils import paths
+        base_dir = os.path.join(paths.LORA_DIR, model_type)
         if not os.path.exists(base_dir):
             return ["无"]
-        loras = [f for f in os.listdir(base_dir)
-                 if f.endswith((".safetensors", ".ckpt", ".pt"))]
-        return ["无"] + loras
+        return ["无"] + [f for f in os.listdir(base_dir)
+                         if f.endswith((".safetensors", ".ckpt", ".pt"))]
+
 
     # ------------------------------------------------------------
     #  显存清理

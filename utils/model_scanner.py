@@ -4,7 +4,9 @@
 """
 import os
 
-MODELS_ROOT = "models"
+from utils import paths
+
+MODELS_ROOT = paths.MODEL_DIR
 
 # 模型类型配置
 MODEL_TYPES = {

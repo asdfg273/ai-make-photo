@@ -9,12 +9,13 @@ from PIL import Image
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from PyQt6.QtGui import QPixmap, QImage, QColor
-from PyQt6.QtCore import Qt,pyqtSlot
+from PyQt6.QtCore import Qt,pyqtSlot,QMetaObject
 from utils.app_utils import OUTPUT_DIR
 from core.presets         import PROMPT_PRESETS
 
-from utils.prompt_enhancer import *
-
+from utils.prompt_enhancer import get_enhancer, PromptEnhancer
+import logging
+logger = logging.getLogger(__name__)
 try:
     from photo_turn.pro_editor_qt import ProImageEditor
 except ImportError:
@@ -40,7 +41,10 @@ class EventMixin:
 
     def apply_config_to_ui(self):
         """把 config 中保存的值还原到 UI 控件"""
+
         cfg = self.config
+        logger.info(f"[配置还原] default_batch={getattr(cfg, 'default_batch', 'MISSING')}, "
+                    f"spin_batch存在={hasattr(self, 'spin_batch')}")
 
         # ── 提示词 ──────────────────────────────────────────
         if getattr(cfg, 'last_prompt', ''):
@@ -72,14 +76,6 @@ class EventMixin:
             self.spin_batch.setValue(
                 getattr(cfg, 'default_batch', 1))
 
-        if hasattr(self, 'btn_enhance_prompt'):
-            self.btn_enhance_prompt.clicked.connect(self.on_enhance_prompt)
-
-        if hasattr(self, 'btn_vision_prompt'):
-            self.btn_vision_prompt.clicked.connect(self.on_vision_prompt)
-
-        if hasattr(self, 'btn_gen_video'):
-            self.btn_gen_video.clicked.connect(self.on_generate_video)
 
         # ── 采样器 ───────────────────────────────────────────
         if hasattr(self, 'combo_sampler'):
@@ -126,53 +122,35 @@ class EventMixin:
             self.combo_output_dir.setCurrentText(
                 getattr(cfg, 'output_dir', 'outputs/'))
 
+    @pyqtSlot()
     def refresh_models(self):
         """刷新主模型列表与 LoRA 列表"""
         if not self.ai:
             return
+        self._on_model_type_changed()
+        self.refresh_lora_by_model()
 
-        models = self.ai.get_available_models()
-        self.combo_model.clear()
-        self.combo_model.addItems(models if models else ["未找到模型"])
+    def _current_model_data(self):
+        """取当前模型的完整 dict，失败返回空 dict"""
+        data = self.combo_model.currentData()
+        return data if isinstance(data, dict) else {}
 
-        if models:
-            self.combo_model.setCurrentIndex(0)
-            self.load_model_info()
-
-        arch = "sdxl" if (
-            hasattr(self.ai, "is_sdxl") and self.ai.is_sdxl
-        ) else "sd1.5"
-        loras = self.ai.get_available_loras(arch)
-
-        for combo in self.combo_loras:
-            current = combo.currentText()
-            combo.clear()
-            combo.addItems(loras)
-            if current in loras:
-                combo.setCurrentText(current)
-            else:
-                combo.setCurrentIndex(0)  # 默认"无"
 
     def refresh_lora_by_model(self):
         """切换主模型时同步刷新 LoRA 下拉框（按架构过滤）"""
         if self.ai is None:
-            print("[LoRA] AI 未加载，跳过刷新")
             return
-        current_model = self.combo_model.currentText()
-        if not current_model:
+        
+        data = self._current_model_data()
+        if not data:
             return
-
-        # SDXL 识别
-        name_lower = current_model.lower()
-        is_sdxl = any(
-            k in name_lower for k in ["xl", "sdxl", "pony", "turbo", "lightning"]
-        )
+        
+        # SDXL 识别：优先用体积，兜底用关键词
+        is_sdxl = data.get("size_gb", 0) > 4.2
         if not is_sdxl:
-            model_path = os.path.join("models", current_model)
-            if os.path.exists(model_path):
-                size_gb = os.path.getsize(model_path) / (1024 ** 3)
-                is_sdxl = size_gb > 4.2
-
+            name_lower = data["name"].lower()
+            is_sdxl = any(k in name_lower for k in ["xl", "sdxl", "pony", "turbo", "lightning"])
+        
         loras = self.ai.get_available_loras("sdxl" if is_sdxl else "sd1.5")
 
         for combo in self.combo_loras:
@@ -194,43 +172,25 @@ class EventMixin:
         self.text_lora_info.setReadOnly(True)
 
     def load_model_info(self, index=None):
-        """选择模型时读取同名 txt 备忘录，并清空 VRAM"""
-        # 清理旧管线
-        if hasattr(self, "pipe") and self.pipe is not None:
-            del self.pipe
-            self.pipe = None
-        gc.collect()
-
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
-        except Exception:
-            pass
-
-        model_name = self.combo_model.currentText()
-        if not model_name or model_name == "未找到模型":
-            return
-
-        txt_path = os.path.join(
-            "models",
-            model_name.replace(".safetensors", ".txt").replace(".ckpt", ".txt"),
-        )
-        if os.path.exists(txt_path):
-            try:
-                with open(txt_path, "r", encoding="utf-8") as f:
-                    memo = f.read().strip()[:80]
-                _set_label_style(self.lbl_model_info, f"📌 备忘: {memo}", "#89dceb")
-            except Exception:
-                pass
+        """显示模型备注（已由 scan_models 读取）"""
+        data = self._current_model_data()
+        note = data.get("note", "").strip()
+        
+        if note:
+            preview = note[:80] + ("..." if len(note) > 80 else "")
+            _set_label_style(self.lbl_model_info, f"📌 备忘: {preview}", "#89dceb")
         else:
+            txt_path = os.path.splitext(data.get("path", ""))[0] + ".txt"
             _set_label_style(
-                self.lbl_model_info, "💡 提示: 可新建同名 txt 记录", "#585b70"
+                self.lbl_model_info, 
+                f"💡 提示: 可在 {txt_path} 记录备注", 
+                "#585b70"
             )
 
     def load_lora_info(self, index=None):
         """任意 LoRA 槽位变化时，刷新备忘录文本框"""
+        from utils import paths
+        
         info_texts = []
         has_lora   = False
         has_any_txt = False
@@ -245,9 +205,9 @@ class EventMixin:
             txt_name  = base_name + ".txt"
 
             search_paths = [
-                os.path.join("loras", "sdxl",  txt_name),
-                os.path.join("loras", "sd1.5", txt_name),
-                os.path.join("loras",          txt_name),
+                os.path.join(paths.LORA_DIR, "sdxl",  txt_name),
+                os.path.join(paths.LORA_DIR, "sd1.5", txt_name),
+                os.path.join(paths.LORA_DIR,          txt_name),
             ]
             txt_found = next((p for p in search_paths if os.path.exists(p)), None)
 
@@ -999,7 +959,9 @@ class EventMixin:
                 # 如果用户输入了 hint,还需要 LLM
                 if user_hint and enhancer.llm_model is None:
                     enhancer.load_llm()
-                    enhancer.unload()
+
+                result = enhancer.describe_image(img)
+                enhancer.unload()  
             
                 # 读图（限制大小防 OOM）
                 img = Image.open(img_path).convert("RGB")

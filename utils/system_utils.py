@@ -1,39 +1,104 @@
 import os
+import sys
 import time
 import logging
+import threading
+from logging.handlers import RotatingFileHandler
 from contextlib import contextmanager
 from typing import Optional
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
+from utils import paths
+
+_LOG_READY = False
+_LOG_LOCK = threading.Lock()
+
+
+def setup_logging(level=logging.INFO, force: bool = True) -> None:
+    """配置根日志。幂等，可安全重复调用。
+
+    不用 basicConfig：它在 root logger 已有 handler 时会静默失效，
+    而 transformers / ChatTTS 都可能先动 root logger。
+    """
+    global _LOG_READY
+    with _LOG_LOCK:
+        if _LOG_READY and not force:
+            return
+
+        root = logging.getLogger()
+        root.setLevel(level)
+
+        # 清掉第三方库或重复调用留下的 handler
+        for h in root.handlers[:]:
+            root.removeHandler(h)
+            try:
+                h.close()
+            except Exception:
+                pass
+
+        fmt = logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+        )
+
+        try:
+            os.makedirs(paths.LOG_DIR, exist_ok=True)
+            fh = RotatingFileHandler(
+                paths.LOG_FILE,              # 绝对路径，chdir 免疫
+                maxBytes=5 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+            )
+            fh.setFormatter(fmt)
+            root.addHandler(fh)
+        except OSError:
+            pass  # 只读目录时退化为仅控制台
+
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(fmt)
+        root.addHandler(sh)
+
+        _LOG_READY = True
+
+
 logger = logging.getLogger(__name__)
 
 @contextmanager
 def performance_timer(name: str, log_level: str = "info"):
-    """性能计时器装饰器"""
-    start = time.time()
-    yield
-    elapsed = time.time() - start
-    
-    message = f"⏱️ {name} 耗时: {elapsed:.2f}秒"
-    if log_level == "debug":
-        logger.debug(message)
-    elif log_level == "warning":
-        logger.warning(message)
-    else:
-        logger.info(message)
+    start = time.perf_counter()
+    failed = False
+    try:
+        yield
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        elapsed = time.perf_counter() - start
+        status = "失败后" if failed else ""
+        message = f"⏱️ {name} {status}耗时: {elapsed:.2f}秒"
+        if failed:
+            logger.warning(message)
+        elif log_level == "debug":
+            logger.debug(message)
+        elif log_level == "warning":
+            logger.warning(message)
+        else:
+            logger.info(message)
 
 def ensure_directory(directory: str) -> None:
-    """确保目录存在，不存在则创建"""
-    if not os.path.exists(directory):
-        os.makedirs(directory)
+    """确保目录存在。"""
+    if not os.path.isdir(directory):
+        os.makedirs(directory, exist_ok=True)
         logger.info(f"📁 创建目录: {directory}")
+
+
+class SingletonMeta(type):
+    """线程安全的单例元类。"""
+    _instances = {}
+    _meta_lock = threading.RLock()      
+    def __call__(cls, *args, **kwargs):
+        with SingletonMeta._meta_lock:
+            if cls not in cls._instances:
+                cls._instances[cls] = super().__call__(*args, **kwargs)
+        return cls._instances[cls]
 
 def get_file_size(file_path: str) -> str:
     """获取文件大小的可读字符串"""
@@ -73,18 +138,20 @@ def get_available_memory() -> Optional[float]:
         return None
 
 def get_gpu_memory() -> Optional[dict]:
-    """获取GPU内存信息"""
     try:
         import torch
-        if torch.cuda.is_available():
-            return {
-                "total": torch.cuda.get_device_properties(0).total_memory / (1024 ** 3),
-                "used": torch.cuda.memory_allocated(0) / (1024 ** 3),
-                "free": torch.cuda.memory_free(0) / (1024 ** 3)
-            }
-    except Exception:
-        pass
-    return None
+        if not torch.cuda.is_available():
+            return None
+        free, total = torch.cuda.mem_get_info(0)
+        return {
+            "name":  torch.cuda.get_device_name(0),
+            "total": total / (1024 ** 3),
+            "used":  (total - free) / (1024 ** 3),
+            "free":  free / (1024 ** 3),
+        }
+    except Exception as e:
+        logger.debug(f"GPU 信息读取失败: {e}")
+        return None
 
 def log_system_info():
     """记录系统信息"""
@@ -106,11 +173,12 @@ def log_system_info():
     
     logger.info("=" * 50)
 
-class SingletonMeta(type):
-    """单例元类"""
-    _instances = {}
-    
-    def __call__(cls, *args, **kwargs):
-        if cls not in cls._instances:
-            cls._instances[cls] = super().__call__(*args, **kwargs)
-        return cls._instances[cls]
+def log_gpu_info():
+    """torch 导入完成后调用"""
+    gpu = get_gpu_memory()
+    if gpu:
+        logger.info(f"GPU: {gpu.get('name','?')} — 总 {gpu['total']:.2f}GB / "
+                    f"已用 {gpu['used']:.2f}GB / 可用 {gpu['free']:.2f}GB")
+    else:
+        logger.warning("⚠️ 未检测到可用 CUDA 设备，将使用 CPU（速度极慢）")
+
