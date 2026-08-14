@@ -15,6 +15,26 @@ class AppConfig:
     adetailer_enabled: bool = False
     theme: str = "darkly"
     device_preference:    str   = "auto"
+    default_width: int = 512
+    default_height: int = 768
+    default_batch: int = 1
+    default_cfg: float = 7.0
+    default_sampler: str = "DPM++ 2M Karras"
+
+    last_prompt: str = ""
+    last_neg: str = ""
+
+    use_adetailer: bool = False
+    adetailer_strength: float = 0.35
+    use_ad_hand: bool = False
+    ad_hand_strength: float = 0.25
+    ad_hand_blend: float = 0.65
+
+    use_hires: bool = False
+    hires_denoise: float = 0.45
+
+    output_format: str = "PNG"
+    output_dir: str = "outputs/"
     
     # 历史记录
     recent_models: List[str] = field(default_factory=list)

@@ -120,7 +120,11 @@ MODEL_REGISTRY = {
 #  扫描
 # ============================================================
 def _check_exists(entry: dict) -> bool:
-    local = PROJECT_ROOT / entry["local"]
+    key = entry.get("local") or entry.get("target_dir")
+    if not key:
+        print(f"⚠️ 模型条目缺少 local/target_dir, 跳过: {entry.get('desc', '?')}")
+        return False
+    local = PROJECT_ROOT / entry["local"] / key
     if entry["kind"] == "file":
         return local.is_file() and local.stat().st_size > 1024
     # snapshot
