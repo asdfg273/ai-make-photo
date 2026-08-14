@@ -124,7 +124,7 @@ def _check_exists(entry: dict) -> bool:
     if not key:
         print(f"⚠️ 模型条目缺少 local/target_dir, 跳过: {entry.get('desc', '?')}")
         return False
-    local = PROJECT_ROOT / entry["local"] / key
+    local = PROJECT_ROOT / _entry_dir(entry) / key
     if entry["kind"] == "file":
         return local.is_file() and local.stat().st_size > 1024
     # snapshot
@@ -132,6 +132,13 @@ def _check_exists(entry: dict) -> bool:
     if check_file:
         return (local / check_file).is_file()
     return local.is_dir() and any(local.iterdir())
+
+def _entry_dir(entry: dict) -> str:
+    """兼容 local / target_dir 两种键名"""
+    d = entry.get("local") or entry.get("target_dir")
+    if not d:
+        raise KeyError(f"模型条目缺少 local/target_dir: {entry.get('desc', entry)}")
+    return d
 
 
 def scan() -> dict:
@@ -175,7 +182,7 @@ def print_scan_report():
 def _download_one(key: str, entry: dict) -> bool:
     from huggingface_hub import hf_hub_download, snapshot_download
 
-    local = PROJECT_ROOT / entry["local"]
+    local = PROJECT_ROOT / _entry_dir(entry)
     print(f"\n⬇️  下载: {entry['desc']} ({entry['size_mb']}MB)")
     print(f"    源:   {entry['repo']}")
     print(f"    目标: {local}")

@@ -194,7 +194,8 @@ def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt,
             strength = cfg["default_strength"]
         
         # ── 2. 准备模型 ──
-        model_dir = os.path.join("models_cache", "adetailer")
+        from utils import paths
+        model_dir = os.path.join(paths.CACHE_DIR, "adetailer")
         model_path = os.path.join(model_dir, cfg["name"])
         if not _download_adetailer_model(cfg["url"], model_path):
             print(f"⚠️ ADetailer 模型不可用,跳过 {target}")
