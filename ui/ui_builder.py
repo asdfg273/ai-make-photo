@@ -311,7 +311,7 @@ class UIBuilderMixin:
             QPushButton:disabled { color:#363a3f; border-color:#212327; }
         """)
         prompt_btn_row.addWidget(self.btn_enhance_prompt)
-
+        self.btn_enhance_prompt.clicked.connect(self.on_enhance_prompt)
         self.btn_vision_prompt = QPushButton("📷 识图生成")
         self.btn_vision_prompt.setToolTip(
             "上传一张图片 + 输入需求, AI 自动整合生成 SD 提示词")
@@ -324,6 +324,7 @@ class UIBuilderMixin:
             QPushButton:hover { border-color:#ff7a17; }
         """)
         prompt_btn_row.addWidget(self.btn_vision_prompt)
+        self.btn_vision_prompt.clicked.connect(self.on_vision_prompt)
 
         self.chk_auto_enhance = QCheckBox("生成前自动改写")
         self.chk_auto_enhance.setToolTip(

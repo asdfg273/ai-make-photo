@@ -109,6 +109,7 @@ MODEL_REGISTRY = {
         "repo_id": "facebook/nllb-200-distilled-600M",
         "target_dir": "models_cache/models--facebook--nllb-200-distilled-600M",
         "required": False,
+        "kind": "snapshot",
         "size_mb": 1200,
         "desc": "NLLB-200 多语言翻译(中日互译)",
         "category": "translation",
@@ -120,12 +121,12 @@ MODEL_REGISTRY = {
 #  扫描
 # ============================================================
 def _check_exists(entry: dict) -> bool:
-    key = entry.get("local") or entry.get("target_dir")
-    if not key:
-        print(f"⚠️ 模型条目缺少 local/target_dir, 跳过: {entry.get('desc', '?')}")
+    try:
+        local = PROJECT_ROOT / _entry_dir(entry)
+    except KeyError as e:
+        print(f"⚠️ {e}")
         return False
-    local = PROJECT_ROOT / _entry_dir(entry) / key
-    if entry["kind"] == "file":
+    if entry.get("kind", "snapshot") == "file":
         return local.is_file() and local.stat().st_size > 1024
     # snapshot
     check_file = entry.get("check_file")

@@ -141,6 +141,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
 
         try:
             self._bridge.enhance_done_signal.connect(self._on_enhance_done)
+            self._ui_ready = True
         except Exception:
             pass
 
@@ -399,6 +400,10 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
     #  关闭
     # ==========================================================
     def closeEvent(self, event: QCloseEvent):
+        if not getattr(self, '_ui_ready', False):
+            logger.warning("⚠️ UI 未完成初始化, 跳过配置保存")
+            event.accept()
+            return
         logger.info("💾 正在保存配置并退出...")
         try:
             self.config.default_steps    = self.spin_steps.value()
