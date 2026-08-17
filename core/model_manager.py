@@ -32,6 +32,8 @@ from compel import Compel, ReturnedEmbeddingsType
 from PIL import Image
 
 from utils.system_utils import SingletonMeta
+from utils import paths 
+
 
 
 # ============================================================
@@ -63,6 +65,9 @@ class ModelManager(metaclass=SingletonMeta):
         # ★ IP-Adapter 状态
         self.ip_adapter_loaded   = False
         self.ip_adapter_variant  = None
+        self.is_sd3  = False
+        self.is_flux = False
+        self.current_ipa_scale = 0.6
 
         self._compel_cache = {}
         self._model_cache  = {}
@@ -87,12 +92,20 @@ class ModelManager(metaclass=SingletonMeta):
     #  显存清理
     # ------------------------------------------------------------
     def clear_memory(self):
-        self.txt2img_pipe     = None
-        self.img2img_pipe     = None
-        self.inpaint_pipe     = None
-        self.controlnet_pipe  = None
+        for attr in ('txt2img_pipe', 'img2img_pipe',
+                     'inpaint_pipe', 'controlnet_pipe'):
+            setattr(self, attr, None)
         self.loaded_controlnets.clear()
         self._compel_cache.clear()
+
+        # 状态必须跟着一起清
+        self.current_model_name  = None
+        self.current_lora_name   = None
+        self.current_cn_type     = None
+        self.ip_adapter_loaded   = False
+        self.ip_adapter_variant  = None
+        self._ipa_loaded         = False
+        self._ipa_variant        = None
 
         gc.collect()
         if self.device == "cuda":
@@ -186,7 +199,7 @@ class ModelManager(metaclass=SingletonMeta):
             return
     
         # === 智能查找:支持 models/ 根目录 + 子文件夹 ===
-        MODELS_ROOT = "models"
+        MODELS_ROOT = paths.MODEL_DIR
         candidates = [
             os.path.join(MODELS_ROOT, model_name),                 # 根目录
             os.path.join(MODELS_ROOT, "sd15", model_name),         # 子目录
@@ -353,7 +366,7 @@ class ModelManager(metaclass=SingletonMeta):
 
         # 2. 逐个挂载
         for i, (lora_name, weight) in enumerate(lora_list):
-            lora_path = os.path.join("loras", sub_dir, lora_name)
+            lora_path = os.path.join(paths.LORA_DIR, sub_dir, lora_name)
             if os.path.exists(lora_path):
                 adapter_name = f"lora_slot_{i}"
                 try:
@@ -429,7 +442,8 @@ class ModelManager(metaclass=SingletonMeta):
 
         if control_type not in self.loaded_controlnets:
             local_dir = os.path.abspath(
-                f"controlnets/{'sdxl_' if getattr(self, 'is_sdxl', False) else ''}{control_type}"
+                f"{paths.CONTROLNET_DIR}/{'sdxl_' if getattr(self, 'is_sdxl', False) else ''}{control_type}"
+
             )
             if os.path.exists(os.path.join(local_dir, "config.json")):
                 print(f"📂 从本地加载 ControlNet: {local_dir}")
@@ -499,7 +513,7 @@ class ModelManager(metaclass=SingletonMeta):
         # ===== 预处理器(检测器) =====
         if control_type == "openpose" and not self.pose_detector:
             print("⏳ 正在加载 OpenPose 骨架提取器...")
-            local_annot = os.path.abspath("controlnets/Annotators")
+            local_annot = os.path.join(paths.CONTROLNET_DIR, "Annotators")
             if os.path.exists(os.path.join(local_annot, "body_pose_model.pth")):
                 print(f"📂 从本地加载 OpenPose 检测器: {local_annot}")
                 try:
@@ -1003,7 +1017,7 @@ class ModelManager(metaclass=SingletonMeta):
             weight_name = weight_map.get(variant, 'ip-adapter-plus_sd15.safetensors')
 
             # 优先用本地缓存
-            local_dir = os.path.join("models_cache", "ip_adapter")
+            local_dir = os.path.join(paths.CACHE_DIR, "ip_adapter")
             if os.path.exists(os.path.join(local_dir, "models", weight_name)):
                 print(f"  → 从本地装载: {weight_name}", flush=True)
                 self.controlnet_pipe.load_ip_adapter(

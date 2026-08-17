@@ -8,6 +8,7 @@ OUTPUT_DIR   = os.path.join(PROJECT_ROOT, "photo")
 VIDEO_DIR    = os.path.join(PROJECT_ROOT, "photo", "videos")
 LORA_DIR     = os.path.join(PROJECT_ROOT, "loras")
 MODEL_DIR    = os.path.join(PROJECT_ROOT, "models")
+CONTROLNET_DIR = os.path.join(PROJECT_ROOT, "controlnets")
 WEIGHTS_DIR  = os.path.join(PROJECT_ROOT, "weights")
 
 # 运行时
@@ -28,7 +29,7 @@ LOG_FILE     = os.path.join(LOG_DIR, "app.log")
 
 _INIT_FAILURES = []
 _RUNTIME_DIRS  = [OUTPUT_DIR, VIDEO_DIR, LORA_DIR, MODEL_DIR,
-                  DATA_DIR, LOG_DIR, CACHE_DIR]
+                  DATA_DIR, LOG_DIR, CACHE_DIR,CONTROLNET_DIR,]
 
 for _d in _RUNTIME_DIRS:
     try:
