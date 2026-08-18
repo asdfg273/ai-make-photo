@@ -1677,14 +1677,14 @@ class GenerationMixin:
     def _gt_confirm_batch(self, combo_count: int, per_count: int, total: int) -> bool:
         """
         子线程请求主线程弹出确认对话框。
-        使用 QMetaObject.invokeMethod 阻塞等待返回。
+        使用 QMetaObject.invokeMethod + BlockingQueuedConnection 阻塞等待返回。
+        （无 context 的 QTimer.singleShot 会在调用线程执行，子线程无事件循环，
+          对话框永远不会弹出 —— 已废弃该写法。）
         """
-        from PyQt6.QtCore import QMetaObject, Qt, Q_RETURN_ARG, Q_ARG
-    
-        import threading
-        result_event = threading.Event()
+        from PyQt6.QtCore import QMetaObject, Qt, QThread
+
         result_holder = {'ok': False}
-    
+
         def _ask_on_main():
             from PyQt6.QtWidgets import QMessageBox
             msg = (
@@ -1698,15 +1698,16 @@ class GenerationMixin:
             reply = QMessageBox.question(
                 self, "批量队列确认", msg,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No  
+                QMessageBox.StandardButton.No
             )
             result_holder['ok'] = (reply == QMessageBox.StandardButton.Yes)
-            result_event.set()
 
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(0, _ask_on_main)
-
-        result_event.wait(timeout=300)
+        if QThread.currentThread() is self.thread():
+            _ask_on_main()
+        else:
+            QMetaObject.invokeMethod(
+                self, _ask_on_main,
+                Qt.ConnectionType.BlockingQueuedConnection)
         return result_holder['ok']
 
     def _start_batch_queue(self, prompt_list: list):

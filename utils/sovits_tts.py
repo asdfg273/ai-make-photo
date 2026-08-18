@@ -80,7 +80,6 @@ class SovitsTTS:
         self.sovits_path = str(sovits_path or DEFAULT_SOVITS)
         self.device = device if torch.cuda.is_available() else "cpu"
         self._loaded = False
-        self._orig_cwd = None
 
     def _load(self):
         if self._loaded:
@@ -88,24 +87,29 @@ class SovitsTTS:
         _inject_paths()
         _patch_torchaudio()
         _ensure_nltk()
-        self._orig_cwd = os.getcwd()
-        os.chdir(str(SOVITS_ROOT))
-
-        import GPT_SoVITS.inference_webui as iw
-        for attr in ("sovits_path", "gpt_path"):
-            if hasattr(iw, attr):
-                setattr(iw, attr, "")
-        iw.change_gpt_weights(self.gpt_path)
-        iw.change_sovits_weights(self.sovits_path)
+        # GPT-SoVITS 内部依赖 CWD 相对路径，临时切换后立即恢复，
+        # 绝不能把进程级 CWD 留在 SOVITS_ROOT（会摧毁全项目的相对路径）
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(str(SOVITS_ROOT))
+            import GPT_SoVITS.inference_webui as iw
+            for attr in ("sovits_path", "gpt_path"):
+                if hasattr(iw, attr):
+                    setattr(iw, attr, "")
+            iw.change_gpt_weights(self.gpt_path)
+            iw.change_sovits_weights(self.sovits_path)
+        finally:
+            os.chdir(saved_cwd)
         self._loaded = True
         logger.info(f"✅ GPT-SoVITS 已加载 (device={self.device})")
 
     def synth(self, text, output_path, ref_audio=None, ref_text=None,
               language="ja", speed=1.0):
         self._load()
-        # 保存 CWD（GPT-SoVITS 加载会 os.chdir 到其根目录, 用 finally 恢复）
+        # 推理期间同样需要 SOVITS_ROOT 作为 CWD，finally 恢复原目录
         saved_cwd = os.getcwd()
         try:
+            os.chdir(str(SOVITS_ROOT))
             ref_wav = ref_audio or str(DEFAULT_REF_AUDIO)
             ref_txt = ref_text or DEFAULT_REF_TEXT
             if not Path(ref_wav).exists():
@@ -143,11 +147,6 @@ class SovitsTTS:
     def unload(self):
         if not self._loaded:
             return
-        try:
-            if self._orig_cwd:
-                os.chdir(self._orig_cwd)
-        except Exception:
-            pass
         try:
             import GPT_SoVITS.inference_webui as iw
             for attr in ("t2s_model", "vq_model", "bert_model", "ssl_model", "hps"):

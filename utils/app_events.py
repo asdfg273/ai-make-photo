@@ -960,12 +960,9 @@ class EventMixin:
                 if user_hint and enhancer.llm_model is None:
                     enhancer.load_llm()
 
-                result = enhancer.describe_image(img)
-                enhancer.unload()  
-            
                 # 读图（限制大小防 OOM）
                 img = Image.open(img_path).convert("RGB")
-            
+
                 # 调用识图接口
                 result = enhancer.describe_image(img)
             

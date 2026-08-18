@@ -721,35 +721,3 @@ class VideoPanelMixin:
                 self.wrap_chattts.setVisible(True)
             if hasattr(self, "wrap_sovits"):
                 self.wrap_sovits.setVisible(False)
-
-    # ==========================================================
-    #  TTS 配音 (独立调用版本)
-    # ==========================================================
-    def _dub_and_merge(self, video_path: str, voice_params: dict, text: str):
-        video_path = os.path.abspath(video_path)
-        try:
-            from utils.sovits_tts import synth_once
-            wav_path = video_path.replace(".mp4", "_voice.wav")
-            t = text
-            if voice_params.get("auto_translate") and getattr(self, "translator", None):
-                t = self.translator.translate(text, target_lang="ja")
-            synth_once(
-                text=t,
-                output_path=wav_path,
-                ref_audio=voice_params.get("ref_audio"),
-                ref_text=voice_params.get("ref_text"),
-                speed=voice_params.get("speed", 1.0),
-                language="ja",
-            )
-            out = video_path.replace(".mp4", "_dubbed.mp4")
-            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-            subprocess.run([
-                ffmpeg, "-y",
-                "-i", video_path,
-                "-i", wav_path,
-                "-c:v", "copy", "-c:a", "aac",
-                "-shortest", out
-            ], check=True)
-            logger.info(f"✅ 配音完成 → {out}")
-        except Exception as e:
-            print(f"⚠️ 配音失败: {e}")

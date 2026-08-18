@@ -135,15 +135,37 @@ class TranslationService:
 
     # ========== 核心翻译 ==========
 
-    def translate(self, text: str, mode: str = "auto") -> str:
+    def translate(self, text: str, mode: str = "auto", target_lang: str = "en") -> str:
         """
         mode:
           - "dict"   : 纯词典
           - "ai"     : 纯 AI (Qwen)
           - "auto"   : 词典命中直接用, 未命中调 AI (推荐)
+        target_lang:
+          - "en"     : 中译英（默认，走 词典/Qwen 标签翻译流程）
+          - 其它(如 "ja"): 配音等自然语言场景，直接走 Qwen 通用翻译
         """
         if not text or not text.strip():
             return ""
+
+        # 非英文目标语言（如 SoVITS 配音翻译为日语）走 Qwen 通用翻译
+        if target_lang != "en":
+            if self.qwen_enhancer is None:
+                logger.warning(f"⚠️ 无 Qwen 实例，无法翻译为 {target_lang}，返回原文")
+                return text
+            try:
+                result = self.qwen_enhancer.translate(text, target_lang=target_lang)
+            except Exception as e:
+                logger.warning(f"⚠️ Qwen 翻译为 {target_lang} 失败，返回原文: {e}")
+                return text
+            # 用完释放显存（与下方 used_ai 释放逻辑一致）
+            try:
+                if getattr(self.qwen_enhancer, 'model', None) is not None:
+                    self.qwen_enhancer.unload()
+                    print("[TRANS] ✅ Qwen 已释放显存/内存")
+            except Exception as e:
+                print(f"[TRANS] ⚠️ Qwen 释放失败: {e}")
+            return result
 
         # 缓存命中直接返回
         cache_key = f"{mode}:{text}"

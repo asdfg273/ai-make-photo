@@ -163,6 +163,15 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
     # ==========================================================
     #  状态 / 加载
     # ==========================================================
+    def _preload_default_model(self):
+        """启动后预载默认模型信息（SD pipeline 权重在首次生成时惰性加载）"""
+        try:
+            if hasattr(self, 'combo_model') and self.combo_model.count() > 0:
+                self.on_model_selected(0)   # 刷新模型信息 + LoRA + 备注
+                self._set_status("✅ 默认模型就绪（权重将在首次生成时加载）", "#a6e3a1")
+        except Exception as e:
+            print(f"[PRELOAD] ⚠️ 默认模型信息加载失败: {e}")
+
     def _set_status(self, text: str, color: str = "#89dceb"):
         self.set_status(text, color)
 
