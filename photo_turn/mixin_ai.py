@@ -66,7 +66,7 @@ class AIToolsMixin:
                 face_crop_512 = face_crop.resize((512, 512), Image.LANCZOS)
 
                 try:
-                    from model_manager import ModelManager
+                    from core.model_manager import ModelManager
                     manager = ModelManager()
                     enhanced = manager.img2img_pipe(
                         prompt=(

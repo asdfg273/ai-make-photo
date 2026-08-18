@@ -12,7 +12,10 @@ from pathlib import Path
 
 
 class RIFEInterpolator:
-    def __init__(self, rife_dir="tools/rife"):
+    def __init__(self, rife_dir=None):
+        if rife_dir is None:
+            from utils.paths import PROJECT_ROOT
+            rife_dir = os.path.join(PROJECT_ROOT, "tools", "rife")
         self.rife_dir = os.path.abspath(rife_dir)
         self.exe = os.path.join(self.rife_dir, "rife-ncnn-vulkan.exe")
         self.model = os.path.join(self.rife_dir, "rife-v4.6")
@@ -80,9 +83,13 @@ class RIFEInterpolator:
                 cwd=self.rife_dir,
             )
             if result.returncode != 0:
-                print(f"⚠️ RIFE stderr: {result.stderr[:500]}")
+                raise RuntimeError(
+                    f"RIFE 插值失败 (code={result.returncode}): "
+                    f"{result.stderr[:500]}")
 
             out_frames = sorted(os.listdir(frames_out))
+            if not out_frames:
+                raise RuntimeError("RIFE 未产出任何帧")
             print(f"   ✅ 生成 {len(out_frames)} 帧")
 
             # === Step 3: 合成视频 ===

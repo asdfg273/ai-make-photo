@@ -8,8 +8,6 @@ import gc
 import torch
 import cv2
 import numpy as np
-from threading import Lock
-from compel import Compel
 
 from diffusers import (
     StableDiffusionPipeline,

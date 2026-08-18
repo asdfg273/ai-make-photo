@@ -18,6 +18,13 @@ from typing import Callable, Optional
 # hf-mirror 优先,失败回退官方
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
+from utils.paths import PROJECT_ROOT
+
+
+def _proj(p: str) -> str:
+    """相对路径一律以项目根目录为锚,返回绝对路径字符串"""
+    return str(_resolve_path(p))
+
 
 # ============================================================
 #  扩展定义
@@ -52,7 +59,6 @@ EXTENSIONS = {
         "size_mb": 1400,
         "required": False,
         "desc": "通过骨骼图控制人物姿势",
-        "desc": "姿势骨架控制",
         "check_any": [
             "models_cache/models--lllyasviel--sd-controlnet-openpose",
             "models_cache/huggingface/hub/models--lllyasviel--sd-controlnet-openpose",
@@ -190,8 +196,12 @@ EXTENSIONS = {
 #  路径检测
 # ============================================================
 def _resolve_path(p: str) -> Path:
-    """处理 ~ 展开 + 相对路径"""
-    return Path(os.path.expanduser(p)).resolve()
+    """处理 ~ 展开 + 相对路径（相对路径以项目根目录为锚,不依赖 CWD）"""
+    p = os.path.expanduser(str(p))
+    path = Path(p)
+    if not path.is_absolute():
+        path = Path(PROJECT_ROOT) / path
+    return path.resolve()
 
 
 def is_installed(ext_id: str) -> bool:
@@ -370,13 +380,13 @@ def _url_download(url, target_path, cb):
 # ------------------------------------------------------------
 
 def _dl_qwen2vl_2b(cb):
-    _ms_snapshot("qwen/Qwen2-VL-2B-Instruct", "models_cache/modelscope", cb)
+    _ms_snapshot("qwen/Qwen2-VL-2B-Instruct", _proj("models_cache/modelscope"), cb)
 
 
 def _dl_nllb_600m(cb):
     _hf_snapshot(
         "facebook/nllb-200-distilled-600M",
-        "models_cache/models--facebook--nllb-200-distilled-600M",
+        _proj("models_cache/models--facebook--nllb-200-distilled-600M"),
         cb,
         ignore_patterns=["*.msgpack", "*.h5", "flax_*"],
     )
@@ -385,19 +395,19 @@ def _dl_nllb_600m(cb):
 def _dl_controlnet(cb, control_type):
     _hf_snapshot(
         f"lllyasviel/sd-controlnet-{control_type}",
-        f"models_cache/models--lllyasviel--sd-controlnet-{control_type}",
+        _proj(f"models_cache/models--lllyasviel--sd-controlnet-{control_type}"),
         cb,
     )
 
 
 def _dl_adetailer(cb, kind):
     fname = f"{kind}_yolov8n.pt"
-    _hf_single_file("Bingsu/adetailer", fname, f"models/adetailer/{fname}", cb)
+    _hf_single_file("Bingsu/adetailer", fname, _proj(f"models/adetailer/{fname}"), cb)
 
 
 def _dl_motion_adapter_v3(cb):
     _hf_snapshot("guoyww/animatediff-motion-adapter-v1-5-3",
-                 "models/motion_adapter/v1-5-3", cb)
+                 _proj("models/motion_adapter/v1-5-3"), cb)
 
 
 def _dl_motion_lora_pack(cb):
@@ -411,7 +421,7 @@ def _dl_motion_lora_pack(cb):
         pct = (i / len(loras)) * 100
         _emit(cb, pct, f"下载 Motion LoRA: {name} ({i+1}/{len(loras)})")
         _hf_snapshot(f"guoyww/animatediff-motion-lora-{name}",
-                     f"models/motion_lora/{name}", None)
+                     _proj(f"models/motion_lora/{name}"), None)
     _emit(cb, 100, "✅ 全部 Motion LoRA 完成")
 
 
@@ -420,22 +430,22 @@ def _dl_ip_adapter_sd15(cb):
     _hf_single_file(
         "h94/IP-Adapter",
         "models/ip-adapter_sd15.safetensors",
-        "models/ip_adapter/ip-adapter_sd15.safetensors", cb,
+        _proj("models/ip_adapter/ip-adapter_sd15.safetensors"), cb,
     )
     _emit(cb, 50, "下载 image_encoder ...")
     _hf_snapshot(
         "h94/IP-Adapter",
-        "models/ip_adapter/_tmp_encoder",
+        _proj("models/ip_adapter/_tmp_encoder"),
         None,
         allow_patterns=["models/image_encoder/*"],
     )
-    src = "models/ip_adapter/_tmp_encoder/models/image_encoder"
-    dst = "models/ip_adapter/image_encoder"
+    src = _proj("models/ip_adapter/_tmp_encoder/models/image_encoder")
+    dst = _proj("models/ip_adapter/image_encoder")
     if os.path.exists(src):
         if os.path.exists(dst):
             shutil.rmtree(dst)
         shutil.move(src, dst)
-    shutil.rmtree("models/ip_adapter/_tmp_encoder", ignore_errors=True)
+    shutil.rmtree(_proj("models/ip_adapter/_tmp_encoder"), ignore_errors=True)
     _emit(cb, 100, "✅ IP-Adapter 完成")
 
 
@@ -445,17 +455,24 @@ def _dl_rife_v46(cb):
     _emit(cb, 5, "下载 RIFE zip ...")
     _url_download(url, tmp_zip, cb)
     _emit(cb, 90, "解压 ...")
+    extract_root = _proj("tools/rife/_extract")
     with zipfile.ZipFile(tmp_zip) as zf:
-        zf.extractall("tools/rife/_extract")
-    extract_root = "tools/rife/_extract"
+        # zip-slip 防护: 拒绝逃逸出解压目录的条目
+        real_root = os.path.realpath(extract_root)
+        for member in zf.namelist():
+            target = os.path.realpath(os.path.join(real_root, member))
+            if target != real_root and not target.startswith(real_root + os.sep):
+                raise RuntimeError(f"zip 包含非法路径条目: {member}")
+        zf.extractall(extract_root)
+    rife_dir = _proj("tools/rife")
     for root, dirs, files in os.walk(extract_root):
         for f in files:
             if f.endswith(".exe"):
-                shutil.copy(os.path.join(root, f), "tools/rife/")
+                shutil.copy(os.path.join(root, f), rife_dir)
         for d in dirs:
             if d.startswith("rife-v4.6") or d == "rife-v4.6":
                 src = os.path.join(root, d)
-                dst = "tools/rife/rife-v4.6"
+                dst = os.path.join(rife_dir, "rife-v4.6")
                 if os.path.exists(dst):
                     shutil.rmtree(dst)
                 shutil.move(src, dst)

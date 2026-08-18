@@ -112,7 +112,6 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
 
         # ── 配置 & UI ──
         self.config = AppConfig.load()
-        self.config.load()
 
         self.setup_ui()
         self.apply_config_to_ui()
@@ -139,11 +138,8 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
         except Exception as e:
             print(f"[CONNECT] ❌ 失败: {e}")
 
-        try:
-            self._bridge.enhance_done_signal.connect(self._on_enhance_done)
-            self._ui_ready = True
-        except Exception:
-            pass
+        # enhance_done_signal 已在 _init_gen_bridge() 中连接,此处不再重复连接
+        self._ui_ready = True
 
         # ── 初始按钮状态 ──
         self.btn_generate.setEnabled(False)
@@ -157,7 +153,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
             QTimer.singleShot(500, self._preload_default_model)
 
     # ==========================================================
-    #  视频生成 → 见 utils/video_panel_mixin.py (VideoPanelMixin)
+    #  视频生成 → 见 ui/video_panel_mixin.py (VideoPanelMixin)
     # ==========================================================
 
     # ==========================================================
@@ -245,21 +241,6 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
         if hasattr(self, 'gallery'):
             self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
             self.gallery.image_selected.connect(self._on_gallery_pick)
-
-    def _on_enhance_done(self, result: str):
-        if hasattr(self, 'btn_enhance_prompt'):
-            self.btn_enhance_prompt.setEnabled(True)
-            self.btn_enhance_prompt.setText("✨ 智能改写")
-        if hasattr(self, 'btn_vision_prompt'):
-            self.btn_vision_prompt.setEnabled(True)
-            self.btn_vision_prompt.setText("📷 识图生成")
-
-        if result.startswith("[识图失败]") or result.startswith("[改写失败]"):
-            self._set_status(result, "#f38ba8")
-            return
-
-        self.txt_prompt.setPlainText(result)
-        self._set_status("✨ 提示词生成完成!", "#a6e3a1")
 
     # ==========================================================
     #  预设 / PNG 读取
@@ -353,12 +334,13 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
         )
         logger.info(f"🎯 套用预设 [{name}] - {changed} 项变化")
 
-    def read_png_info(self):
-        start_dir = OUTPUT_DIR if os.path.exists(OUTPUT_DIR) else BASE_DIR
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择 PNG 文件", start_dir, "PNG (*.png)")
+    def read_png_info(self, path: str = None):
         if not path:
-            return
+            start_dir = OUTPUT_DIR if os.path.exists(OUTPUT_DIR) else BASE_DIR
+            path, _ = QFileDialog.getOpenFileName(
+                self, "选择 PNG 文件", start_dir, "PNG (*.png)")
+            if not path:
+                return
 
         try:
             img = Image.open(path)
@@ -606,11 +588,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
     def reuse_params_from_path(self, path: str):
         try:
             if hasattr(self, 'read_png_info'):
-                try:
-                    self.read_png_info(path=path)
-                except TypeError:
-                    self.last_generated_path = path
-                    self.read_png_info()
+                self.read_png_info(path=path)
                 self._set_status("🔁 已套用 PNG 参数", "#a6e3a1")
             else:
                 self._set_status("⚠️ 未找到 read_png_info", "#f9e2af")
@@ -672,7 +650,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
                 label.setText("📌 备注: (无)")
 
     # ==========================================================
-    #  视频面板辅助 → 见 utils/video_panel_mixin.py (VideoPanelMixin)
+    #  视频面板辅助 → 见 ui/video_panel_mixin.py (VideoPanelMixin)
     # ==========================================================
 
 # ============================================================

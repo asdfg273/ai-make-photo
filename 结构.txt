@@ -15,22 +15,36 @@ ai make photo/
 │   ├── presets.py                # 预设管理
 │   └── translation_service.py    # 翻译服务
 │
+├── 📁 ui/                        # 界面模块
+│   ├── __init__.py
+│   ├── design_tokens.py          # 样式令牌
+│   ├── disclaimer.py             # 免责声明
+│   ├── extension_market.py       # 扩展市场
+│   ├── gallery_panel.py          # 画廊面板
+│   ├── preset_manager.py         # 预设管理面板
+│   ├── splash.py                 # 启动画面
+│   ├── tooltips.py               # 工具提示
+│   ├── ui_builder.py             # UI 构建（含动画界面）
+│   ├── video_panel_mixin.py      # 视频面板
+│   └── widgets.py                # 自定义控件
+│
 ├── 📁 utils/                     # 工具模块
 │   ├── __init__.py
 │   ├── app_events.py             # 事件处理
 │   ├── app_generation.py         # 生成流程
 │   ├── app_utils.py              # 应用工具函数
-│   ├── gallery_panel.py          # 画廊面板
+│   ├── extension_manager.py      # 扩展管理
 │   ├── image_processor.py        # 图像处理
+│   ├── model_downloader.py       # 模型下载
 │   ├── model_scanner.py          # 模型扫描
 │   ├── paths.py                  # 路径管理
-│   ├── preset_manager.py         # 预设管理
 │   ├── prompt_enhancer.py        # Qwen 智能改写
 │   ├── rife_interpolate.py       # RIFE 帧插值
+│   ├── sovits_tts.py             # GPT-SoVITS 配音
 │   ├── system_utils.py           # 系统工具
 │   ├── tiled_diffusion.py        # 分块扩散
-│   ├── tooltips.py               # 工具提示
-│   ├── ui_builder.py             # UI 构建（含动画界面）
+│   ├── translator.py             # 翻译工具
+│   ├── tts_engine.py             # ChatTTS 配音
 │   ├── video_gen.py              # 视频生成服务
 │   └── vram_manager.py           # 显存管理
 │

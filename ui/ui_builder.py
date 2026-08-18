@@ -24,6 +24,7 @@ from utils.gpu_init import enable_gpu_acceleration
 from ui.widgets import FloatSlider, GpuCanvas
 from ui.splash import SplashScreen, create_splash
 from ui.design_tokens import DARK_STYLE,VIDEO_TAB_QSS
+from utils.paths import PROJECT_ROOT
 
 # ============================================================
 #  UIBuilderMixin —— 主窗口 UI 构造器
@@ -38,7 +39,7 @@ class UIBuilderMixin:
         self.setWindowTitle("AI 绘画工作站 v5.0")
         self.setStyleSheet(DARK_STYLE)
 
-        ico_path = os.path.join("logo", "dzbut-9fc5g-001.ico")
+        ico_path = os.path.join(PROJECT_ROOT, "logo", "dzbut-9fc5g-001.ico")
         if os.path.exists(ico_path):
             self.setWindowIcon(QIcon(ico_path))
 

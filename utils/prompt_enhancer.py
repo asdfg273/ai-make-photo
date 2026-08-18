@@ -6,6 +6,7 @@
 import os
 import gc
 import time
+import threading
 import torch
 from PIL import Image
 from transformers import BitsAndBytesConfig
@@ -237,6 +238,7 @@ Output ONLY the translated text.
         self.processor = None
         self.tokenizer = None
         self.is_vision_model = True
+        self._lock = threading.RLock()   # 加载/卸载串行化,防跨线程竞态
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dtype = torch.float16 if self.device == "cuda" else torch.float32
@@ -267,12 +269,10 @@ Output ONLY the translated text.
     # ============================================================
     #  加载 Qwen2-VL-2B-Instruct
     # ============================================================
-    def load(self, *args, **kwargs):
-        """加载 Qwen2-VL（4bit 量化）"""
+    def load(self, model_id: str = "qwen/Qwen2-VL-2B-Instruct", **kwargs):
+        """加载 Qwen2-VL（优先 4bit 量化,失败降级 fp16）"""
         if self.model is not None:
             return
-
-        model_id = "qwen/Qwen2-VL-2B-Instruct"   # 7B 备用
 
         print(f"📥 加载模型: {model_id}", flush=True)
 
@@ -313,7 +313,7 @@ Output ONLY the translated text.
             )
             self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                 local_dir,
-                torch_dtype=torch.float16,
+                quantization_config=bnb_config,   # 之前漏传 → 实际加载的是 fp16
                 device_map="auto",
                 low_cpu_mem_usage=True,
             )
@@ -762,19 +762,20 @@ Output ONLY the translated text.
     #  释放
     # ============================================================
     def unload(self):
-        try:
-            if self.model is not None:
-                del self.model
-                del self.processor
-                del self.tokenizer
-        except Exception:
-            pass
-        self.model = None
-        self.processor = None
-        self.tokenizer = None
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        with self._lock:
+            try:
+                if self.model is not None:
+                    del self.model
+                    del self.processor
+                    del self.tokenizer
+            except Exception:
+                pass
+            self.model = None
+            self.processor = None
+            self.tokenizer = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 # ============================================================
 #  全局单例（注意：这部分顶格，不在类里）

@@ -1,4 +1,4 @@
-# utils/video_panel_mixin.py
+# ui/video_panel_mixin.py
 # ============================================================
 #  视频面板控制器 Mixin — 从 main.py 提取
 #  负责视频生成(4 种模式)、Motion LoRA、提示词旅行、TTS 配音
@@ -203,6 +203,8 @@ class VideoPanelMixin:
                 else:
                     voice_params = {"engine": "chattts"}
             # 背景配乐（可选）
+            # TODO: lbl_bg_music_path 控件从未创建,此分支永远为空 ——
+            # 待补文件选择控件后再启用,先保留参数透传逻辑
             if voice_params and hasattr(self, "chk_bg_music") and self.chk_bg_music.isChecked():
                 bg_path = getattr(self, "lbl_bg_music_path", None)
                 if bg_path and os.path.exists(str(bg_path)):
@@ -247,7 +249,7 @@ class VideoPanelMixin:
             def generate_task():
                 try:
                     if self.ai.txt2img_pipe is None:
-                        raw = self.combo_model.currentText()
+                        raw = self._ui_read(lambda: self.combo_model.currentText(), "")
                         # 剥掉 " [1.99GB]" 之类的后缀
                         model_name = re.sub(r"\s*\[.*?\]\s*$", "", raw).strip()
                         if not model_name:

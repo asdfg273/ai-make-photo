@@ -34,7 +34,31 @@ class _GenBridge(QObject):
     log_signal      = pyqtSignal(str)
     image_signal    = pyqtSignal(object)
     gallery_add_signal  = pyqtSignal(str)
-    enhance_done_signal  = pyqtSignal(str) 
+    enhance_done_signal  = pyqtSignal(str)
+    video_enhance_done_signal = pyqtSignal(str)   # 视频 Tab 识图专用,避免拆断共享信号
+
+
+# ============================================================
+#  GUI 线程派发器 —— 把工作线程的 callable 派发到主线程执行
+#  (本机 PyQt6 的 QMetaObject.invokeMethod / QTimer.singleShot
+#   均不支持传 Python callable,只能用信号槽)
+# ============================================================
+class _UiInvoker(QObject):
+    call_signal = pyqtSignal(object, object, object)  # fn, holder(dict), event
+
+    def __init__(self):
+        super().__init__()
+        from PyQt6.QtCore import Qt
+        self.call_signal.connect(
+            self._exec, Qt.ConnectionType.QueuedConnection)
+
+    def _exec(self, fn, holder, event):
+        try:
+            holder['v'] = fn()
+        except Exception:
+            pass
+        finally:
+            event.set()
 
 
 # ============================================================
@@ -42,6 +66,7 @@ class GenerationMixin:
 
     def _init_gen_bridge(self):
         self._bridge = _GenBridge()
+        self._ui_invoker = _UiInvoker()
         self._bridge.status_signal.connect(self._on_status)
         self._bridge.progress_signal.connect(self._on_progress)
         self._bridge.enhance_done_signal.connect(self._on_enhance_done)
@@ -51,6 +76,7 @@ class GenerationMixin:
         self._bridge.done_signal.connect(self._on_gen_done)
         self._bridge.error_signal.connect(self._on_error_to_log)
         self._bridge.cancel_signal.connect(self._on_cancelled)
+        self._bridge.video_enhance_done_signal.connect(self._on_video_vision_done)
 
     # ----------------------- 槽 -----------------------
     def _on_status(self, text: str, color: str):
@@ -79,36 +105,64 @@ class GenerationMixin:
         if hasattr(self, 'btn_edit'):    self.btn_edit.setEnabled(True)
         if hasattr(self, 'btn_upscale'): self.btn_upscale.setEnabled(True)
 
-    def _on_gen_error(self, msg: str):
-        from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.critical(self, "生成错误", msg)
-
     def _on_cancelled(self):
         self._bridge.status_signal.emit("🛑 已打断", "#ff5555")
 
     # ----------------------- 控件读值 -----------------------
+    def _ui_read(self, fn, default=None):
+        """跨线程安全读取 Qt 控件值：
+        GUI 线程直接执行；工作线程通过 _UiInvoker 信号派发到主线程阻塞取值。
+        （PyQt 控件只允许 GUI 线程访问,直接在子线程读会偶发崩溃）
+        """
+        from PyQt6.QtCore import QThread
+        try:
+            if QThread.currentThread() is self.thread():
+                try:
+                    return fn()
+                except Exception:
+                    return default
+            invoker = getattr(self, '_ui_invoker', None)
+            if invoker is None:
+                return default
+            ev = threading.Event()
+            holder = {'v': default}
+            invoker.call_signal.emit(fn, holder, ev)
+            ev.wait(30)   # 主线程被模态框卡住时兜底,防永久阻塞
+            return holder['v']
+        except Exception:
+            return default
+
     def _cbo(self, w) -> str:
-        return w.currentText() if w else ""
+        if w is None: return ""
+        return self._ui_read(lambda: w.currentText(), "") or ""
 
     def _chk(self, w) -> bool:
         if w is None: return False
-        if hasattr(w, 'isChecked'): return bool(w.isChecked())
-        if hasattr(w, 'get'):       return bool(w.get())
-        return False
+        def _read():
+            if hasattr(w, 'isChecked'): return bool(w.isChecked())
+            if hasattr(w, 'get'):       return bool(w.get())
+            return False
+        return bool(self._ui_read(_read, False))
 
     def _sld(self, w) -> float:
         if w is None: return 0.0
-        if hasattr(w, 'float_value'): return w.float_value()
-        return float(w.value())
+        def _read():
+            if hasattr(w, 'float_value'): return w.float_value()
+            return float(w.value())
+        v = self._ui_read(_read, 0.0)
+        return float(v) if v is not None else 0.0
 
     def _spn(self, w) -> int:
-        return int(w.value()) if w else 0
+        if w is None: return 0
+        return int(self._ui_read(lambda: int(w.value()), 0) or 0)
 
     def _txt(self, w) -> str:
-        return w.toPlainText().strip() if w else ""
+        if w is None: return ""
+        return self._ui_read(lambda: w.toPlainText().strip(), "") or ""
 
     def _edt(self, w) -> str:
-        return w.text().strip() if w else ""
+        if w is None: return ""
+        return self._ui_read(lambda: w.text().strip(), "") or ""
 
     # ----------------------------------------------------------
     def apply_adetailer(self, base_image, prompt, negative_prompt, seed,
@@ -226,7 +280,9 @@ class GenerationMixin:
             if hasattr(self.ai, 'clear_memory'):
                 self.ai.clear_memory()
 
-        model_data = self.combo_model.currentData() if hasattr(self, 'combo_model') else None
+        model_data = self._ui_read(
+            lambda: self.combo_model.currentData(), None) \
+            if hasattr(self, 'combo_model') else None
         if isinstance(model_data, dict) and 'name' in model_data:
             model_name = model_data['name']
             model_type = model_data.get('type', '')  # 顺便记录类型
@@ -241,7 +297,9 @@ class GenerationMixin:
         raw_prompt = self._txt(getattr(self, 'txt_prompt', None))
         raw_neg    = self._txt(getattr(self, 'txt_neg', None))
 
-        mode_idx = self.combo_trans_mode.currentIndex() if hasattr(self, 'combo_trans_mode') else 2
+        mode_idx = self._ui_read(
+            lambda: self.combo_trans_mode.currentIndex(), 2) \
+            if hasattr(self, 'combo_trans_mode') else 2
         trans_mode = ["dict", "ai", "auto"][mode_idx]
         print(f"🌐 翻译模式: {trans_mode}", flush=True)
 
@@ -403,13 +461,16 @@ class GenerationMixin:
         self.ai.load_model(ctx['model_name'])
 
     def _gt_setup_ipa(self, ctx):
-        use_ipa = (self.chk_use_ipa.isChecked()
-                   if hasattr(self, 'chk_use_ipa') else False)
+        use_ipa = self._ui_read(
+            lambda: self.chk_use_ipa.isChecked(), False) \
+            if hasattr(self, 'chk_use_ipa') else False
         ipa_image_path = getattr(self, 'ipa_image_path', None)
-        ipa_scale = (self.spin_ipa_scale.value()
-                     if hasattr(self, 'spin_ipa_scale') else 0.6)
-        ipa_variant_text = (self.combo_ipa_variant.currentText()
-                            if hasattr(self, 'combo_ipa_variant') else "plus")
+        ipa_scale = self._ui_read(
+            lambda: self.spin_ipa_scale.value(), 0.6) \
+            if hasattr(self, 'spin_ipa_scale') else 0.6
+        ipa_variant_text = self._ui_read(
+            lambda: self.combo_ipa_variant.currentText(), "plus") \
+            if hasattr(self, 'combo_ipa_variant') else "plus"
         ipa_variant = "plus" if "plus" in ipa_variant_text else "standard"
 
         # 校验
@@ -1151,14 +1212,14 @@ class GenerationMixin:
         try:
             enable = (
                 hasattr(self, "chk_use_preview")
-                and self.chk_use_preview.isChecked()
+                and self._ui_read(lambda: self.chk_use_preview.isChecked(), False)
             )
-        
+
             if not enable:
                 return callback_kwargs
-        
+
             interval = (
-                self.spin_preview_interval.value()
+                self._ui_read(lambda: self.spin_preview_interval.value(), 10)
                 if hasattr(self, "spin_preview_interval")
                 else 10
             )
@@ -1358,7 +1419,6 @@ class GenerationMixin:
             self.last_generated_path = save_path
             print(f"[EMIT-1341] preview_signal: {save_path}", flush=True)
             self._bridge.preview_signal.emit(save_path)
-            self._bridge.preview_signal.emit(save_path) 
 
             self._bridge.status_signal.emit(
                 "✅ X/Y 矩阵生成完成！", "#00ff00")
@@ -1447,11 +1507,10 @@ class GenerationMixin:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             os.makedirs(OUTPUT_DIR, exist_ok=True)
             save_path = os.path.join(OUTPUT_DIR, f"comic_{ts}.png")
-            print(f"[EMIT-1432] preview_signal: {save_path}", flush=True)
-            self._bridge.preview_signal.emit(save_path)
             comic = make_comic_strip(image_list)
-            comic.save(save_path)
-            self.last_generated_path = save_path   
+            comic.save(save_path)   # 先保存,再 emit 预览（避免预览读到不存在的文件）
+            self.last_generated_path = save_path
+            print(f"[EMIT-1432] preview_signal: {save_path}", flush=True)
             self._bridge.preview_signal.emit(save_path)
             self._bridge.status_signal.emit(
                 "✅ 连环画拼合完成！", "#00ff00")
@@ -1677,11 +1736,10 @@ class GenerationMixin:
     def _gt_confirm_batch(self, combo_count: int, per_count: int, total: int) -> bool:
         """
         子线程请求主线程弹出确认对话框。
-        使用 QMetaObject.invokeMethod + BlockingQueuedConnection 阻塞等待返回。
-        （无 context 的 QTimer.singleShot 会在调用线程执行，子线程无事件循环，
-          对话框永远不会弹出 —— 已废弃该写法。）
+        通过 _UiInvoker 信号把弹窗派发到 GUI 线程,阻塞等待结果。
+        (本机 PyQt6 的 QMetaObject.invokeMethod 不支持传 callable)
         """
-        from PyQt6.QtCore import QMetaObject, Qt, QThread
+        from PyQt6.QtCore import QThread
 
         result_holder = {'ok': False}
 
@@ -1702,68 +1760,14 @@ class GenerationMixin:
             )
             result_holder['ok'] = (reply == QMessageBox.StandardButton.Yes)
 
-        if QThread.currentThread() is self.thread():
+        invoker = getattr(self, '_ui_invoker', None)
+        if invoker is None or QThread.currentThread() is self.thread():
             _ask_on_main()
         else:
-            QMetaObject.invokeMethod(
-                self, _ask_on_main,
-                Qt.ConnectionType.BlockingQueuedConnection)
+            ev = threading.Event()
+            invoker.call_signal.emit(_ask_on_main, {}, ev)
+            ev.wait(300)   # 用户最多考虑 5 分钟,超时视为取消
         return result_holder['ok']
-
-    def _start_batch_queue(self, prompt_list: list):
-        """批量生成队列"""
-        self._batch_queue = prompt_list.copy()
-        self._batch_total = len(prompt_list)
-        self._batch_done = 0
-        self._run_next_in_queue()
-
-    def _run_next_in_queue(self):
-        """跑队列里的下一个"""
-        if not self._batch_queue:
-            self._set_status(f"✅ 批量完成: {self._batch_total} 张", "#a6e3a1")
-            return
-    
-        next_prompt = self._batch_queue.pop(0)
-        self._batch_done += 1
-    
-        # 更新 UI 提示词框（让用户看到当前在跑哪个）
-        self.txt_prompt.setPlainText(next_prompt)
-    
-        self._set_status(
-            f"🎯 队列 [{self._batch_done}/{self._batch_total}]: {next_prompt[:30]}...",
-            "#89b4fa"
-        )
-    
-        # 调用原有单次生成，结束后回调跑下一个
-        self._start_single_generation(next_prompt, on_done=self._run_next_in_queue)
-
-    # ==================================================================
-    #  动态提示词解析 (备用版)
-    # ==================================================================
-    def parse_dynamic_prompt_fallback(self, prompt_text: str):
-        """
-        兼容 {A|B|C} 多组笛卡尔展开。
-        若 utils.app_utils.parse_dynamic_prompt 已存在则用那个。
-        """
-        import re
-        if not prompt_text:
-            return [""]
-
-        pattern = re.compile(r"\{([^{}]+)\}")
-        matches = pattern.findall(prompt_text)
-        if not matches:
-            return [prompt_text]
-
-        from itertools import product
-        groups = [[x.strip() for x in m.split('|')] for m in matches]
-        final_prompts = []
-        for combo in product(*groups):
-            temp_prompt = prompt_text
-            for replacement in combo:
-                temp_prompt = pattern.sub(
-                    replacement, temp_prompt, count=1)
-            final_prompts.append(temp_prompt)
-        return final_prompts
 
     def _on_error_to_log(self, err_text: str):
         """错误信息打到日志框,不弹窗,便于复制"""

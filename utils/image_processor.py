@@ -132,16 +132,22 @@ def _download_adetailer_model(url, save_path):
         return False
 
 
+_YOLO_CACHE = {}
+
+
 def _yolo_detect(model_path, cv_image, conf=0.3):
-    """YOLO 通用检测,返回 [(x, y, w, h), ...]"""
+    """YOLO 通用检测,返回 [(x, y, w, h), ...]（模型按路径缓存,不重复加载）"""
     try:
         from ultralytics import YOLO
     except ImportError:
         print("⚠️ 缺少 ultralytics 库,请运行: pip install ultralytics")
         return []
-    
+
     try:
-        model = YOLO(model_path)
+        model = _YOLO_CACHE.get(model_path)
+        if model is None:
+            model = YOLO(model_path)
+            _YOLO_CACHE[model_path] = model
         results = model(cv_image, verbose=False, conf=conf)
         boxes = []
         for r in results:
@@ -195,7 +201,7 @@ def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt,
         
         # ── 2. 准备模型 ──
         from utils import paths
-        model_dir = os.path.join(paths.CACHE_DIR, "adetailer")
+        model_dir = os.path.join(paths.MODEL_DIR, "adetailer")   # 与扩展市场下载位置统一
         model_path = os.path.join(model_dir, cfg["name"])
         if not _download_adetailer_model(cfg["url"], model_path):
             print(f"⚠️ ADetailer 模型不可用,跳过 {target}")

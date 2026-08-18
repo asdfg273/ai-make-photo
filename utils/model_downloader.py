@@ -109,7 +109,6 @@ MODEL_REGISTRY = {
         "repo_id": "facebook/nllb-200-distilled-600M",
         "target_dir": "models_cache/models--facebook--nllb-200-distilled-600M",
         "required": False,
-        "kind": "snapshot",
         "size_mb": 1200,
         "desc": "NLLB-200 多语言翻译(中日互译)",
         "category": "translation",
@@ -127,7 +126,16 @@ def _check_exists(entry: dict) -> bool:
         print(f"⚠️ {e}")
         return False
     if entry.get("kind", "snapshot") == "file":
-        return local.is_file() and local.stat().st_size > 1024
+        if not local.is_file():
+            return False
+        size = local.stat().st_size
+        if size <= 1024:
+            return False
+        expected_mb = entry.get("size_mb")
+        if expected_mb:
+            # 实际大小低于标称 60% 视为下载半截的文件
+            return size >= expected_mb * 1024 * 1024 * 0.6
+        return True
     # snapshot
     check_file = entry.get("check_file")
     if check_file:

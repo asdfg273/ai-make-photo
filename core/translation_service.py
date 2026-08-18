@@ -10,7 +10,9 @@ import logging
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
-DICT_DIR = os.path.join("data", "dictionaries")
+
+from utils.paths import DATA_DIR, DICT_FILE
+DICT_DIR = os.path.join(DATA_DIR, "dictionaries")
 # 可选依赖 —— 没装也能跑
 try:
     import jieba
@@ -30,8 +32,8 @@ except ImportError:
 class TranslationService:
     """中译英翻译服务（Qwen 优先 + 词典兜底）"""
 
-    def __init__(self, dict_file="zh_to_en_dict.json", qwen_enhancer=None):
-        self.dict_file = dict_file
+    def __init__(self, dict_file=None, qwen_enhancer=None):
+        self.dict_file = dict_file or DICT_FILE
         self.lock = threading.Lock()
         self._cache = {}            # 整段翻译缓存
         self._dictionary = {}       # 词级翻译字典
@@ -158,13 +160,8 @@ class TranslationService:
             except Exception as e:
                 logger.warning(f"⚠️ Qwen 翻译为 {target_lang} 失败，返回原文: {e}")
                 return text
-            # 用完释放显存（与下方 used_ai 释放逻辑一致）
-            try:
-                if getattr(self.qwen_enhancer, 'model', None) is not None:
-                    self.qwen_enhancer.unload()
-                    print("[TRANS] ✅ Qwen 已释放显存/内存")
-            except Exception as e:
-                print(f"[TRANS] ⚠️ Qwen 释放失败: {e}")
+            # 不自动 unload：Qwen 是跨线程共享单例,此处卸载会与
+            # 改写/识图线程形成竞态。显存释放由用户显式"卸载模型"触发。
             return result
 
         # 缓存命中直接返回
@@ -173,7 +170,6 @@ class TranslationService:
             return self._cache[cache_key]
 
         result = ""
-        used_ai = False  # 🆕 标记是否用了 Qwen
 
         if mode == "dict":
             result = self._translate_by_dict(text)
@@ -182,7 +178,6 @@ class TranslationService:
             if self.qwen_enhancer:
                 try:
                     result = self.qwen_enhancer.translate_zh_to_en(text)
-                    used_ai = True
                 except Exception as e:
                     logger.warning(f"⚠️ Qwen 翻译失败,降级到词典: {e}")
                     result = self._translate_by_dict(text)
@@ -201,24 +196,18 @@ class TranslationService:
                 elif self.qwen_enhancer:
                     try:
                         result = self.qwen_enhancer.translate_zh_to_en(text)
-                        used_ai = True
                     except Exception:
                         result = dict_result
                 else:
                     result = dict_result
 
-        # 写入缓存
+        # 写入缓存（设上限,防无限增长）
+        if len(self._cache) > 500:
+            self._cache.clear()
         self._cache[cache_key] = result
 
-        # 🆕 用了 AI 才释放，纯词典不动
-        if used_ai and self.qwen_enhancer is not None:
-            try:
-                if getattr(self.qwen_enhancer, 'model', None) is not None:
-                    self.qwen_enhancer.unload()
-                    print("[TRANS] ✅ Qwen 已释放显存/内存")
-            except Exception as e:
-                print(f"[TRANS] ⚠️ Qwen 释放失败: {e}")
-
+        # 注意：不在这里自动 unload Qwen —— 它是跨线程共享单例,
+        # 自动卸载会与并发的改写/识图线程形成竞态(P1-17)。
         return result
 
     def _calc_hit_rate(self, zh_text: str, en_result: str) -> float:

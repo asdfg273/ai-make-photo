@@ -3,6 +3,7 @@ import gc
 import io
 import datetime
 import threading
+import traceback
 import warnings
 from utils.prompt_enhancer import get_enhancer
 from PIL import Image
@@ -145,8 +146,8 @@ class EventMixin:
         if not data:
             return
         
-        # SDXL 识别：优先用体积，兜底用关键词
-        is_sdxl = data.get("size_gb", 0) > 4.2
+        # SDXL 识别：与 core/model_manager.py 口径一致（体积 4.2~8.0GB,兜底关键词）
+        is_sdxl = 4.2 < data.get("size_gb", 0) < 8.0
         if not is_sdxl:
             name_lower = data["name"].lower()
             is_sdxl = any(k in name_lower for k in ["xl", "sdxl", "pony", "turbo", "lightning"])
@@ -252,31 +253,6 @@ class EventMixin:
 
         self.text_lora_info.setReadOnly(True)
 
-    def read_png_info(self):
-        """从 AI 生成的 PNG 中提取 parameters 元数据"""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择 AI 生成的 PNG", "", "PNG Images (*.png)"
-        )
-        if not path:
-            return
-        try:
-            img  = Image.open(path)
-            info = img.info.get("parameters", "")
-            if not info:
-                QMessageBox.information(self, "提示", "这张图片没有包含 AI 生成参数。")
-                return
-
-            lines = info.split("\n")
-            if lines:
-                self.txt_prompt.setPlainText(lines[0])
-            if len(lines) >= 2 and lines[1].startswith("Negative prompt:"):
-                self.txt_neg.setPlainText(
-                    lines[1].replace("Negative prompt: ", "").strip()
-                )
-            QMessageBox.information(self, "解析成功", "✅ 已成功提取参数！")
-        except Exception as e:
-            QMessageBox.critical(self, "错误", str(e))
-
     def select_image(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "选择底图/遮罩", "",
@@ -375,10 +351,7 @@ class EventMixin:
         except Exception:
             pass
 
-    def stop_generation(self):
-        if self.is_generating:
-            self.cancel_flag = True
-            self._set_status("⚠️ 正在强行刹车，请稍候...", "#f38ba8")
+    # stop_generation 的唯一实现在 utils/app_generation.py (含按钮状态恢复)
 
     def show_preview(self, img_path: str):
         """将图片加载到右侧 GPU 画布并激活操作按钮"""
@@ -759,29 +732,23 @@ class EventMixin:
                 if enhancer.model is None:
                     enhancer.load()
                 result = enhancer.describe_image(img_path, user_hint)
-                self._bridge.enhance_done_signal.emit(result)
+                self._bridge.video_enhance_done_signal.emit(result)
             except Exception as e:
                 traceback.print_exc()
-                self._bridge.enhance_done_signal.emit(f"[识图失败] {e}")
-
-        # 重定向完成信号到视频栏
-        def _apply_vision_result(result: str):
-            if result.startswith("[识图失败]"):
-                self._set_status(result, "#f38ba8")
-            else:
-                self.txt_video_prompt.setPlainText(result.strip())
-                self._set_status("📷 视频识图完成", "#a6e3a1")
-            if hasattr(self, 'btn_vision_video_prompt'):
-                self.btn_vision_video_prompt.setEnabled(True)
-                self.btn_vision_video_prompt.setText("📷 识图生成")
-
-        try:
-            self._bridge.enhance_done_signal.disconnect()
-        except Exception:
-            pass
-        self._bridge.enhance_done_signal.connect(_apply_vision_result)
+                self._bridge.video_enhance_done_signal.emit(f"[识图失败] {e}")
 
         threading.Thread(target=task, daemon=True).start()
+
+    def _on_video_vision_done(self, result: str):
+        """视频 Tab 识图结果回填(独立信号,不动主 Tab 的 enhance_done_signal)"""
+        if result.startswith("[识图失败]"):
+            self._set_status(result, "#f38ba8")
+        else:
+            self.txt_video_prompt.setPlainText(result.strip())
+            self._set_status("📷 视频识图完成", "#a6e3a1")
+        if hasattr(self, 'btn_vision_video_prompt'):
+            self.btn_vision_video_prompt.setEnabled(True)
+            self.btn_vision_video_prompt.setText("📷 识图生成")
 
     def on_enhance_travel_prompts(self):
         """改写所有旅行分段的提示词"""
@@ -867,30 +834,7 @@ class EventMixin:
             self._set_status(
                 f"✅ 已加载角色参考图: {os.path.basename(path)}", "#a6e3a1")
 
-    def on_unload_models(self):
-        """点击'释放内存'按钮"""
-        if self.is_generating:
-            QMessageBox.warning(self, "提示", "请先停止当前生成任务")
-            return
-
-        try:
-            self._set_status("🧹 正在释放模型...", "#fab387")
-            if hasattr(self, 'ai'):
-                self.ai.unload_all()
-            self._set_status("✅ 模型已释放,内存空闲", "#a6e3a1")
-
-            # UI 反馈: 给一个内存占用提示
-            try:
-                import psutil
-                mem = psutil.Process().memory_info().rss / 1024 / 1024
-                print(f"📊 当前内存: {mem:.1f} MB", flush=True)
-            except ImportError:
-                pass
-
-        except Exception as e:
-            QMessageBox.critical(self, "释放失败", str(e))
-
-  
+    # on_unload_models 的唯一实现在 ui/ui_builder.py (MRO 生效版本)
 
     def _on_enhance_done(self, result: str):
         """

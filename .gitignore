@@ -1,4 +1,4 @@
-# ---- ?? ----
+# ---- Python ----
 venv/
 .venv/
 __pycache__/
@@ -6,10 +6,10 @@ __pycache__/
 .claudiaideconfig
 .claude/
 
-# ---- ???????? clone?????----
+# ---- 第三方（需要 clone 的大仓库）----
 third_party/
 
-# ---- ????? ----
+# ---- 模型与权重 ----
 models/*
 !models/.gitkeep
 loras/*
@@ -19,7 +19,7 @@ weights/*
 models_cache/
 tools/
 
-# ---- ??????? ----
+# ---- 大文件扩展名 ----
 *.safetensors
 *.ckpt
 *.pt
@@ -27,7 +27,7 @@ tools/
 *.bin
 *.onnx
 
-# ---- ???? ----
+# ---- 运行产物 ----
 photo/
 output/
 outputs/
@@ -36,7 +36,7 @@ logs/
 *.wav
 *.mp4
 
-# ---- ????? ----
+# ---- 本地配置 ----
 app_config.json
 config.json
 weight.json
@@ -50,9 +50,6 @@ data/app_config.json
 *.suo
 *.user
 
-# ---- ????? ----
+# ---- 用户数据与备份 ----
 data/gallery_favs.json
-
 *.bak
-
-weight.json

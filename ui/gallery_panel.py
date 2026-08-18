@@ -1,4 +1,4 @@
-# utils/gallery.py
+# ui/gallery_panel.py
 import os
 import json
 import shutil
@@ -9,8 +9,10 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
     QLabel, QTextEdit, QDialog, QScrollArea, QFileDialog, QApplication
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPoint
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPoint, QTimer
 from PyQt6.QtGui import QPixmap, QIcon, QWheelEvent
+
+from utils.paths import DATA_DIR
 
 NSFW_KEYWORDS = {
     # 英文
@@ -274,7 +276,7 @@ class GalleryPanel(QWidget):
         self._all_items = []
 
         # 收藏持久化
-        self._favs_path = os.path.join("data", "gallery_favs.json")
+        self._favs_path = os.path.join(DATA_DIR, "gallery_favs.json")
         self._favs = self._load_favs()
 
         root = QVBoxLayout(self)
@@ -291,7 +293,11 @@ class GalleryPanel(QWidget):
             "background:#313244; color:#cdd6f4; border:1px solid #45475a; "
             "padding:6px; border-radius:4px;"
         )
-        self.search_box.textChanged.connect(self._apply_filter)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(300)   # 防抖 300ms
+        self._search_timer.timeout.connect(self._apply_filter)
+        self.search_box.textChanged.connect(self._search_timer.start)
 
         self.btn_clear_search = QPushButton("✖")
         self.btn_clear_search.setToolTip("清空搜索")
@@ -442,13 +448,20 @@ class GalleryPanel(QWidget):
 
     def _add_to_list(self, path: str):
         item = QListWidgetItem()
-        pix = QPixmap(path)
-        if not pix.isNull():
-            icon = QIcon(pix.scaled(
-                110, 110,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            ))
+        # 缩略图缓存：同一路径只解码/缩放一次
+        if not hasattr(self, '_thumb_cache'):
+            self._thumb_cache = {}
+        icon = self._thumb_cache.get(path)
+        if icon is None:
+            pix = QPixmap(path)
+            if not pix.isNull():
+                icon = QIcon(pix.scaled(
+                    110, 110,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                ))
+                self._thumb_cache[path] = icon
+        if icon is not None:
             item.setIcon(icon)
         name = os.path.basename(path)[:20]
         if os.path.abspath(path) in self._favs:

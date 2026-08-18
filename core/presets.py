@@ -343,7 +343,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-USER_PRESETS_FILE = "user_presets.json"
+from utils.paths import PROJECT_ROOT as _PROJECT_ROOT
+
+USER_PRESETS_FILE = os.path.join(_PROJECT_ROOT, "user_presets.json")
 
 # 内置预设保留一份原始拷贝（防止被用户覆盖）
 _BUILTIN_PRESETS = dict(PROMPT_PRESETS)

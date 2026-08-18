@@ -12,6 +12,8 @@ from PIL import Image
 import logging
 logging.getLogger("diffusers.loaders.unet").setLevel(logging.ERROR)
 
+from utils.paths import MODEL_DIR
+
 from diffusers import (
     AnimateDiffPipeline,
     AnimateDiffVideoToVideoPipeline,
@@ -22,8 +24,8 @@ from diffusers import (
     DDIMScheduler,
 )
 
-MOTION_ADAPTER_DIR = "models/motion_adapter"
-MOTION_LORA_DIR    = "models/motion_lora"
+MOTION_ADAPTER_DIR = os.path.join(MODEL_DIR, "motion_adapter")
+MOTION_LORA_DIR    = os.path.join(MODEL_DIR, "motion_lora")
 
 DEFAULT_NEG = (
     "bad hands, bad fingers, extra fingers, missing fingers, deformed hands, "
@@ -47,7 +49,7 @@ class VideoGenerator:
         self.adapter = None
         self.current_adapter_name = None
         self.loaded_motion_loras = []
-        self.ip_adapter_loaded = False
+        self._ipa_loaded = False
 
     # ---------- MotionAdapter ----------
     def _pick_default_adapter(self):
@@ -253,12 +255,12 @@ class VideoGenerator:
 
 
     def _drop_ip_adapter(self):
-        if self.ip_adapter_loaded:
+        if self._ipa_loaded:
             try:
                 self.pipe.unload_ip_adapter()
             except Exception:
                 pass
-            self.ip_adapter_loaded = False
+            self._ipa_loaded = False
 
     # ---------- Prompt Travel ----------
     def _encode_single(self, text):

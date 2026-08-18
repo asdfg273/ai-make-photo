@@ -1,4 +1,4 @@
-# utils/preset_manager.py
+# ui/preset_manager.py
 """
 🎯 预设管理 Mixin
 - 加载/保存用户预设

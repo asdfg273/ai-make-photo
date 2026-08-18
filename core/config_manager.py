@@ -1,12 +1,15 @@
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field
 from typing import List
+
+from utils.paths import CONFIG_FILE
 
 
 @dataclass
 class AppConfig:
-    config_file = "app_config.json"
+    config_file = CONFIG_FILE   # 绝对路径,不依赖 CWD
     
     # 基础参数默认值
     default_steps: int = 30
@@ -58,10 +61,21 @@ class AppConfig:
         return cls()
 
     def save(self):
-        """保存配置到本地"""
+        """保存配置到本地（原子写：先写临时文件再 os.replace，崩溃不写坏）"""
         try:
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.__dict__, f, indent=4, ensure_ascii=False)
+            cfg_dir = os.path.dirname(self.config_file) or "."
+            fd, tmp_path = tempfile.mkstemp(
+                dir=cfg_dir, prefix=".app_config_", suffix=".tmp")
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(self.__dict__, f, indent=4, ensure_ascii=False)
+                os.replace(tmp_path, self.config_file)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             print(f"⚠️ 保存配置失败: {e}")
 
