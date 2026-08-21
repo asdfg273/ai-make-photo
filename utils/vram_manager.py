@@ -36,29 +36,32 @@ class VRAMManager:
         
         total = info["total"]
         logger.info(f"🎮 GPU: {info['name']} ({total:.1f}GB)")
-        
-        # 策略选择
-        if total >= 16:
-            # 高端卡：直接 GPU，全速
+
+        # fp16 权重实际占用：SD1.5 ≈ 2.5GB，SDXL ≈ 7GB
+        # 阈值 = 权重 + 激活值余量
+        gpu_full   = 16.0 if is_sdxl else 6.0   # 全量驻留，无需切片
+        gpu_sliced = 11.0 if is_sdxl else 4.0   #驻留但开切片省激活值
+        offload_min = 5.0 if is_sdxl else 2.5   # 权重放不下，按层搬运
+
+        if total >= gpu_full:
             pipe.to("cuda")
             pipe.enable_vae_tiling()
-            strategy = "🚀 高端模式 (全GPU)"
-        elif total >= 10:
-            # 中端卡：GPU + 少量优化
+            strategy = "🚀 全速模式 (全GPU)"
+        elif total >= gpu_sliced:
             pipe.to("cuda")
-            pipe.enable_vae_tiling()
-            pipe.enable_attention_slicing()
-            strategy = "⚡ 标准模式 (GPU+优化)"
-        elif total >= 6:
-            # 你的 5060 (8GB) → 这里
-            pipe.enable_model_cpu_offload()  # 自动 GPU/CPU 切换
             pipe.enable_vae_tiling()
             pipe.enable_attention_slicing()
             if is_sdxl:
                 pipe.enable_vae_slicing()
-            strategy = "💾 节能模式 (CPU Offload + 内存兜底)"
+            strategy = "⚡ 标准模式 (全GPU+切片)"
+        elif total >= offload_min:
+            pipe.enable_model_cpu_offload()
+            pipe.enable_vae_tiling()
+            pipe.enable_attention_slicing()
+            if is_sdxl:
+                pipe.enable_vae_slicing()
+            strategy = "💾 节能模式 (CPU Offload)"
         else:
-            # 低端卡：Sequential Offload
             pipe.enable_sequential_cpu_offload()
             pipe.enable_vae_tiling()
             pipe.enable_attention_slicing()
