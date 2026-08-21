@@ -10,7 +10,7 @@ from PIL import Image
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from PyQt6.QtGui import QPixmap, QImage, QColor
-from PyQt6.QtCore import Qt,pyqtSlot,QMetaObject
+from PyQt6.QtCore import Qt,pyqtSlot,QMetaObject, QObject,Q_ARG
 from utils.app_utils import OUTPUT_DIR
 from core.presets         import PROMPT_PRESETS
 
