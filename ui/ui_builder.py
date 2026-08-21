@@ -2437,9 +2437,6 @@ class UIBuilderMixin:
         self.lbl_status.setText(text)
         self.lbl_status.setStyleSheet(f"color:{color}; font-family:Consolas;")
 
-    def _set_status(self, text: str, color: str = "#dadbdf"):
-        self.set_status(text, color)
-
     def set_progress(self, value: int):
         self.progress_gen.setValue(value)
 
@@ -2506,10 +2503,18 @@ class UIBuilderMixin:
 
     
     def _on_tts_engine_changed(self, idx):
-        """引擎切换"""
-        is_sovits = (idx == 1)
-        self.wrap_chattts.setVisible(not is_sovits)
-        self.wrap_sovits.setVisible(is_sovits)
+        """引擎切换 → 显示对应参数面板"""
+        engine_text = self.combo_tts_engine.currentText() \
+            if hasattr(self, "combo_tts_engine") else ""
+        is_sovits = "SoVITS" in engine_text
+
+        if hasattr(self, "wrap_chattts"):
+            self.wrap_chattts.setVisible(not is_sovits)
+        if hasattr(self, "wrap_sovits"):
+            self.wrap_sovits.setVisible(is_sovits)
+
+        if not hasattr(self, "lbl_voice_hint"):
+            return
         if is_sovits:
             self.lbl_voice_hint.setText("首次使用会加载 GPT-SoVITS (~2GB 显存,常驻)")
             self.txt_video_voice.setPlaceholderText("输入中文或日文,例如:今日はとても楽しかったです")

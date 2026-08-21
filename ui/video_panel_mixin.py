@@ -706,20 +706,3 @@ class VideoPanelMixin:
                 'weight': item['slider'].value() / 100.0,
             })
         return result
-
-    # ==========================================================
-    #  TTS 引擎切换
-    # ==========================================================
-    def _on_tts_engine_changed(self, idx: int):
-        """切换 TTS 引擎 → 显示对应参数面板"""
-        engine_text = self.combo_tts_engine.currentText() if hasattr(self, "combo_tts_engine") else ""
-        if "SoVITS" in engine_text:
-            if hasattr(self, "wrap_chattts"):
-                self.wrap_chattts.setVisible(False)
-            if hasattr(self, "wrap_sovits"):
-                self.wrap_sovits.setVisible(True)
-        else:
-            if hasattr(self, "wrap_chattts"):
-                self.wrap_chattts.setVisible(True)
-            if hasattr(self, "wrap_sovits"):
-                self.wrap_sovits.setVisible(False)
