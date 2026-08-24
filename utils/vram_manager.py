@@ -45,15 +45,15 @@ class VRAMManager:
 
         if total >= gpu_full:
             pipe.to("cuda")
+            pipe.disable_attention_slicing()   # 清掉可能残留的切片
             pipe.enable_vae_tiling()
             strategy = "🚀 全速模式 (全GPU)"
         elif total >= gpu_sliced:
             pipe.to("cuda")
+            pipe.disable_attention_slicing()
             pipe.enable_vae_tiling()
-            pipe.enable_attention_slicing()
-            if is_sdxl:
-                pipe.enable_vae_slicing()
-            strategy = "⚡ 标准模式 (全GPU+切片)"
+            pipe.enable_vae_slicing()          # VAE 切片对两种模型都有效且无副作用
+            strategy = "⚡ 标准模式 (全GPU+VAE切片)"
         elif total >= offload_min:
             pipe.enable_model_cpu_offload()
             pipe.enable_vae_tiling()
@@ -96,3 +96,45 @@ class VRAMManager:
                 f"📊 显存: {info['used']:.2f}/{info['total']:.2f}GB "
                 f"(剩 {info['free']:.2f}GB)"
             )
+
+    @staticmethod
+    def tune_for_resolution(pipe, width, height, is_sdxl=False):
+        """
+        根据实际出图分辨率二次调整显存策略。
+        apply_optimal_strategy 在加载时只看模型类型，
+        此处补上分辨率这一维度。
+        """
+        import torch
+        if not torch.cuda.is_available():
+            return "CPU 模式"
+
+        pixels = width * height
+        total = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+
+        # 像素量阈值：512x512=0.26M, 768x768=0.59M, 1024x1024=1.05M
+        base = 0.55 if is_sdxl else 0.70      # SDXL 同尺寸开销更大，阈值提前
+        heavy = pixels >= (base * 1_048_576)
+
+        notes = []
+        if heavy and total < 12.0:
+            # torch2.x SDPA 已是 O(N) 显存，切片反而退化成朴素实现
+            try:
+                pipe.disable_attention_slicing()
+                notes.append("SDPA 全速")
+            except Exception:
+                pass
+            try:
+                pipe.enable_vae_tiling()
+                notes.append("VAE 分块")
+            except Exception:
+                pass
+        else:
+            try:
+                pipe.disable_attention_slicing()
+            except Exception:
+                pass
+
+        tag = "大图节省" if heavy else "小图全速"
+        msg = f"{tag} ({width}x{height})" + (f" → {' + '.join(notes)}" if notes else "")
+        print(f"🎯 分辨率策略: {msg}")
+        return msg
