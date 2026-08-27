@@ -60,9 +60,6 @@ class ModelManager(metaclass=SingletonMeta):
         self.depth_estimator    = None
         self.loaded_controlnets = {}
         self.current_cn_type    = None
-        self.compel_txt2img = None
-        self.compel_img2img = None
-        self.compel_controlnet = None
         # ★ IP-Adapter 状态
         self.ip_adapter_loaded   = False
         self.ip_adapter_variant  = None
@@ -301,28 +298,10 @@ class ModelManager(metaclass=SingletonMeta):
             logger.info(f"✅ {model_type} 模型加载与显存优化完成！")
 
             # ========== Compel 长提示词（仅 SD1.5/SDXL）==========
-            if not (self.is_sd3 or self.is_flux):
-                self.compel_txt2img = Compel(
-                    tokenizer=self.txt2img_pipe.tokenizer,
-                    text_encoder=self.txt2img_pipe.text_encoder,
-                )
-                if self.img2img_pipe:
-                    self.compel_img2img = Compel(
-                        tokenizer=self.img2img_pipe.tokenizer,
-                        text_encoder=self.img2img_pipe.text_encoder,
-                    )
-                if getattr(self, 'controlnet_pipe', None):
-                    self.compel_controlnet = Compel(
-                        tokenizer=self.controlnet_pipe.tokenizer,
-                        text_encoder=self.controlnet_pipe.text_encoder,
-                    )
-                logger.info("✅ Compel 长提示词支持已启用")
-            else:
-                # SD3/Flux 原生支持长提示词，不需要 Compel
-                self.compel_txt2img = None
-                self.compel_img2img = None
-                logger.info(f"✅ {model_type} 原生支持长提示词")
-
+            self.compel_txt2img    = None
+            self.compel_img2img    = None
+            self.compel_controlnet = None
+            
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -766,11 +745,12 @@ class ModelManager(metaclass=SingletonMeta):
     # ------------------------------------------------------------
     #  提示词编码 (Compel,支持 SD1.5 / SDXL)
     # ------------------------------------------------------------
-    def encode_prompt(self, prompt, negative_prompt):
+    def encode_prompt(self, prompt, negative_prompt, pipe=None):
         if not self.txt2img_pipe:
             return {}
 
-        pipe = self.txt2img_pipe
+        if pipe is None:
+            pipe = self.txt2img_pipe
 
         if hasattr(pipe, "text_encoder") and pipe.text_encoder:
             pipe.text_encoder.to(self.device)
@@ -791,6 +771,7 @@ class ModelManager(metaclass=SingletonMeta):
                     ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED,
                 requires_pooled=[False, True],
                 device=self.device,
+                truncate_long_prompts = False,
             )
             prompt_embeds, pooled     = compel(prompt)
             neg_embeds,    neg_pooled = compel(negative_prompt)
@@ -809,6 +790,7 @@ class ModelManager(metaclass=SingletonMeta):
                 tokenizer    = pipe.tokenizer,
                 text_encoder = pipe.text_encoder,
                 device       = self.device,
+                truncate_long_prompts = False,
             )
             prompt_embeds = compel(prompt)
             neg_embeds    = compel(negative_prompt)

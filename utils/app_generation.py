@@ -739,53 +739,25 @@ class GenerationMixin:
                     pipe.set_ip_adapter_scale(ctx.get('ipa_scale', 0.6))
                 except Exception:
                     pass
-
-        if 'prompt' in call_kwargs and call_kwargs['prompt']:
-            compel = None
-        
-            # 根据 pipe 类型选择对应的 Compel 实例
-            if pipe == self.ai.txt2img_pipe:
-                compel = getattr(self.ai, 'compel_txt2img', None)
-            elif pipe == self.ai.img2img_pipe:
-                compel = getattr(self.ai, 'compel_img2img', None)
-            elif pipe == self.ai.controlnet_pipe:
-                compel = getattr(self.ai, 'compel_controlnet', None)
-        
-            if compel is not None:
-                try:
-                    is_sdxl = getattr(self.ai, 'is_sdxl', False)
-                    neg = call_kwargs.get('negative_prompt') or None
-
-                    if is_sdxl:
-                        pe, ppe = compel(call_kwargs['prompt'])
-                        if neg:
-                            ne, npe = compel(neg)
-                            pe, ne = compel.pad_conditioning_tensors_to_same_length([pe, ne])
-                            call_kwargs['negative_prompt_embeds'] = ne
-                            call_kwargs['negative_pooled_prompt_embeds'] = npe
-                            call_kwargs.pop('negative_prompt')
-                        call_kwargs['prompt_embeds'] = pe
-                        call_kwargs['pooled_prompt_embeds'] = ppe
-                    else:
-                        pe = compel(call_kwargs['prompt'])
-                        if neg:
-                            ne = compel(neg)
-                            pe, ne = compel.pad_conditioning_tensors_to_same_length([pe, ne])
-                            call_kwargs['negative_prompt_embeds'] = ne
-                            call_kwargs.pop('negative_prompt')
-                        call_kwargs['prompt_embeds'] = pe
-
-                    call_kwargs.pop('prompt')
+  
+        if call_kwargs.get('prompt'):
+            try:
+                embeds = self.ai.encode_prompt(
+                    call_kwargs['prompt'],
+                    call_kwargs.get('negative_prompt') or "",
+                )
+                if embeds and embeds.get('prompt_embeds') is not None:
+                    call_kwargs.pop('prompt', None)
+                    call_kwargs.pop('negative_prompt', None)
+                    call_kwargs.update(embeds)
                     logger.info(
-                        f"✅ Compel 生效（{'SDXL 双编码器' if is_sdxl else 'SD1.5'}），"
-                        f"embeds 形状 {tuple(pe.shape)}"
+                        f"✅ Compel 生效（{'SDXL' if self.ai.is_sdxl else 'SD1.5'}），"
+                        f"embeds {tuple(embeds['prompt_embeds'].shape)}"
                     )
-                except Exception as e:
-                    logger.warning(f"⚠️ Compel 处理失败，降级为截断: {e}")
-                    call_kwargs.pop('prompt_embeds', None)
-                    call_kwargs.pop('pooled_prompt_embeds', None)
-                    call_kwargs.pop('negative_prompt_embeds', None)
-                    call_kwargs.pop('negative_pooled_prompt_embeds', None)
+                else:
+                    logger.info("ℹ️ Compel 未返回 embeds，使用原始提示词")
+            except Exception as e:
+                logger.warning(f"Compel 编码失败，回退原始提示词: {e}")
 
         try:
             output = pipe(**call_kwargs)
@@ -901,6 +873,12 @@ class GenerationMixin:
             embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
         else:
             embed_kwargs = self.ai.encode_prompt(en_prompt, en_neg)
+            pe = embed_kwargs.get('prompt_embeds') if embed_kwargs else None
+            if pe is not None:
+                logger.info(f"✅ Compel 生效，embeds {tuple(pe.shape)}")
+            else:
+                logger.warning("⚠️ Compel 未生效，回退原始提示词（会截断到 77 token）")
+                embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
 
         # ETA 回调
         cur_prompt = ctx['en_prompts'][i] if i < len(ctx['en_prompts']) else ""

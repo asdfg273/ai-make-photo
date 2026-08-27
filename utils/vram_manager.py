@@ -46,33 +46,22 @@ class VRAMManager:
         if total >= gpu_full:
             pipe.to("cuda")
             pipe.disable_attention_slicing()   # 清掉可能残留的切片
-            pipe.enable_vae_tiling()
             strategy = "🚀 全速模式 (全GPU)"
         elif total >= gpu_sliced:
             pipe.to("cuda")
-            pipe.disable_attention_slicing()
-            pipe.enable_vae_tiling()
+            pipe.disable_attention_slicing()            
             pipe.enable_vae_slicing()          # VAE 切片对两种模型都有效且无副作用
             strategy = "⚡ 标准模式 (全GPU+VAE切片)"
         elif total >= offload_min:
             pipe.enable_model_cpu_offload()
-            pipe.enable_vae_tiling()
             pipe.enable_attention_slicing()
             if is_sdxl:
                 pipe.enable_vae_slicing()
             strategy = "💾 节能模式 (CPU Offload)"
         else:
             pipe.enable_sequential_cpu_offload()
-            pipe.enable_vae_tiling()
             pipe.enable_attention_slicing()
             strategy = "🐢 极限模式 (Sequential Offload)"
-        
-        # xformers（如果有）
-        try:
-            pipe.enable_xformers_memory_efficient_attention()
-            strategy += " + xFormers"
-        except Exception:
-            pass
         
         logger.info(f"✅ 策略: {strategy}")
         return strategy
@@ -116,6 +105,14 @@ class VRAMManager:
         heavy = pixels >= (base * 1_048_576)
 
         notes = []
+        try:
+            pipe.disable_vae_tiling()
+        except Exception:
+            pass
+        try:
+            pipe.enable_vae_slicing()   # 按 batch 逐张，无副作用
+        except Exception:
+            pass
         if heavy and total < 12.0:
             # torch 2.x SDPA 已是 O(N) 显存，切片反而退化成朴素实现
             try:
