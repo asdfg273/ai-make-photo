@@ -2,7 +2,8 @@
 # ============================================================
 #  PyQt6 主入口 — AI 绘画工作站 v5.0
 # ============================================================
-
+import warnings
+warnings.simplefilter("always", RuntimeWarning)
 import os
 import sys
 

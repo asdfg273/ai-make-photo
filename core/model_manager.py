@@ -295,6 +295,7 @@ class ModelManager(metaclass=SingletonMeta):
             self.current_model_name = model_name
             self.current_lora_name  = None
             self._compel_cache.clear()
+            self._force_fp32_vae(self.txt2img_pipe)
             logger.info(f"✅ {model_type} 模型加载与显存优化完成！")
 
             # ========== Compel 长提示词（仅 SD1.5/SDXL）==========
@@ -1063,3 +1064,29 @@ class ModelManager(metaclass=SingletonMeta):
             requires_safety_checker=False,
         )
         self.reference_pipe.to(self.device)
+
+
+    def _force_fp32_vae(self, pipe):
+        vae = pipe.vae
+        if getattr(vae, '_fp32_patched', False):
+            return
+        # 记录 UNet 的 dtype，encode 结果要转回它
+        _dt = pipe.unet.dtype
+        vae.to(torch.float32)
+
+        _dec, _enc = vae.decode, vae.encode
+
+        def decode(z, *a, **k):
+            return _dec(z.to(torch.float32), *a, **k)
+
+        def encode(x, *a, **k):
+            out = _enc(x.to(torch.float32), *a, **k)
+            dist = getattr(out, 'latent_dist', None)
+            if dist is not None:
+                # 用同一个类重建，参数转回 fp16 → sample() 出 fp16 latents
+                out.latent_dist = type(dist)(dist.parameters.to(_dt))
+            return out
+
+        vae.decode, vae.encode = decode, encode
+        vae._fp32_patched = True
+        logger.info(f"🛡️ VAE 已升 fp32（encode 输出转回 {_dt}）")

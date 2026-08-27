@@ -120,8 +120,9 @@ class VRAMManager:
             except Exception:
                 pass
             try:
-                pipe.enable_vae_tiling()
-                notes.append("VAE 分块")
+                pipe.disable_vae_tiling()
+                pipe.enable_vae_slicing()      # slicing 按 batch 切，不产生空间 tile 边界
+                notes.append("VAE 切片(非分块)")
             except Exception:
                 pass
 

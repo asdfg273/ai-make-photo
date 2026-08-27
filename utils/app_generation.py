@@ -465,6 +465,8 @@ class GenerationMixin:
             finally:
                 try:
                     enhancer.unload()
+                    if hasattr(self, 'translator') and hasattr(self.translator, 'qwen_enhancer'):
+                        self.translator.qwen_enhancer = None
                 except Exception:
                     pass
             if new_prompt and new_prompt.strip():
@@ -891,6 +893,10 @@ class GenerationMixin:
                 raise InterruptedError()
             done = step_index + 1
             self._bridge.sub_prog_signal.emit(done, _steps)
+            _lat = callback_kwargs.get('latents') if callback_kwargs else None
+            if _lat is not None and not torch.isfinite(_lat).all():
+                logger.error(f"💥 latents 在第 {step_index+1} 步出现 NaN/Inf")
+
             if done == 1 or done == _steps or done % 3 == 0:
                 elapsed = time.time() - _t0
                 eta = (elapsed / done) * (_steps - done) if done > 0 else 0
@@ -944,8 +950,9 @@ class GenerationMixin:
                 face_str    = self._sld(getattr(self, 'scale_adetailer_strength', None))
     
                 # 🔧 ADetailer 前临时禁用 IPA (避免污染)
+   
                 saved_scale, has_ipa = self._adetailer_disable_ipa()
-    
+                had_tiling = self._adetailer_disable_vae_tiling()
                 try:
                     with performance_timer("ADetailer 脸部"):
                         image = process_adetailer(
@@ -953,6 +960,7 @@ class GenerationMixin:
                             en_prompt, en_neg,
                             strength=face_str, target=face_target)
                 finally:
+                    self._adetailer_restore_vae_tiling(had_tiling)
                     self._adetailer_restore_ipa(saved_scale, has_ipa)
 
             # ── 阶段 4: ADetailer 手部 ──
@@ -966,7 +974,7 @@ class GenerationMixin:
     
                 # 🔧 ADetailer 前临时禁用 IPA
                 saved_scale, has_ipa = self._adetailer_disable_ipa()
-    
+                had_tiling = self._adetailer_disable_vae_tiling()
                 try:
                     with performance_timer("ADetailer 手部"):
                         original_image = image.copy()
@@ -974,9 +982,9 @@ class GenerationMixin:
                             image, self.ai.inpaint_pipe,
                             en_prompt, en_neg,
                             strength=hand_str, target=hand_target)
-                        image = Image.blend(original_image, repaired_image,
-                                            alpha=blend_ratio)
+                        image = Image.blend(original_image, repaired_image, alpha=blend_ratio)
                 finally:
+                    self._adetailer_restore_vae_tiling(had_tiling)
                     self._adetailer_restore_ipa(saved_scale, has_ipa)
 
         # 确保 RGB
@@ -984,6 +992,10 @@ class GenerationMixin:
             raise RuntimeError(f"image 类型异常: {type(image)}")
         if image.mode != "RGB":
             image = image.convert("RGB")
+        import numpy as np
+        _arr = np.asarray(image)
+        logger.info(f"🔬 图像 max={_arr.max()} mean={_arr.mean():.2f}")
+
         return image
 
     def _gt_run_base_pipe(self, ctx, kwargs):
@@ -1194,6 +1206,20 @@ class GenerationMixin:
     
         return saved_scale, has_ipa
 
+    def _adetailer_disable_vae_tiling(self):
+        pipe = getattr(self.ai, 'inpaint_pipe', None)
+        if pipe and hasattr(pipe, 'vae'):
+            had = getattr(pipe.vae, '_tiling', False)
+            if had:
+                pipe.disable_vae_tiling()
+            return had
+        return False
+
+    def _adetailer_restore_vae_tiling(self, had):
+        if had:
+            pipe = getattr(self.ai, 'inpaint_pipe', None)
+            if pipe:
+                pipe.enable_vae_tiling()
 
     def _adetailer_restore_ipa(self, saved_scale, has_ipa):
         """ADetailer 跑完后恢复 IPA scale"""
