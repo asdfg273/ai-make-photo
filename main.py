@@ -437,6 +437,24 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
             self._enhance_thread.quit()
             self._enhance_thread.wait(2000)
 
+        t = getattr(self, '_gen_thread', None)
+        if t and t.is_alive():
+            from PyQt6.QtWidgets import QMessageBox
+            r = QMessageBox.question(
+                self, "生成进行中",
+                "还有生成任务未完成，强制退出可能损坏输出文件。\n确定退出？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if r != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            logger.warning("⚠️ 用户强制退出，正在中断生成…")
+            self.cancel_flag = True          # ← 关键：让 step_cb 抛 InterruptedError
+            t.join(timeout=10)
+            if t.is_alive():
+                logger.warning("⚠️ 线程未在 10 秒内退出，强制关闭")
+
         event.accept()
 
     # ==========================================================

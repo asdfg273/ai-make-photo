@@ -204,8 +204,8 @@ class GenerationMixin:
         if hasattr(self, 'btn_stop'): self.btn_stop.setEnabled(True)
         if hasattr(self, 'btn_edit'): self.btn_edit.setEnabled(False)
 
-        threading.Thread(target=self.generation_task, daemon=True).start()
-
+        self._gen_thread = threading.Thread(target=self.generation_task, daemon=True)
+        self._gen_thread.start()
     # ==================================================================
     #  主生成任务
     # ==================================================================
@@ -376,6 +376,7 @@ class GenerationMixin:
         auto_extract = self._chk(getattr(self, 'chk_auto_features', None))
 
         if ref_img is not None and auto_extract:
+
             try:
                 from utils.prompt_enhancer import PromptEnhancer
                 enhancer = (PromptEnhancer.instance()
@@ -752,20 +753,39 @@ class GenerationMixin:
         
             if compel is not None:
                 try:
-                    # 正向提示词
-                    prompt_embeds = compel(call_kwargs['prompt'])
-                    call_kwargs['prompt_embeds'] = prompt_embeds
-                    call_kwargs.pop('prompt')  # 删掉原始 prompt
-                
-                    # 负向提示词
-                    if 'negative_prompt' in call_kwargs and call_kwargs['negative_prompt']:
-                        neg_embeds = compel(call_kwargs['negative_prompt'])
-                        call_kwargs['negative_prompt_embeds'] = neg_embeds
-                        call_kwargs.pop('negative_prompt')
-                
-                    logger.info(f"✅ Compel 已处理长提示词 ({prompt_embeds.shape[1]} tokens)")
+                    is_sdxl = getattr(self.ai, 'is_sdxl', False)
+                    neg = call_kwargs.get('negative_prompt') or None
+
+                    if is_sdxl:
+                        pe, ppe = compel(call_kwargs['prompt'])
+                        if neg:
+                            ne, npe = compel(neg)
+                            pe, ne = compel.pad_conditioning_tensors_to_same_length([pe, ne])
+                            call_kwargs['negative_prompt_embeds'] = ne
+                            call_kwargs['negative_pooled_prompt_embeds'] = npe
+                            call_kwargs.pop('negative_prompt')
+                        call_kwargs['prompt_embeds'] = pe
+                        call_kwargs['pooled_prompt_embeds'] = ppe
+                    else:
+                        pe = compel(call_kwargs['prompt'])
+                        if neg:
+                            ne = compel(neg)
+                            pe, ne = compel.pad_conditioning_tensors_to_same_length([pe, ne])
+                            call_kwargs['negative_prompt_embeds'] = ne
+                            call_kwargs.pop('negative_prompt')
+                        call_kwargs['prompt_embeds'] = pe
+
+                    call_kwargs.pop('prompt')
+                    logger.info(
+                        f"✅ Compel 生效（{'SDXL 双编码器' if is_sdxl else 'SD1.5'}），"
+                        f"embeds 形状 {tuple(pe.shape)}"
+                    )
                 except Exception as e:
-                    logger.warning(f"⚠️ Compel 处理失败,降级为截断: {e}")
+                    logger.warning(f"⚠️ Compel 处理失败，降级为截断: {e}")
+                    call_kwargs.pop('prompt_embeds', None)
+                    call_kwargs.pop('pooled_prompt_embeds', None)
+                    call_kwargs.pop('negative_prompt_embeds', None)
+                    call_kwargs.pop('negative_pooled_prompt_embeds', None)
 
         try:
             output = pipe(**call_kwargs)
