@@ -5,6 +5,9 @@ from dataclasses import dataclass, field
 from typing import List
 
 from utils.paths import CONFIG_FILE
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,7 +60,7 @@ class AppConfig:
                             setattr(config, key, value)
                     return config
             except Exception as e:
-                print(f"⚠️ 配置文件加载失败: {e}，将使用默认配置")
+                logger.warning(f"⚠️ 配置文件加载失败: {e}，将使用默认配置")
         return cls()
 
     def save(self):
@@ -77,7 +80,7 @@ class AppConfig:
                     pass
                 raise
         except Exception as e:
-            print(f"⚠️ 保存配置失败: {e}")
+            logger.warning(f"⚠️ 保存配置失败: {e}")
 
     def add_recent_model(self, model_name):
         if model_name and model_name not in self.recent_models:

@@ -22,6 +22,9 @@ from .mixin_history import HistoryMixin
 from .mixin_filters import FiltersMixin
 from .mixin_ai      import AIToolsMixin
 from .mixin_tools   import ToolsEventsMixin
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ── PIL → QPixmap ────────────────────────────────────────────
@@ -97,7 +100,6 @@ class ProImageEditor(
         self.original_full_img.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
         self.base_img        = self.original_full_img.copy()
         self.current_img     = self.base_img.copy()
-        self.filter_base_img = self.base_img.copy()
         self.original_img    = self.original_full_img.copy()
         self.mask_img        = Image.new("L", self.base_img.size, 0)
 
@@ -113,12 +115,14 @@ class ProImageEditor(
         self.text_size           = 40
         self.draw_mode           = False
         self.is_mask_brush       = False
+        self.pick_mode           = False
         self.brush_color         = "#ff0000"
         self.is_eraser           = False
         self.adjust_vars         = {}
         self.adjust_timer: QTimer | None = None
         self._adetailer_running  = False
         self._last_draw_pos      = None
+        self._filter_anchor      = None   # 滤镜叠加前的基图(选「无」时还原)
 
         # ── 构建 UI ────────────────────────────────────────
         self._setup_ui()
@@ -136,6 +140,38 @@ class ProImageEditor(
         QShortcut(QKeySequence("Ctrl+S"),  self).activated.connect(self.save_and_return)
         QShortcut(QKeySequence("Escape"),  self).activated.connect(self._cancel_any_mode)
         QShortcut(QKeySequence("F11"),     self).activated.connect(self._toggle_fullscreen)
+        QShortcut(QKeySequence("Ctrl+0"),  self).activated.connect(self._reset_view)
+        QShortcut(QKeySequence("["),       self).activated.connect(
+            lambda: self._nudge_brush(-2))
+        QShortcut(QKeySequence("]"),       self).activated.connect(
+            lambda: self._nudge_brush(+2))
+
+    def _reset_view(self):
+        if hasattr(self, "canvas"):
+            self.canvas.reset_view()
+            self.lbl_status.setText("⛶ 视图已适配窗口")
+            self.lbl_status.setStyleSheet("color:#89dceb; font-size:13px;")
+
+    def _toggle_grid(self):
+        on = self.canvas.toggle_grid()
+        self.lbl_status.setText("▦ 构图网格已开启" if on else "▦ 构图网格已关闭")
+        self.lbl_status.setStyleSheet("color:#89dceb; font-size:13px;")
+
+    def _compare_on(self):
+        """按住:显示原图"""
+        self.update_canvas(self.original_img, force=True)
+
+    def _compare_off(self):
+        """松开:回到当前编辑结果(遮罩模式下恢复红色叠加预览)"""
+        if self.is_mask_brush and self.mask_img.getextrema() != (0, 0):
+            self._overlay_mask()
+        else:
+            self.update_canvas(self.current_img, force=True)
+
+    def _nudge_brush(self, delta: int):
+        sld = self.sld_brush_size
+        sld.setValue(max(sld.minimum(), min(sld.maximum(),
+                                            sld.value() + delta)))
 
     def _toggle_fullscreen(self):
         if self.isMaximized():
@@ -198,10 +234,31 @@ class ProImageEditor(
         bar.addWidget(self.lbl_status)
         bar.addStretch()
 
+        # 按住对比原图
+        btn_compare = _make_btn("👁 按住对比原图", color="#313244")
+        btn_compare.pressed.connect(self._compare_on)
+        btn_compare.released.connect(self._compare_off)
+        bar.addWidget(btn_compare)
+
+        # 构图网格
+        btn_grid = _make_btn("▦ 网格", color="#313244")
+        btn_grid.clicked.connect(self._toggle_grid)
+        bar.addWidget(btn_grid)
+
         # 全屏按钮
         btn_fs = _make_btn("⛶ 全屏 (F11)", color="#313244")
         btn_fs.clicked.connect(self._toggle_fullscreen)
         bar.addWidget(btn_fs)
+
+        # 视图适配
+        btn_fit = _make_btn("🖼 适配 (Ctrl+0)", color="#313244")
+        btn_fit.clicked.connect(self._reset_view)
+        bar.addWidget(btn_fit)
+
+        # 另存为
+        btn_export = _make_btn("📤 另存为…", color="#313244")
+        btn_export.clicked.connect(self.export_image_as)
+        bar.addWidget(btn_export)
 
         btn_save = QPushButton("💾 保存并返回 (Ctrl+S)")
         btn_save.setStyleSheet(
@@ -252,7 +309,7 @@ class ProImageEditor(
         layout.addLayout(row2)
 
         # ── ✅ 画笔大小 — 改为滑块 ────────────────────────
-        layout.addWidget(self._sec("🔘 画笔大小"))
+        layout.addWidget(self._sec("🔘 画笔大小  ( [ / ] 微调 )"))
         brush_row = QHBoxLayout()
         self.sld_brush_size = _make_slider(1, 150, 20)
         self.lbl_brush_val  = QLabel("20 px")
@@ -264,6 +321,35 @@ class ProImageEditor(
         brush_row.addWidget(self.sld_brush_size)
         brush_row.addWidget(self.lbl_brush_val)
         layout.addLayout(brush_row)
+
+        # ── 画笔不透明度 ──────────────────────────────────
+        layout.addWidget(self._sec("💧 画笔不透明度"))
+        op_row = QHBoxLayout()
+        self.sld_brush_opacity = _make_slider(5, 100, 100)
+        self.lbl_opacity_val   = QLabel("100%")
+        self.lbl_opacity_val.setFixedWidth(45)
+        self.lbl_opacity_val.setStyleSheet("color:#cdd6f4; font-size:12px;")
+        self.sld_brush_opacity.valueChanged.connect(
+            lambda v: self.lbl_opacity_val.setText(f"{v}%")
+        )
+        op_row.addWidget(self.sld_brush_opacity)
+        op_row.addWidget(self.lbl_opacity_val)
+        layout.addLayout(op_row)
+
+        # ── 画笔硬度(柔边) ────────────────────────────────
+        layout.addWidget(self._sec("✒️ 画笔硬度"))
+        hd_row = QHBoxLayout()
+        self.sld_brush_hardness = _make_slider(0, 100, 100)
+        self.lbl_hardness_val   = QLabel("硬边")
+        self.lbl_hardness_val.setFixedWidth(45)
+        self.lbl_hardness_val.setStyleSheet("color:#cdd6f4; font-size:12px;")
+        self.sld_brush_hardness.valueChanged.connect(
+            lambda v: self.lbl_hardness_val.setText(
+                "硬边" if v >= 100 else ("柔边" if v <= 30 else f"{v}"))
+        )
+        hd_row.addWidget(self.sld_brush_hardness)
+        hd_row.addWidget(self.lbl_hardness_val)
+        layout.addLayout(hd_row)
 
         # ── 文字大小 ───────────────────────────────────────
         layout.addWidget(self._sec("🔤 文字大小"))
@@ -280,11 +366,14 @@ class ProImageEditor(
         cr = QHBoxLayout()
         btn_pc = _make_btn("画笔颜色")
         btn_pc.clicked.connect(self.pick_color)
+        btn_drop = _make_btn("💧 吸管", tip="点击画布取样画笔颜色")
+        btn_drop.clicked.connect(self.toggle_eyedropper)
         self.color_preview = QLabel()
         self.color_preview.setFixedSize(26, 26)
         self.color_preview.setStyleSheet(
             f"background:{self.brush_color}; border-radius:4px;")
         cr.addWidget(btn_pc)
+        cr.addWidget(btn_drop)
         cr.addWidget(self.color_preview)
         layout.addLayout(cr)
 
@@ -317,6 +406,58 @@ class ProImageEditor(
         t2.addWidget(brl); t2.addWidget(brr)
         layout.addLayout(t2)
 
+        # 任意角度旋转
+        t3 = QHBoxLayout()
+        self.spin_rotate_angle = QSpinBox()
+        self.spin_rotate_angle.setRange(-180, 180)
+        self.spin_rotate_angle.setValue(0)
+        self.spin_rotate_angle.setSuffix(" °")
+        self.spin_rotate_angle.setStyleSheet(self._input_style())
+        bra = _make_btn("↻ 应用角度")
+        bra.clicked.connect(self.rotate_image_any)
+        t3.addWidget(self.spin_rotate_angle)
+        t3.addWidget(bra)
+        layout.addLayout(t3)
+
+        # 等比缩放
+        brs = _make_btn("📐 缩放到长边…",
+                        tip="等比缩放到 512/768/1024 等 SD 常用尺寸")
+        brs.clicked.connect(self.resize_dialog)
+        layout.addWidget(brs)
+
+        # ── 遮罩操作 ───────────────────────────────────────
+        layout.addWidget(self._sec("🔴 遮罩操作"))
+        m1 = QHBoxLayout()
+        bmc = _make_btn("🧹 清除遮罩")
+        bmi = _make_btn("🔁 反转遮罩")
+        bmc.clicked.connect(self.clear_mask)
+        bmi.clicked.connect(self.invert_mask)
+        m1.addWidget(bmc); m1.addWidget(bmi)
+        layout.addLayout(m1)
+
+        # 羽化半径 + 应用
+        mf_row = QHBoxLayout()
+        self.sld_mask_feather = _make_slider(0, 30, 4)
+        self.lbl_mask_feather = QLabel("4 px")
+        self.lbl_mask_feather.setFixedWidth(40)
+        self.lbl_mask_feather.setStyleSheet("color:#cdd6f4; font-size:11px;")
+        self.sld_mask_feather.valueChanged.connect(
+            lambda v: self.lbl_mask_feather.setText(f"{v} px"))
+        bmf = _make_btn("🌫 羽化")
+        bmf.clicked.connect(lambda: self.feather_mask())
+        mf_row.addWidget(self.sld_mask_feather)
+        mf_row.addWidget(self.lbl_mask_feather)
+        mf_row.addWidget(bmf)
+        layout.addLayout(mf_row)
+
+        m2 = QHBoxLayout()
+        bmg = _make_btn("➕ 扩边 4px")
+        bms = _make_btn("➖ 收缩 4px")
+        bmg.clicked.connect(lambda: self.grow_mask(4))
+        bms.clicked.connect(lambda: self.shrink_mask(4))
+        m2.addWidget(bmg); m2.addWidget(bms)
+        layout.addLayout(m2)
+
         # ── 历史 ───────────────────────────────────────────
         layout.addWidget(self._sec("⏪ 历史 (Ctrl+Z/Y)"))
         h1 = QHBoxLayout()
@@ -327,12 +468,14 @@ class ProImageEditor(
         h1.addWidget(bu); h1.addWidget(br)
         layout.addLayout(h1)
 
-        # ── ✅ 调色滑块（完整 5 项）─────────────────────────
+        # ── ✅ 调色滑块（7 项）─────────────────────────
         layout.addWidget(self._sec("🎛 色彩调整"))
         adj_cfg = [
             ("brightness", "☀ 亮度",   -100, 100, 0),
             ("contrast",   "◑ 对比度", -100, 100, 0),
             ("saturation", "🌈 饱和度", -100, 100, 0),
+            ("exposure",   "🔆 曝光",   -100, 100, 0),
+            ("hue",        "🎨 色相",   -100, 100, 0),
             ("sharpness",  "🔪 锐度",   -100, 100, 0),
             ("temperature","🌡 色温",   -100, 100, 0),
         ]
@@ -358,13 +501,15 @@ class ProImageEditor(
         btn_reset_adj.clicked.connect(self.reset_adjustments)
         layout.addWidget(btn_reset_adj)
 
-        # ── ✅ 滤镜面板（完整 12 种）──────────────────────
+        # ── ✅ 滤镜面板（18 种）──────────────────────────
         layout.addWidget(self._sec("✨ 预设滤镜"))
         self.filter_combo = QComboBox()
         self.filter_combo.addItems([
             "无", "黑白", "复古", "冷色调", "暖色调",
             "胶片颗粒", "模糊", "浮雕", "边缘检测",
             "轮廓", "锐化", "油画",
+            "负片", "像素化", "晕影", "色调分离",
+            "素描", "卡通",
         ])
         self.filter_combo.setStyleSheet(
             "QComboBox { background:#313244; color:#cdd6f4; "
@@ -376,8 +521,8 @@ class ProImageEditor(
         )
         layout.addWidget(self.filter_combo)
 
-        # 模糊半径（模糊滤镜专用）
-        layout.addWidget(self._sec_small("🌫 模糊半径"))
+        # 滤镜强度（模糊半径 / 像素化块大小）
+        layout.addWidget(self._sec_small("🌫 滤镜强度 (模糊/像素化)"))
         blur_row = QHBoxLayout()
         self.blur_scale = _make_slider(0, 20, 2)
         self.lbl_blur_val = QLabel("2")
@@ -433,28 +578,46 @@ class ProImageEditor(
         self.canvas.set_pixmap(_pil_to_qpixmap(pil_img))
 
     # ----------------------------------------------------------
+    #  另存为(直接导出当前编辑结果,不影响回调流程)
+    # ----------------------------------------------------------
+    def export_image_as(self):
+        from PyQt6.QtWidgets import QFileDialog
+        import os
+        base = os.path.splitext(os.path.basename(self.image_path))[0]
+        path, _ = QFileDialog.getSaveFileName(
+            self, "另存为", f"{base}_edited.png",
+            "PNG 图片 (*.png);;JPEG 图片 (*.jpg);;所有文件 (*)",
+        )
+        if not path:
+            return
+        try:
+            img = self.current_img
+            if path.lower().endswith((".jpg", ".jpeg")):
+                img = img.convert("RGB")
+            img.save(path)
+            self.lbl_status.setText(f"📤 已导出: {os.path.basename(path)}")
+            self.lbl_status.setStyleSheet("color:#a6e3a1; font-size:13px;")
+        except Exception as e:
+            self.lbl_status.setText(f"❌ 导出失败: {e}")
+            self.lbl_status.setStyleSheet("color:#f38ba8; font-size:13px;")
+
+    # ----------------------------------------------------------
     #  保存
     # ----------------------------------------------------------
     def save_and_return(self):
         if self.text_element:
             self._commit_text_to_image()
 
-        print(f"[DEBUG] mask extrema = {self.mask_img.getextrema()}, "
-              f"size = {self.mask_img.size}")
-        self.mask_img.save("debug_mask.png")
-
-        print(f"[DEBUG] callback_on_save = {self.callback_on_save}")
+        logger.debug(f"mask extrema = {self.mask_img.getextrema()}, "
+                     f"size = {self.mask_img.size}")
 
         if self.callback_on_save:
             try:
-                print("[DEBUG] ▶ 即将调用 callback_on_save ...")
                 self.callback_on_save(self.current_img, self.mask_img)
-                print("[DEBUG] ✅ callback_on_save 正常返回")
+                logger.debug("callback_on_save 正常返回")
             except Exception as e:
-                import traceback
-                print(f"[DEBUG] ❌ callback_on_save 抛异常: {e}")
-                print(traceback.format_exc())
+                logger.error(f"callback_on_save 抛异常: {e}", exc_info=True)
         else:
-            print("[DEBUG] ⚠️ callback_on_save 为 None,不会触发后续流程")
+            logger.warning("callback_on_save 为 None,不会触发后续流程")
 
         self.accept()

@@ -9,6 +9,9 @@ import os
 import sys
 import shutil
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 使用国内镜像加速
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -123,7 +126,7 @@ def _check_exists(entry: dict) -> bool:
     try:
         local = PROJECT_ROOT / _entry_dir(entry)
     except KeyError as e:
-        print(f"⚠️ {e}")
+        logger.warning(f"⚠️ {e}")
         return False
     if entry.get("kind", "snapshot") == "file":
         if not local.is_file():
@@ -170,18 +173,18 @@ def print_scan_report():
     miss_optional = [k for k, v in report.items()
                      if not v["ok"] and not v["entry"]["required"]]
 
-    print(f"📊 模型扫描: 就绪 {ok_cnt}/{len(report)}")
+    logger.info(f"📊 模型扫描: 就绪 {ok_cnt}/{len(report)}")
     if miss_required:
-        print(f"   ❌ 缺失必需 ({len(miss_required)}):")
+        logger.error(f"   ❌ 缺失必需 ({len(miss_required)}):")
         for k in miss_required:
             e = report[k]["entry"]
-            print(f"      • {e['desc']} ({e['size_mb']}MB)")
-        print(f"   💡 运行: python -m utils.model_downloader install-required")
+            logger.info(f"      • {e['desc']} ({e['size_mb']}MB)")
+        logger.info(f"   💡 运行: python -m utils.model_downloader install-required")
     if miss_optional:
-        print(f"   ⚠️  缺失可选 ({len(miss_optional)}):")
+        logger.warning(f"   ⚠️  缺失可选 ({len(miss_optional)}):")
         for k in miss_optional:
             e = report[k]["entry"]
-            print(f"      • {e['desc']} ({e['size_mb']}MB) [key={k}]")
+            logger.info(f"      • {e['desc']} ({e['size_mb']}MB) [key={k}]")
     return report
 
 
@@ -192,9 +195,9 @@ def _download_one(key: str, entry: dict) -> bool:
     from huggingface_hub import hf_hub_download, snapshot_download
 
     local = PROJECT_ROOT / _entry_dir(entry)
-    print(f"\n⬇️  下载: {entry['desc']} ({entry['size_mb']}MB)")
-    print(f"    源:   {entry['repo']}")
-    print(f"    目标: {local}")
+    logger.info(f"\n⬇️  下载: {entry['desc']} ({entry['size_mb']}MB)")
+    logger.info(f"    源:   {entry['repo']}")
+    logger.info(f"    目标: {local}")
 
     try:
         if entry["kind"] == "file":
@@ -246,14 +249,14 @@ def _download_one(key: str, entry: dict) -> bool:
                 )
 
         if _check_exists(entry):
-            print(f"✅ 完成: {key}")
+            logger.info(f"✅ 完成: {key}")
             return True
         else:
-            print(f"⚠️  下载完成但校验失败: {key}")
+            logger.warning(f"⚠️  下载完成但校验失败: {key}")
             return False
 
     except Exception as e:
-        print(f"❌ 下载失败: {key} → {e}")
+        logger.error(f"❌ 下载失败: {key} → {e}")
         return False
 
 
@@ -262,9 +265,9 @@ def install_required():
     missing = [(k, v["entry"]) for k, v in report.items()
                if not v["ok"] and v["entry"]["required"]]
     if not missing:
-        print("✅ 所有必需模型已就绪")
+        logger.info("✅ 所有必需模型已就绪")
         return
-    print(f"📥 待下载必需模型: {len(missing)} 个")
+    logger.info(f"📥 待下载必需模型: {len(missing)} 个")
     for k, e in missing:
         _download_one(k, e)
 
@@ -273,22 +276,22 @@ def install_all():
     report = scan()
     missing = [(k, v["entry"]) for k, v in report.items() if not v["ok"]]
     if not missing:
-        print("✅ 所有模型已就绪")
+        logger.info("✅ 所有模型已就绪")
         return
     total_mb = sum(e["size_mb"] for _, e in missing)
-    print(f"📥 待下载 {len(missing)} 个,共约 {total_mb} MB")
+    logger.info(f"📥 待下载 {len(missing)} 个,共约 {total_mb} MB")
     for k, e in missing:
         _download_one(k, e)
 
 
 def install(key: str):
     if key not in MODEL_REGISTRY:
-        print(f"❌ 未知模型 key: {key}")
-        print(f"   可用: {list(MODEL_REGISTRY.keys())}")
+        logger.error(f"❌ 未知模型 key: {key}")
+        logger.info(f"   可用: {list(MODEL_REGISTRY.keys())}")
         return
     entry = MODEL_REGISTRY[key]
     if _check_exists(entry):
-        print(f"✅ 已存在: {key}")
+        logger.info(f"✅ 已存在: {key}")
         return
     _download_one(key, entry)
 
@@ -298,7 +301,7 @@ def install(key: str):
 # ============================================================
 def _main():
     if len(sys.argv) < 2:
-        print("用法: python -m utils.model_downloader [scan|install-required|install-all|install <key>]")
+        logger.info("用法: python -m utils.model_downloader [scan|install-required|install-all|install <key>]")
         return
     cmd = sys.argv[1]
     if cmd == "scan":
@@ -309,11 +312,11 @@ def _main():
         install_all()
     elif cmd == "install":
         if len(sys.argv) < 3:
-            print("用法: python -m utils.model_downloader install <key>")
+            logger.info("用法: python -m utils.model_downloader install <key>")
             return
         install(sys.argv[2])
     else:
-        print(f"❌ 未知命令: {cmd}")
+        logger.error(f"❌ 未知命令: {cmd}")
 
 
 if __name__ == "__main__":

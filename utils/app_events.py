@@ -10,7 +10,7 @@ from PIL import Image
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from PyQt6.QtGui import QPixmap, QImage, QColor
-from PyQt6.QtCore import Qt,pyqtSlot,QMetaObject, QObject,Q_ARG
+from PyQt6.QtCore import Qt,pyqtSlot,QMetaObject, QObject,Q_ARG, QTimer
 from utils.app_utils import OUTPUT_DIR
 from core.presets         import PROMPT_PRESETS
 
@@ -292,7 +292,7 @@ class EventMixin:
                         removed.append(name)
                     except Exception as e:
                         if verbose:
-                            print(f"⚠️ 删除 {name} 失败: {e}")
+                            logger.warning(f"⚠️ 删除 {name} 失败: {e}")
 
             # 清空内存引用,避免下次生图误用旧路径
             if getattr(self, "ref_image_path", None) and \
@@ -307,10 +307,10 @@ class EventMixin:
                 _set_label_style(self.lbl_img_path, "未选择参考图", "#585b70")
 
             if verbose and removed:
-                print(f"🧹 已清理 temp 文件: {', '.join(removed)}")
+                logger.info(f"🧹 已清理 temp 文件: {', '.join(removed)}")
         except Exception as e:
             if verbose:
-                print(f"⚠️ cleanup_temp_files 异常: {e}")
+                logger.warning(f"⚠️ cleanup_temp_files 异常: {e}")
 
     def load_pose_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -340,7 +340,7 @@ class EventMixin:
             img = Image.open(path)
             self.show_pose_preview(img)
         except Exception as e:
-            print(f"⚠️ 骨架图预览失败: {e}")
+            logger.warning(f"⚠️ 骨架图预览失败: {e}")
 
         # 状态栏提示
         try:
@@ -376,14 +376,14 @@ class EventMixin:
                     self._gallery_seen_paths.add(abs_path)
                     self.gallery.add_image(img_path, prepend=True)
         except Exception as e:
-            print(f"预览加载失败: {e}")
+            logger.warning(f"预览加载失败: {e}")
 
     def update_preview_ui(self, preview_img: Image.Image):
         """生成过程中实时更新预览（来自生成线程）"""
         try:
             self.preview_canvas.set_pixmap(_pil_to_pixmap(preview_img))
         except Exception as e:
-            print(f"实时预览更新失败: {e}")
+            logger.warning(f"实时预览更新失败: {e}")
 
     def show_pose_preview(self, img: Image.Image):
         """在 ControlNet 缩略图区域显示参考图"""
@@ -402,11 +402,11 @@ class EventMixin:
             if hasattr(self, 'lbl_cn_thumb'):
                 self.lbl_cn_thumb.set_pixmap(pix)
         except Exception as e:
-            print(f"⚠️ show_pose_preview 失败: {e}")
+            logger.warning(f"⚠️ show_pose_preview 失败: {e}")
 
     def open_editor(self):
-        print(f"[DEBUG] open_editor 来自文件: {__file__}")
-        print(f"[DEBUG] 这是新版! 应该会传 callback_on_save")
+        logger.debug(f"[DEBUG] open_editor 来自文件: {__file__}")
+        logger.debug(f"[DEBUG] 这是新版! 应该会传 callback_on_save")
         """打开专业修图器 - PyQt6 版"""
         # 防重入
         if getattr(self, "_editor_opening", False):
@@ -427,7 +427,7 @@ class EventMixin:
 
         # ---- 保存回调 ----
         def on_editor_saved(edited_pil_img, mask_pil_img):
-            print("[EDITOR] ▶ on_editor_saved 被触发")
+            logger.info("[EDITOR] ▶ on_editor_saved 被触发")
             os.makedirs(os.path.join(OUTPUT_DIR, "temp"), exist_ok=True)
             ref_path  = os.path.abspath(
                 os.path.join(OUTPUT_DIR, "temp", "inpaint_ref.png"))
@@ -439,7 +439,7 @@ class EventMixin:
             # 诊断
             try:
                 mn, mx = mask_pil_img.getextrema()
-                print(f"[EDITOR] 遮罩 extrema=({mn},{mx}) size={mask_pil_img.size}")
+                logger.info(f"[EDITOR] 遮罩 extrema=({mn},{mx}) size={mask_pil_img.size}")
                 if mx == 0:
                     self._set_status(
                         "⚠️ 遮罩为全黑(未涂抹),将退化为图生图模式", "#fab387")
@@ -447,16 +447,16 @@ class EventMixin:
                 else:
                     self.set_reference_image(ref_path, mask_path)
             except Exception as e:
-                print(f"[EDITOR] 遮罩检查失败: {e}")
+                logger.warning(f"[EDITOR] 遮罩检查失败: {e}")
                 self.set_reference_image(ref_path, mask_path)
 
             # 关掉 ControlNet,避免抢走 inpaint 分支
             try:
                 if hasattr(self, 'chk_use_pose') and self.chk_use_pose.isChecked():
                     self.chk_use_pose.setChecked(False)
-                    print("👉 [工作流] 已自动关闭 ControlNet,优先执行局部重绘")
+                    logger.info("👉 [工作流] 已自动关闭 ControlNet,优先执行局部重绘")
             except Exception as e:
-                print(f"⚠ 关闭 ControlNet 失败(可忽略): {e}")
+                logger.warning(f"⚠ 关闭 ControlNet 失败(可忽略): {e}")
 
             self._set_status(
                 "✅ 遮罩已准备完毕！点击生成将自动进入【局部重绘】模式", "#a6e3a1")
@@ -470,13 +470,17 @@ class EventMixin:
                 self.current_generated_path,
                 callback_on_save=on_editor_saved,   # ★ 关键:一定要传这个
             )
+            # 「发送到修脸」入口:编辑器显示后自动跑一次 ADetailer
+            if getattr(self, "_editor_auto_adetailer", False):
+                self._editor_auto_adetailer = False
+                QTimer.singleShot(400, editor.run_adetailer)
             editor.exec()
         finally:
             self._editor_opening = False
 
 
     def open_gallery_to_edit(self):
-        print(f"[DEBUG] open_gallery_to_edit 被调用, 来自文件: {__file__}")
+        logger.debug(f"[DEBUG] open_gallery_to_edit 被调用, 来自文件: {__file__}")
 
         photo_dir = os.path.abspath("photo")
         os.makedirs(photo_dir, exist_ok=True)
@@ -498,7 +502,7 @@ class EventMixin:
 
         # ---- 保存回调 ----
         def on_editor_saved(edited_pil_img: Image.Image, mask_pil_img: Image.Image):
-            print("[EDITOR] ▶ on_editor_saved 被触发 (from gallery)")
+            logger.info("[EDITOR] ▶ on_editor_saved 被触发 (from gallery)")
             try:
                 timestamp = datetime.datetime.now().strftime("%H%M%S")
 
@@ -517,14 +521,14 @@ class EventMixin:
                 has_mask = False
                 if mask_pil_img is not None:
                     mn, mx = mask_pil_img.getextrema()
-                    print(f"[EDITOR] 遮罩 extrema=({mn},{mx}) size={mask_pil_img.size}")
+                    logger.info(f"[EDITOR] 遮罩 extrema=({mn},{mx}) size={mask_pil_img.size}")
                     if mx > 0:
                         mask_pil_img.save(mask_path)
                         has_mask = True
                     else:
-                        print("[EDITOR] ⚠ 遮罩全黑,未涂抹,退化为图生图")
+                        logger.warning("[EDITOR] ⚠ 遮罩全黑,未涂抹,退化为图生图")
                 else:
-                    print("[EDITOR] ⚠ 未收到遮罩对象,退化为图生图")
+                    logger.warning("[EDITOR] ⚠ 未收到遮罩对象,退化为图生图")
 
                 # 4) 设置参考图 / 遮罩
                 if has_mask:
@@ -542,9 +546,9 @@ class EventMixin:
                 try:
                     if hasattr(self, 'chk_use_pose') and self.chk_use_pose.isChecked():
                         self.chk_use_pose.setChecked(False)
-                        print("👉 [工作流] 已自动关闭 ControlNet,优先执行局部重绘")
+                        logger.info("👉 [工作流] 已自动关闭 ControlNet,优先执行局部重绘")
                 except Exception as e:
-                    print(f"⚠ 关闭 ControlNet 失败(可忽略): {e}")
+                    logger.warning(f"⚠ 关闭 ControlNet 失败(可忽略): {e}")
 
                 # 6) 刷新预览
                 self.show_preview(ref_path)
@@ -554,8 +558,8 @@ class EventMixin:
 
             except Exception:
                 import traceback
-                print("[EDITOR] ❌ 回调内部异常:")
-                print(traceback.format_exc())
+                logger.error("[EDITOR] ❌ 回调内部异常:")
+                logger.error(traceback.format_exc())
 
         # ---- 打开修图器 ----
         self._set_status("正在打开专业级图片编辑器...", "#f9e2af")
@@ -619,14 +623,14 @@ class EventMixin:
                 if enhancer.model is None:
                     enhancer.load(model_id="qwen/Qwen2-VL-2B-Instruct")
 
-                print(f"[ENHANCE] 正面输入: {raw_pos!r}")
-                print(f"[ENHANCE] 负面输入: {raw_neg!r}")
+                logger.info(f"[ENHANCE] 正面输入: {raw_pos!r}")
+                logger.info(f"[ENHANCE] 负面输入: {raw_neg!r}")
 
                 result_pos = enhancer.enhance(raw_pos, mode="positive") if raw_pos else ""
                 result_neg = enhancer.enhance(raw_neg, mode="negative") if raw_neg else ""
 
-                print(f"[ENHANCE] 正面输出: {result_pos!r}")
-                print(f"[ENHANCE] 负面输出: {result_neg!r}")
+                logger.info(f"[ENHANCE] 正面输出: {result_pos!r}")
+                logger.info(f"[ENHANCE] 负面输出: {result_neg!r}")
 
                 from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
                 QMetaObject.invokeMethod(
@@ -637,7 +641,7 @@ class EventMixin:
                 )
             except Exception as e:
                 import traceback; traceback.print_exc()
-                print(f"❌ [enhance_prompt] 异常: {e}")
+                logger.error(f"❌ [enhance_prompt] 异常: {e}")
                 
 
         import threading
@@ -785,7 +789,7 @@ class EventMixin:
                             Qt.ConnectionType.QueuedConnection,
                             Q_ARG(object, seg), Q_ARG(str, enhanced))
                     except Exception as e:
-                        print(f"⚠️ 改写旅行段失败: {e}")
+                        logger.warning(f"⚠️ 改写旅行段失败: {e}")
                 QMetaObject.invokeMethod(
                     self, "_restore_travel_enhance_button",
                     Qt.ConnectionType.QueuedConnection, Q_ARG(int, len(segments_to_enhance)))
@@ -916,7 +920,7 @@ class EventMixin:
             except Exception as e:
                 import traceback
                 err = traceback.format_exc()
-                print(f"❌ [vision_prompt] 异常:\n{err}")
+                logger.error(f"❌ [vision_prompt] 异常:\n{err}")
                 self._bridge.enhance_done_signal.emit(f"[识图失败] {str(e)}")
 
         import threading
@@ -937,7 +941,7 @@ class EventMixin:
                 self._set_status("⚠️ 没有可用的图，请先生成一张", "#f9e2af")
                 return
             last_path = max(pngs, key=os.path.getmtime)
-            print(f"📌 自动选择最新图: {last_path}")
+            logger.info(f"📌 自动选择最新图: {last_path}")
     
         # ---- 2. 检查 pipe ----
         if not getattr(self.ai, "img2img_pipe", None):

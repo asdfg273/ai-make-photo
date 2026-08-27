@@ -24,6 +24,8 @@ from diffusers import (
     DDIMScheduler,
 )
 
+logger = logging.getLogger(__name__)
+
 MOTION_ADAPTER_DIR = os.path.join(MODEL_DIR, "motion_adapter")
 MOTION_LORA_DIR    = os.path.join(MODEL_DIR, "motion_lora")
 
@@ -76,7 +78,7 @@ class VideoGenerator:
         if self.adapter is not None and self.current_adapter_name == name:
             return
         path = os.path.join(MOTION_ADAPTER_DIR, name)
-        print(f"🎬 加载 MotionAdapter: {name}")
+        logger.info(f"🎬 加载 MotionAdapter: {name}")
         self.adapter = MotionAdapter.from_pretrained(path, torch_dtype=torch.float16)
         self.current_adapter_name = name
 
@@ -107,7 +109,7 @@ class VideoGenerator:
                 image_encoder=None,
             )
             self._offload(self.pipe)
-            print("✅ AnimateDiff txt2v 就绪")
+            logger.info("✅ AnimateDiff txt2v 就绪")
 
         if need_v2v and self.v2v_pipe is None:
             self.v2v_pipe = AnimateDiffVideoToVideoPipeline(
@@ -121,7 +123,7 @@ class VideoGenerator:
                 image_encoder=None,
             )
             self._offload(self.v2v_pipe)
-            print("✅ AnimateDiff v2v 就绪")
+            logger.info("✅ AnimateDiff v2v 就绪")
 
         self._apply_scheduler(scheduler)
 
@@ -177,16 +179,16 @@ class VideoGenerator:
                 continue
             path = os.path.join(MOTION_LORA_DIR, name)
             if not os.path.isdir(path):
-                print(f"⚠️ Motion LoRA 不存在: {path}")
+                logger.warning(f"⚠️ Motion LoRA 不存在: {path}")
                 continue
             aid = name.replace("-", "_")
             try:
                 self.pipe.load_lora_weights(path, adapter_name=aid)
                 names.append(aid)
                 weights.append(float(cfg.get("weight", 0.8)))
-                print(f"✅ Motion LoRA: {name} @ {weights[-1]}")
+                logger.info(f"✅ Motion LoRA: {name} @ {weights[-1]}")
             except Exception as e:
-                print(f"❌ 加载 {name} 失败: {e}")
+                logger.error(f"❌ 加载 {name} 失败: {e}")
 
         if names:
             self.pipe.set_adapters(names, adapter_weights=weights)
@@ -211,7 +213,7 @@ class VideoGenerator:
             if not os.path.isfile(weight_path) or not os.path.isfile(
                 os.path.join(encoder_dir, "model.safetensors")
             ):
-                print("📥 IP-Adapter 缺失,开始自动下载...")
+                logger.info("📥 IP-Adapter 缺失,开始自动下载...")
                 from utils.model_downloader import install
                 install("ip_adapter_sd15")
                 install("ip_adapter_image_encoder")
@@ -222,7 +224,7 @@ class VideoGenerator:
                     "python -m utils.model_downloader install ip_adapter_sd15"
                 )
 
-            print(f"🔌 加载 IP-Adapter: {weight_path}")
+            logger.info(f"🔌 加载 IP-Adapter: {weight_path}")
             self.pipe.load_ip_adapter(
                 ipa_dir,
                 subfolder="",
@@ -240,18 +242,18 @@ class VideoGenerator:
                     try:
                         from accelerate.hooks import remove_hook_from_module
                         remove_hook_from_module(ie, recurse=True)
-                        print("🔧 已剥离 image_encoder 的 offload hook")
+                        logger.info("🔧 已剥离 image_encoder 的 offload hook")
                     except Exception as e:
-                        print(f"⚠️ 剥离 hook 失败: {e}")
+                        logger.warning(f"⚠️ 剥离 hook 失败: {e}")
 
                 ie.to(device=target_device, dtype=torch.float16)
-                print(f"🔧 image_encoder → {target_device} / float16")
+                logger.info(f"🔧 image_encoder → {target_device} / float16")
 
             self._ipa_loaded = True
 
         # 每次调用都更新 scale
         self.pipe.set_ip_adapter_scale(scale)
-        print(f"  IP-Adapter scale = {scale}")
+        logger.info(f"  IP-Adapter scale = {scale}")
 
 
     def _drop_ip_adapter(self):
@@ -398,15 +400,15 @@ class VideoGenerator:
         if progress_callback is not None:
             common["callback_on_step_end"] = progress_callback
 
-        print(f"🎬 [{mode}] {num_frames}帧 {width}x{height} steps={num_steps} seed={seed}")
+        logger.info(f"🎬 [{mode}] {num_frames}帧 {width}x{height} steps={num_steps} seed={seed}")
 
         frames = None
 
         if mode == "prompt_travel" and prompt_travel and len(prompt_travel) >= 2:
             self._drop_ip_adapter()
-            print(f"📝 Prompt Travel: {len(prompt_travel)} 段关键帧")
+            logger.info(f"📝 Prompt Travel: {len(prompt_travel)} 段关键帧")
             for f, p in prompt_travel:
-                print(f"   [帧 {f}] {p[:60]}")
+                logger.info(f"   [帧 {f}] {p[:60]}")
             frames = self._run_prompt_travel(
                 prompt_travel, negative, num_frames, guidance, common
             )
@@ -455,7 +457,7 @@ class VideoGenerator:
         ext = "gif" if str(output_format).lower().endswith("gif") else "mp4"
         out = os.path.join(output_dir, f"video_{mode}_{ts}_seed{seed}.{ext}")
         self._save(frames, out, fps=fps, fmt=ext)
-        print(f"✅ 已保存: {out}")
+        logger.info(f"✅ 已保存: {out}")
         return out, seed
 
     def _save(self, frames, path, fps=8, fmt="mp4"):

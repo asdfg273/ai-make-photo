@@ -4,6 +4,9 @@
 适配 transformers >= 4.45 (DynamicCache API 变化)
 """
 from transformers.cache_utils import DynamicCache
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def apply_chattts_patch():
@@ -15,4 +18,4 @@ def apply_chattts_patch():
             # 返回一个假的 layers 列表,长度 = key_cache 长度
             return [None] * len(self.key_cache) if hasattr(self, "key_cache") else []
         DynamicCache.layers = property(_get_layers)
-        print("🔧 ChatTTS DynamicCache 补丁已应用")
+        logger.info("🔧 ChatTTS DynamicCache 补丁已应用")

@@ -1,6 +1,7 @@
 # file_name: ui_builder.py
 import os
 import sys
+from tkinter import CURRENT
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget,
@@ -25,6 +26,9 @@ from ui.widgets import FloatSlider, GpuCanvas
 from ui.splash import SplashScreen, create_splash
 from ui.design_tokens import DARK_STYLE,VIDEO_TAB_QSS
 from utils.paths import PROJECT_ROOT
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 #  UIBuilderMixin —— 主窗口 UI 构造器
@@ -93,10 +97,10 @@ class UIBuilderMixin:
             from utils.app_utils import OUTPUT_DIR
             self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
         except Exception as e:
-            print(f"⚠️ 画廊初始化失败: {e}")
+            logger.warning(f"⚠️ 画廊初始化失败: {e}")
 
         self._init_defaults()
-        print(f"[BUILD-5] setup_ui 完成, combo_preset={hasattr(self, 'combo_preset')}")
+        logger.info(f"[BUILD-5] setup_ui 完成, combo_preset={hasattr(self, 'combo_preset')}")
     # ============================================================
     #  左侧面板
     # ============================================================
@@ -137,11 +141,11 @@ class UIBuilderMixin:
                 self.right_stacked.setCurrentIndex(1)
                 QTimer.singleShot(100, self._refresh_video_gallery)
             else:
-                print("⚠️ right_stacked 不存在")
+                logger.warning("⚠️ right_stacked 不存在")
         except Exception as e:
             import traceback
-            print(f"⚠️ 切换视频模式失败: {e}")
-            print(traceback.format_exc())
+            logger.warning(f"⚠️ 切换视频模式失败: {e}")
+            logger.error(traceback.format_exc())
 
     def _switch_to_image_mode(self):
         """切换回图片模式（恢复右侧面板 + 停止视频播放）"""
@@ -154,13 +158,13 @@ class UIBuilderMixin:
                     if hasattr(self, 'gallery'):
                         self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
                 except Exception as e:
-                    print(f"⚠️ 画廊刷新失败: {e}")
+                    logger.warning(f"⚠️ 画廊刷新失败: {e}")
             else:
-                print("⚠️ right_stacked 不存在")
+                logger.warning("⚠️ right_stacked 不存在")
         except Exception as e:
             import traceback
-            print(f"⚠️ 切换图片模式失败: {e}")
-            print(traceback.format_exc())
+            logger.warning(f"⚠️ 切换图片模式失败: {e}")
+            logger.error(traceback.format_exc())
 
     # ============================================================
     #  Tab 1: 基础
@@ -1723,7 +1727,7 @@ class UIBuilderMixin:
 
     def play_video(self, video_path: str):
         """播放指定路径的视频"""
-        print(f"🎥 尝试播放视频: {video_path}")
+        logger.info(f"🎥 尝试播放视频: {video_path}")
         if not os.path.exists(video_path):
             self._set_status(f"⚠️ 视频文件不存在: {video_path}", "#ff7a17")
             return
@@ -1734,7 +1738,7 @@ class UIBuilderMixin:
 
             if hasattr(self, 'video_stacked'):
                 self.video_stacked.setCurrentIndex(1)
-                print("✅ 切换到视频播放界面")
+                logger.info("✅ 切换到视频播放界面")
             else:
                 self.lbl_video_placeholder.hide()
                 self.video_widget.show()
@@ -1742,12 +1746,12 @@ class UIBuilderMixin:
             self.video_player.play()
             self._set_status(f"🎥 正在播放: {os.path.basename(video_path)}", "#dadbdf")
             self.current_video_path = video_path
-            print(f"✅ 视频播放开始: {os.path.basename(video_path)}")
+            logger.info(f"✅ 视频播放开始: {os.path.basename(video_path)}")
         except Exception as e:
             import traceback
             self._set_status(f"⚠️ 视频播放失败: {e}", "#ff7a17")
-            print(f"❌ 视频播放失败: {e}")
-            print(traceback.format_exc())
+            logger.error(f"❌ 视频播放失败: {e}")
+            logger.error(traceback.format_exc())
             if hasattr(self, 'video_stacked'):
                 self.video_stacked.setCurrentIndex(0)
             else:
@@ -1914,7 +1918,7 @@ class UIBuilderMixin:
             try:
                 self.refresh_models()
             except Exception as e:
-                print(f"refresh_models 失败: {e}")
+                logger.warning(f"refresh_models 失败: {e}")
         self._toggle_adetailer()
         self._toggle_ad_hand()
         self._toggle_hires()
@@ -1991,7 +1995,7 @@ class UIBuilderMixin:
         try:
             w.setChecked(bool(val))
         except Exception as e:
-            print(f"[preset] setChecked {name} 失败: {e}")
+            logger.warning(f"[preset] setChecked {name} 失败: {e}")
 
     def _safe_set_combo(self, name, text):
         w = getattr(self, name, None)
@@ -2008,7 +2012,7 @@ class UIBuilderMixin:
                         w.setCurrentIndex(i)
                         return
         except Exception as e:
-            print(f"[preset] setCombo {name} 失败: {e}")
+            logger.warning(f"[preset] setCombo {name} 失败: {e}")
 
     def _safe_set_float(self, name, val):
         """适配 FloatSlider / QDoubleSpinBox / QSlider(整数*100)"""
@@ -2027,7 +2031,7 @@ class UIBuilderMixin:
                 else:
                     w.setValue(float(val))
         except Exception as e:
-            print(f"[preset] setFloat {name} 失败: {e}")
+            logger.warning(f"[preset] setFloat {name} 失败: {e}")
 
     def _safe_set_int(self, name, val):
         w = getattr(self, name, None)
@@ -2036,7 +2040,7 @@ class UIBuilderMixin:
         try:
             w.setValue(int(val))
         except Exception as e:
-            print(f"[preset] setInt {name} 失败: {e}")
+            logger.warning(f"[preset] setInt {name} 失败: {e}")
 
     # --- 快照：应用预设前备份当前参数，方便"还原" ---
     def _snapshot_current_params(self):
@@ -2081,7 +2085,7 @@ class UIBuilderMixin:
                 "ref_fidelity": self.scale_ref_fidelity.value(),
             }
         except Exception as e:
-            print(f"[preset] 快照失败: {e}")
+            logger.warning(f"[preset] 快照失败: {e}")
             self._preset_backup = None
 
     def _read_float(self, w):
@@ -2267,7 +2271,7 @@ class UIBuilderMixin:
             # 限长，避免无限增长
             self._flash_anims = self._flash_anims[-50:]
         except Exception as e:
-            print(f"[flash] {name}: {e}")
+            logger.info(f"[flash] {name}: {e}")
 
     def _build_diff_report(self, before: dict, after: dict):
         """返回 (改动列表, 受影响 Tab 集合)"""
@@ -2352,7 +2356,7 @@ class UIBuilderMixin:
                                 triggers_list.append(content)
                         break
                     except Exception as e:
-                        print(f"⚠️ 读取 {txt_path} 失败: {e}")
+                        logger.warning(f"⚠️ 读取 {txt_path} 失败: {e}")
     
         if not triggers_list:
             self._set_status("⚠️ 没有可插入的触发词", "#ff7a17")
@@ -2378,7 +2382,7 @@ class UIBuilderMixin:
             else:
                 subprocess.Popen(['xdg-open', OUTPUT_DIR])
         except Exception as e:
-            print(f"打开目录失败: {e}")
+            logger.warning(f"打开目录失败: {e}")
 
     def _show_about(self):
         QMessageBox.about(
@@ -2577,7 +2581,7 @@ class UIBuilderMixin:
             self.lbl_ext_count.setText(f"🧩 扩展: {s['installed']}/{s['total']}")
         except Exception as e:
             self.lbl_ext_count.setText("🧩 扩展: --")
-            print(f"[EXT-COUNT] 刷新失败: {e}")
+            logger.warning(f"[EXT-COUNT] 刷新失败: {e}")
 
     def _open_extension_market(self):
         """打开扩展市场对话框"""

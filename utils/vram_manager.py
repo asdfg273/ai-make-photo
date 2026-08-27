@@ -117,10 +117,9 @@ class VRAMManager:
 
         notes = []
         if heavy and total < 12.0:
-            # torch2.x SDPA 已是 O(N) 显存，切片反而退化成朴素实现
+            # torch 2.x SDPA 已是 O(N) 显存，切片反而退化成朴素实现
             try:
                 pipe.disable_attention_slicing()
-                notes.append("SDPA 全速")
             except Exception:
                 pass
             try:
@@ -128,11 +127,18 @@ class VRAMManager:
                 notes.append("VAE 分块")
             except Exception:
                 pass
-        else:
-            try:
-                pipe.disable_attention_slicing()
-            except Exception:
-                pass
+
+            # 实时检查剩余显存；1024 的 UNet 激活约需 3-4 GB
+            # 不够就切 CPU offload，避免换页
+            free_gb = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+            pixels_m = pixels / 1_048_576          # 单位：百万像素
+            est_activation = pixels_m * 3.2        # 1M 像素 ≈ 3.2 GB 激活？
+            if free_gb < est_activation:
+                try:
+                    pipe.enable_model_cpu_offload()
+                    notes.append("CPU offload (显存不足)")
+                except Exception:
+                    pass
 
         tag = "大图节省" if heavy else "小图全速"
         msg = f"{tag} ({width}x{height})" + (f" → {' + '.join(notes)}" if notes else "")

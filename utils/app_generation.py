@@ -216,7 +216,7 @@ class GenerationMixin:
 
         ctx = None
         try:
-            print("\n🚀 [任务开始]", flush=True)
+            logger.info("\n🚀 [任务开始]")
 
             # 1. 准备上下文 (设备/参数/翻译)
             ctx = self._gt_prepare_context()
@@ -225,6 +225,19 @@ class GenerationMixin:
 
             # 2. 加载底模
             self._gt_load_model(ctx)
+            try:
+                from utils.vram_manager import VRAMManager
+                _pipe = getattr(self.ai, 'txt2img_pipe', None)
+                if _pipe is not None:
+                    VRAMManager.tune_for_resolution(
+                        _pipe,
+                        ctx.get('width', 512),
+                        ctx.get('height', 512),
+                        is_sdxl=getattr(self.ai, 'is_sdxl', False),
+                    )
+            except Exception as e:
+                print(f"⚠️ 分辨率策略调整失败（忽略）: {e}")
+
 
             # 3. 配置 IP-Adapter
             self._gt_setup_ipa(ctx)
@@ -236,7 +249,7 @@ class GenerationMixin:
             self._gt_run_pose_transfer(ctx)
 
             # 6. 切采样器
-            print(f"🟢 step 14: 切采样器 = {ctx['sampler_name']}", flush=True)
+            logger.debug(f"🟢 step 14: 切采样器 = {ctx['sampler_name']}")
             self.ai.switch_sampler(ctx['sampler_name'])
 
             # 7. X/Y 炼丹分支 (返回 True 表示已处理)
@@ -247,14 +260,14 @@ class GenerationMixin:
             self._gt_main_loop(ctx)
 
         except InterruptedError:
-            print("⏸ [generation_task] 用户中断", flush=True)
+            logger.info("⏸ [generation_task] 用户中断")
             try: self._bridge.cancel_signal.emit()
             except Exception: pass
 
         except Exception:
             err = traceback.format_exc()
-            print("❌ [generation_task] 异常:", flush=True)
-            print(err, flush=True)
+            logger.error("❌ [generation_task] 异常:")
+            logger.error(err)
             try: self._bridge.error_signal.emit(err)
             except Exception: pass
 
@@ -272,10 +285,10 @@ class GenerationMixin:
         elif "MPS"  in device_str: target_device = "mps"
         elif "CPU"  in device_str: target_device = "cpu"
         else: target_device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"🟢 step 2: 设备 = {target_device}", flush=True)
+        logger.debug(f"🟢 step 2: 设备 = {target_device}")
 
         if getattr(self.ai, 'device', None) != target_device:
-            print(f"🔄 切换设备: {self.ai.device} -> {target_device}", flush=True)
+            logger.info(f"🔄 切换设备: {self.ai.device} -> {target_device}")
             self.ai.device = target_device
             if hasattr(self.ai, 'clear_memory'):
                 self.ai.clear_memory()
@@ -286,13 +299,13 @@ class GenerationMixin:
         if isinstance(model_data, dict) and 'name' in model_data:
             model_name = model_data['name']
             model_type = model_data.get('type', '')  # 顺便记录类型
-            print(f"🟢 模型: [{model_type}] {model_name}", flush=True)
+            logger.debug(f"🟢 模型: [{model_type}] {model_name}")
         else:
             # 兜底:剥离 [xxGB] 后缀
             raw = self._cbo(getattr(self, 'combo_model', None))
             model_name = raw.split('  [')[0].strip() if raw else ""
             model_type = ''
-            print(f"🟢 模型(兜底): {model_name}", flush=True)
+            logger.debug(f"🟢 模型(兜底): {model_name}")
 
         raw_prompt = self._txt(getattr(self, 'txt_prompt', None))
         raw_neg    = self._txt(getattr(self, 'txt_neg', None))
@@ -301,7 +314,7 @@ class GenerationMixin:
             lambda: self.combo_trans_mode.currentIndex(), 2) \
             if hasattr(self, 'combo_trans_mode') else 2
         trans_mode = ["dict", "ai", "auto"][mode_idx]
-        print(f"🌐 翻译模式: {trans_mode}", flush=True)
+        logger.info(f"🌐 翻译模式: {trans_mode}")
 
         # --- AI 改写 ---
         raw_prompt = self._gt_apply_prompt_enhance(raw_prompt)
@@ -340,7 +353,7 @@ class GenerationMixin:
             SAFETY_THRESHOLD = 12
             if total_generate_count > SAFETY_THRESHOLD:
                 if not self._gt_confirm_batch(combo_count, base_count, total_generate_count):
-                    print(f"⏸ 用户取消批量队列 ({total_generate_count} 张)", flush=True)
+                    logger.info(f"⏸ 用户取消批量队列 ({total_generate_count} 张)")
                     self._bridge.status_signal.emit("⏸ 已取消批量生成", "#f38ba8")
                     return None
 
@@ -353,7 +366,7 @@ class GenerationMixin:
                 f"📖 批量队列启动: {combo_count} 组合 × {base_count} 张 = {total_generate_count} 张",
                 "#ffd700"
             )
-            print(f"🎯 [批量] {combo_count} 组合 × {base_count} 张/组 = 共 {total_generate_count} 张", flush=True)
+            logger.info(f"🎯 [批量] {combo_count} 组合 × {base_count} 张/组 = 共 {total_generate_count} 张")
         else:
             total_generate_count = base_count
             parsed_raw_prompts   = [parsed_raw_prompts[0]] * base_count
@@ -374,9 +387,9 @@ class GenerationMixin:
 
                 extracted_features = enhancer.extract_character_features(ref_img)
                 if extracted_features:
-                    print(f"✨ 角色特征:\n   {extracted_features}", flush=True)
+                    logger.info(f"✨ 角色特征:\n   {extracted_features}")
             except Exception as e:
-                print(f"⚠️ 特征提取失败(跳过): {e}", flush=True)
+                logger.warning(f"⚠️ 特征提取失败(跳过): {e}")
                 extracted_features = ""
 
         # ── 翻译每个 prompt,并把特征拼到最前面 ──
@@ -388,7 +401,7 @@ class GenerationMixin:
             en_prompts.append(en)
 
         if extracted_features:
-            print(f"📝 注入特征后第一条 prompt:\n   {en_prompts[0][:200]}...", flush=True)
+            logger.info(f"📝 注入特征后第一条 prompt:\n   {en_prompts[0][:200]}...")
 
         # ── 返回 ctx ──
         return {
@@ -446,18 +459,24 @@ class GenerationMixin:
             from utils.prompt_enhancer import PromptEnhancer
             enhancer = PromptEnhancer()
             enhancer.load()
-            new_prompt = enhancer.enhance(raw_prompt)
+            try:
+                new_prompt = enhancer.enhance(raw_prompt)
+            finally:
+                try:
+                    enhancer.unload()
+                except Exception:
+                    pass
             if new_prompt and new_prompt.strip():
                 self._bridge.status_signal.emit(
                     f"✨ 已智能改写: {new_prompt[:60]}...", "#b48ead")
                 return new_prompt
         except Exception as e:
-            print(f"⚠️ 智能改写失败: {e}", flush=True)
+            logger.warning(f"⚠️ 智能改写失败: {e}")
         return raw_prompt
 
     def _gt_load_model(self, ctx):
         self._bridge.status_signal.emit("🧠 正在加载底层大模型...", "#ffd700")
-        print(f"🟢 step 9: 调用 ai.load_model({ctx['model_name']})", flush=True)
+        logger.debug(f"🟢 step 9: 调用 ai.load_model({ctx['model_name']})")
         self.ai.load_model(ctx['model_name'])
 
     def _gt_setup_ipa(self, ctx):
@@ -486,7 +505,7 @@ class GenerationMixin:
         ipa_pil_image = None
         if use_ipa:
             ipa_pil_image = Image.open(ipa_image_path).convert("RGB")
-            print(f"🟢 IP-Adapter 参考图已加载 {ipa_pil_image.size}", flush=True)
+            logger.debug(f"🟢 IP-Adapter 参考图已加载 {ipa_pil_image.size}")
 
             self._bridge.status_signal.emit(
                 "🎭 正在加载 IP-Adapter (角色一致性)...", "#fab387")
@@ -504,8 +523,7 @@ class GenerationMixin:
                         if 'attn2' in n:
                             if isinstance(p, ipa_classes): ipa_count += 1
                             else: bad_count += 1
-                    print(f"🟢 [诊断] IPA attn2: {ipa_count} 正确 / {bad_count} 错误",
-                          flush=True)
+                    logger.warning(f"🟢 [诊断] IPA attn2: {ipa_count} 正确 / {bad_count} 错误")
                     if bad_count > 0 or ipa_count == 0:
                         self._bridge.status_signal.emit(
                             "⚠️ IP-Adapter 安装异常,自动卸载", "#fab387")
@@ -514,7 +532,7 @@ class GenerationMixin:
                         use_ipa = False
                         ipa_pil_image = None
                 except Exception as e:
-                    print(f"⚠️ 诊断 IPA 异常: {e}", flush=True)
+                    logger.warning(f"⚠️ 诊断 IPA 异常: {e}")
             else:
                 try: self.ai.unload_ip_adapter()
                 except Exception: pass
@@ -544,7 +562,7 @@ class GenerationMixin:
         sub_dir = "sdxl" if getattr(self.ai, 'is_sdxl', False) else "sd1.5"
         if lora_config_list:
             self.ai.apply_multiple_loras(lora_config_list, sub_dir=sub_dir)
-            print(f"🟢 LoRA 已应用: {lora_config_list}", flush=True)
+            logger.debug(f"🟢 LoRA 已应用: {lora_config_list}")
         ctx['lora_meta_info'] = lora_meta_info
 
     def _gt_run_pose_transfer(self, ctx):
@@ -564,9 +582,9 @@ class GenerationMixin:
                     except Exception:
                         pass
                 ie.to(device="cuda", dtype=torch.float16)
-                print(f"🔧 image_encoder → cuda / float16")
+                logger.info(f"🔧 image_encoder → cuda / float16")
         except Exception as e:
-            print(f"⚠️ image_encoder 迁移失败: {e}")
+            logger.warning(f"⚠️ image_encoder 迁移失败: {e}")
 
         # ── 分支 A: 手动 ControlNet 模式(用户自己上传骨架图) ──
         if use_pose_manual and not use_pose_transfer:
@@ -589,7 +607,7 @@ class GenerationMixin:
             return
 
         # ── 分支 C: Pose Transfer 三阶段 ──
-        print("🎬 进入 Pose Transfer 模式", flush=True)
+        logger.info("🎬 进入 Pose Transfer 模式")
         ctx['pose_transfer_used'] = True
 
         # 必须有角色参考图
@@ -616,7 +634,7 @@ class GenerationMixin:
         # ── Stage 1: 生成动作参考图 ──
         self._bridge.status_signal.emit(
             "🎬 [1/3] Pose Transfer: 生成动作参考图...", "#ffd700")
-        print("🎬 [Stage 1/3] 生成动作参考图...", flush=True)
+        logger.info("🎬 [Stage 1/3] 生成动作参考图...")
 
         stage1_prompt = (
             f"masterpiece, best quality, 1girl, solo, full body, simple white background, "
@@ -675,8 +693,8 @@ class GenerationMixin:
                     pass
 
         ctx['cn_strength'] = ctx['pt_cn_strength']
-        print(f"🎯 Pose Transfer 参数: CN={ctx['cn_strength']:.2f}, "
-              f"IPA={ctx['ipa_scale']:.2f}", flush=True)
+        logger.info(f"🎯 Pose Transfer 参数: CN={ctx['cn_strength']:.2f}, "
+              f"IPA={ctx['ipa_scale']:.2f}")
 
         try:
             self._bridge.preview_img_sig.emit(skeleton_img.copy())
@@ -711,7 +729,7 @@ class GenerationMixin:
                 call_kwargs["ip_adapter_image"] = Image.new("RGB", (224, 224), (0, 0, 0))
                 try:
                     pipe.set_ip_adapter_scale(0.0)
-                    print("🔧 [safe_call] UNet 含 IPA 但未启用 → dummy + scale=0", flush=True)
+                    logger.info("🔧 [safe_call] UNet 含 IPA 但未启用 → dummy + scale=0")
                 except Exception:
                     pass
             else:
@@ -745,9 +763,9 @@ class GenerationMixin:
                         call_kwargs['negative_prompt_embeds'] = neg_embeds
                         call_kwargs.pop('negative_prompt')
                 
-                    print(f"✅ Compel 已处理长提示词 ({prompt_embeds.shape[1]} tokens)", flush=True)
+                    logger.info(f"✅ Compel 已处理长提示词 ({prompt_embeds.shape[1]} tokens)")
                 except Exception as e:
-                    print(f"⚠️ Compel 处理失败,降级为截断: {e}", flush=True)
+                    logger.warning(f"⚠️ Compel 处理失败,降级为截断: {e}")
 
         try:
             output = pipe(**call_kwargs)
@@ -764,14 +782,14 @@ class GenerationMixin:
         except InterruptedError:
             raise
         except Exception as e:
-            print(f"❌ Pipeline 调用失败: {e}", flush=True)
+            logger.error(f"❌ Pipeline 调用失败: {e}")
             raise
 
     def _gt_try_xy_plot(self, ctx):
         if not self._chk(getattr(self, 'chk_enable_xy', None)):
             return False
 
-        print("🟢 进入 XY 分支", flush=True)
+        logger.debug("🟢 进入 XY 分支")
         self._bridge.status_signal.emit("📊 进入 X/Y 炼丹模式...", "#ffd700")
         generator = torch.Generator(self.ai.device).manual_seed(
             random.randint(1, 2_147_483_647))
@@ -817,7 +835,7 @@ class GenerationMixin:
             if getattr(self, 'cancel_flag', False):
                 break
 
-            print(f"🟢 [{i+1}/{ctx['total_count']}] 开始", flush=True)
+            logger.debug(f"🟢 [{i+1}/{ctx['total_count']}] 开始")
             self._bridge.progress_signal.emit(i, ctx['total_count'])
 
             current_seed = random.randint(1, 2_147_483_647)
@@ -831,7 +849,7 @@ class GenerationMixin:
             except InterruptedError:
                 raise
             except Exception as e:
-                print(f"❌ 第 {i+1} 张生成失败: {e}", flush=True)
+                logger.error(f"❌ 第 {i+1} 张生成失败: {e}")
                 traceback.print_exc()
                 continue
 
@@ -997,7 +1015,7 @@ class GenerationMixin:
         if use_reference and ref_image is not None and not use_pose and not use_inpaint:
             ref_pipe = getattr(self.ai, 'reference_pipe', None)
             if ref_pipe is None:
-                print("⏳ 首次使用 Reference-Only,正在准备...", flush=True)
+                logger.info("⏳ 首次使用 Reference-Only,正在准备...")
                 self.ai.prepare_reference_only()
                 ref_pipe = self.ai.reference_pipe
         
@@ -1007,7 +1025,7 @@ class GenerationMixin:
                                    'guidance_scale', 'width', 'height', 'generator',
                                    'prompt_embeds', 'negative_prompt_embeds')}
         
-            print(f"🪞 [Reference-Only] fidelity={ref_fidelity:.2f}", flush=True)
+            logger.info(f"🪞 [Reference-Only] fidelity={ref_fidelity:.2f}")
             output = ref_pipe(
                 ref_image=ref_image,
                 reference_attn=True,
@@ -1073,7 +1091,7 @@ class GenerationMixin:
                     if len(s) > 8000: s = s[:8000] + "...(truncated)"
                     meta.add_text(key, s)
                 except Exception as e:
-                    print(f"⚠️ 元数据 [{key}] 写入失败: {e}", flush=True)
+                    logger.warning(f"⚠️ 元数据 [{key}] 写入失败: {e}")
 
             _add("prompt",      ctx['parsed_raw_prompts'][i])
             _add("negative",    ctx['raw_neg'])
@@ -1104,7 +1122,7 @@ class GenerationMixin:
             )
             _add("parameters", a1111)
         except Exception as e:
-            print(f"⚠️ 构建 PngInfo 失败: {e}", flush=True)
+            logger.warning(f"⚠️ 构建 PngInfo 失败: {e}")
             meta = None
 
         # 文件名
@@ -1122,24 +1140,24 @@ class GenerationMixin:
             else:
                 image.save(save_path, format="PNG", optimize=False, compress_level=4)
             if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
-                print(f"💾 已保存: {save_path} "
-                      f"({os.path.getsize(save_path)//1024} KB)", flush=True)
+                logger.info(f"💾 已保存: {save_path} "
+                      f"({os.path.getsize(save_path)//1024} KB)")
                 return save_path
-            print(f"⚠️ 保存的文件大小异常: {save_path}", flush=True)
+            logger.warning(f"⚠️ 保存的文件大小异常: {save_path}")
         except Exception as e:
-            print(f"⚠️ 主保存失败: {e},降级保存...", flush=True)
+            logger.warning(f"⚠️ 主保存失败: {e},降级保存...")
             try:
                 image.save(save_path, format="PNG")
                 if os.path.exists(save_path):
-                    print(f"💾 [降级] 已保存: {save_path}", flush=True)
+                    logger.warning(f"💾 [降级] 已保存: {save_path}")
                     return save_path
             except Exception as e2:
-                print(f"❌ 降级保存也失败: {e2}", flush=True)
+                logger.error(f"❌ 降级保存也失败: {e2}")
                 traceback.print_exc()
         return None
 
     def _gt_cleanup(self):
-        print("🏁 [generation_task] 结束", flush=True)
+        logger.info("🏁 [generation_task] 结束")
         self.is_generating = False
         try:
             gc.collect()
@@ -1172,10 +1190,9 @@ class GenerationMixin:
             try:
                 saved_scale = getattr(self.ai, '_ipa_scale', 0.7)
                 inpaint_pipe.set_ip_adapter_scale(0.0)
-                print(f"  🔧 [ADetailer] 临时禁用 IPA (saved scale={saved_scale:.2f})",
-                      flush=True)
+                logger.info(f"  🔧 [ADetailer] 临时禁用 IPA (saved scale={saved_scale:.2f})")
             except Exception as e:
-                print(f"  ⚠️ [ADetailer] 禁用 IPA 失败: {e}", flush=True)
+                logger.warning(f"  ⚠️ [ADetailer] 禁用 IPA 失败: {e}")
     
         return saved_scale, has_ipa
 
@@ -1186,10 +1203,9 @@ class GenerationMixin:
             return
         try:
             self.ai.inpaint_pipe.set_ip_adapter_scale(saved_scale)
-            print(f"  ✅ [ADetailer] IPA scale 已恢复 ({saved_scale:.2f})",
-                  flush=True)
+            logger.info(f"  ✅ [ADetailer] IPA scale 已恢复 ({saved_scale:.2f})")
         except Exception as e:
-            print(f"  ⚠️ [ADetailer] 恢复 IPA 失败: {e}", flush=True)
+            logger.warning(f"  ⚠️ [ADetailer] 恢复 IPA 失败: {e}")
 
     # ==================================================================
     #  中断生成
@@ -1247,7 +1263,7 @@ class GenerationMixin:
                 pil = Image.fromarray(img)
             
             
-                print(f"[PREVIEW-5] 准备发图 size={pil.size}", flush=True)
+                logger.info(f"[PREVIEW-5] 准备发图 size={pil.size}")
 
                 try:
                     import os, tempfile
@@ -1264,14 +1280,14 @@ class GenerationMixin:
     
                     if hasattr(self, "_bridge"):
                         self._bridge.live_preview_signal.emit(tmp_path)
-                        print(f"[PREVIEW-6] live_preview_signal 已发送: {tmp_path}", flush=True)
+                        logger.info(f"[PREVIEW-6] live_preview_signal 已发送: {tmp_path}")
 
                 except Exception as e:
-                    print(f"❌ [PREVIEW-SAVE-EXC] {e}", flush=True)
+                    logger.error(f"❌ [PREVIEW-SAVE-EXC] {e}")
 
         except Exception as e:
             import traceback
-            print(f"❌ [PREVIEW-EXC] {e}", flush=True)
+            logger.error(f"❌ [PREVIEW-EXC] {e}")
             traceback.print_exc()
     
         return callback_kwargs
@@ -1310,7 +1326,7 @@ class GenerationMixin:
                 img.save(save_path)
             except Exception:
                 pass
-            print(f"⚠️ 元数据写入失败: {e}")
+            logger.warning(f"⚠️ 元数据写入失败: {e}")
 
     # ==================================================================
     #  X/Y 矩阵
@@ -1417,7 +1433,7 @@ class GenerationMixin:
                 grid_img.save(save_path)
 
             self.last_generated_path = save_path
-            print(f"[EMIT-1341] preview_signal: {save_path}", flush=True)
+            logger.info(f"[EMIT-1341] preview_signal: {save_path}")
             self._bridge.preview_signal.emit(save_path)
 
             self._bridge.status_signal.emit(
@@ -1450,7 +1466,7 @@ class GenerationMixin:
                         self.ai.apply_multiple_loras(
                             [(lname, float(val))], sub_dir=sub_dir)
         except Exception as e:
-            print(f"⚠ 应用 XY 参数失败 ({axis_type}={val}): {e}")
+            logger.warning(f"⚠ 应用 XY 参数失败 ({axis_type}={val}): {e}")
 
     def _compose_xy_grid(self, cell_images, x_vals, y_vals,
                          x_type, y_type):
@@ -1510,7 +1526,7 @@ class GenerationMixin:
             comic = make_comic_strip(image_list)
             comic.save(save_path)   # 先保存,再 emit 预览（避免预览读到不存在的文件）
             self.last_generated_path = save_path
-            print(f"[EMIT-1432] preview_signal: {save_path}", flush=True)
+            logger.info(f"[EMIT-1432] preview_signal: {save_path}")
             self._bridge.preview_signal.emit(save_path)
             self._bridge.status_signal.emit(
                 "✅ 连环画拼合完成！", "#00ff00")

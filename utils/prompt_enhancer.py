@@ -274,7 +274,7 @@ Output ONLY the translated text.
         if self.model is not None:
             return
 
-        print(f"📥 加载模型: {model_id}", flush=True)
+        logger.info(f"📥 加载模型: {model_id}")
 
         from modelscope import snapshot_download
         from transformers import (
@@ -293,12 +293,12 @@ Output ONLY the translated text.
         local_dir = None
         for attempt in range(1, 6):
             try:
-                print(f"🔄 下载尝试 {attempt}/5 ...", flush=True)
+                logger.info(f"🔄 下载尝试 {attempt}/5 ...")
                 local_dir = snapshot_download(model_id, cache_dir=cache_dir)
-                print(f"✅ 模型路径: {local_dir}", flush=True)
+                logger.info(f"✅ 模型路径: {local_dir}")
                 break
             except Exception as e:
-                print(f"⚠️ 第 {attempt} 次失败: {e}", flush=True)
+                logger.warning(f"⚠️ 第 {attempt} 次失败: {e}")
                 if attempt == 5:
                     raise
                 time.sleep(3)
@@ -317,9 +317,9 @@ Output ONLY the translated text.
                 device_map="auto",
                 low_cpu_mem_usage=True,
             )
-            print("✅ 4bit 量化加载成功", flush=True)
+            logger.info("✅ 4bit 量化加载成功")
         except Exception as e:
-            print(f"⚠️ 4bit 失败,降级 fp16: {e}", flush=True)
+            logger.warning(f"⚠️ 4bit 失败,降级 fp16: {e}")
             self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                 local_dir,
                 torch_dtype=torch.float16,
@@ -335,7 +335,7 @@ Output ONLY the translated text.
         )
         self.tokenizer = AutoTokenizer.from_pretrained(local_dir)
 
-        print(f"✅ {model_id.split('/')[-1]} 加载完成", flush=True)
+        logger.info(f"✅ {model_id.split('/')[-1]} 加载完成")
 
     # ============================================================
     #  纯文本改写
@@ -378,7 +378,7 @@ Output ONLY the translated text.
             output[0][inputs.input_ids.shape[1]:],
             skip_special_tokens=True,
         ).strip()
-        print(f"[TEXT-{mode}] 耗时 {time.time()-t0:.1f}s")
+        logger.info(f"[TEXT-{mode}] 耗时 {time.time()-t0:.1f}s")
         return self._postprocess(result)
 
     # ============================================================
@@ -401,7 +401,7 @@ Output ONLY the translated text.
             new_w = int(w * ratio) // 28 * 28
             new_h = int(h * ratio) // 28 * 28
             image = image.resize((new_w, new_h), Image.LANCZOS)
-            print(f"🔧 图片缩放: {w}x{h} → {new_w}x{new_h}", flush=True)
+            logger.info(f"🔧 图片缩放: {w}x{h} → {new_w}x{new_h}")
 
         if user_hint:
             user_text = (
@@ -456,7 +456,7 @@ Output ONLY the translated text.
             output[0][inputs.input_ids.shape[1]:],
             skip_special_tokens=True,
         ).strip()
-        print(f"[VISION] 耗时 {time.time()-t0:.1f}s")
+        logger.info(f"[VISION] 耗时 {time.time()-t0:.1f}s")
         return self._postprocess(result)
 
     def extract_character_features(self, image_path_or_pil) -> str:
@@ -464,7 +464,7 @@ Output ONLY the translated text.
             try:
                 self.load()
             except Exception as e:
-                print(f"⚠️ [extract_features] 模型加载失败: {e}", flush=True)
+                logger.warning(f"⚠️ [extract_features] 模型加载失败: {e}")
                 return ""
 
         # ── 1. 准备图片 ──
@@ -474,7 +474,7 @@ Output ONLY the translated text.
             else:
                 image = image_path_or_pil.convert("RGB")
         except Exception as e:
-            print(f"⚠️ [extract_features] 图片读取失败: {e}", flush=True)
+            logger.warning(f"⚠️ [extract_features] 图片读取失败: {e}")
             return ""
 
         # ── 2. 缩放(防止 OOM,与 describe_image 一致) ──
@@ -485,7 +485,7 @@ Output ONLY the translated text.
             new_w = int(w * scale) // 28 * 28
             new_h = int(h * scale) // 28 * 28
             image = image.resize((new_w, new_h), Image.LANCZOS)
-            print(f"🔧 [extract_features] 缩放: {w}x{h} → {new_w}x{new_h}", flush=True)
+            logger.info(f"🔧 [extract_features] 缩放: {w}x{h} → {new_w}x{new_h}")
 
         # ── 3. 构建对话 ──
         messages = [
@@ -531,14 +531,14 @@ Output ONLY the translated text.
             )[0].strip()
 
         except Exception as e:
-            print(f"❌ [extract_features] 推理失败: {e}", flush=True)
+            logger.error(f"❌ [extract_features] 推理失败: {e}")
             import traceback
             traceback.print_exc()
             return ""
 
         # ── 5. 后处理:清洗输出 ──
         result = self._clean_feature_tags(result)
-        print(f"🎯 [features] 提取到 {len(result.split(','))} 个特征:\n   {result}", flush=True)
+        logger.info(f"🎯 [features] 提取到 {len(result.split(','))} 个特征:\n   {result}")
         return result
 
     def _clean_feature_tags(self, raw: str) -> str:
@@ -597,7 +597,7 @@ Output ONLY the translated text.
         low = text.lower()
         for pat in self.REFUSE_PATTERNS:
             if pat in low:
-                print(f"⚠️ 模型拒绝输出,触发兜底: {pat}")
+                logger.warning(f"⚠️ 模型拒绝输出,触发兜底: {pat}")
                 return "(masterpiece:1.2), (best quality:1.3), 1girl, solo, anime"
 
         text = text.strip()
@@ -699,14 +699,14 @@ Output ONLY the translated text.
         if target_lang == "ja":
             kana_count = sum(1 for c in text if '\u3040' <= c <= '\u30ff')
             if kana_count > len(text) * 0.3:
-                print(f"🌐 [translate] 输入已是日语,跳过")
+                logger.info(f"🌐 [translate] 输入已是日语,跳过")
                 return text
         # 如果目标是中文但输入无假名且全是中文,跳过
         if target_lang == "zh":
             has_kana = any('\u3040' <= c <= '\u30ff' for c in text)
             has_chinese = any('\u4e00' <= c <= '\u9fff' for c in text)
             if has_chinese and not has_kana:
-                print(f"🌐 [translate] 输入已是中文,跳过")
+                logger.info(f"🌐 [translate] 输入已是中文,跳过")
                 return text
 
         # 确保模型加载
@@ -749,7 +749,7 @@ Output ONLY the translated text.
                     result = result[len(prefix):].strip()
             result = result.strip('"').strip("'").strip("「").strip("」").strip()
 
-            print(f"🌐 [translate zh→{target_lang}] 耗时 {time.time()-t0:.1f}s: {text[:20]}... → {result[:20]}...")
+            logger.info(f"🌐 [translate zh→{target_lang}] 耗时 {time.time()-t0:.1f}s: {text[:20]}... → {result[:20]}...")
             return result if result else text
 
         except Exception as e:

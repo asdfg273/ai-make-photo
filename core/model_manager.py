@@ -31,6 +31,9 @@ from PIL import Image
 
 from utils.system_utils import SingletonMeta
 from utils import paths 
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -126,14 +129,14 @@ class ModelManager(metaclass=SingletonMeta):
                 pipe.enable_model_cpu_offload()
                 applied.append("cpu_offload")
             except Exception as e:
-                print(f"⚠️ enable_model_cpu_offload 失败: {e}")
+                logger.warning(f"⚠️ enable_model_cpu_offload 失败: {e}")
 
         # 2) 剩余轻量优化
         for item in self._apply_light_optimizations(pipe, _return=True):
             applied.append(item)
 
         if applied:
-            print(f"⚙️ [{name or 'pipe'}] 已启用优化: {', '.join(applied)}")
+            logger.info(f"⚙️ [{name or 'pipe'}] 已启用优化: {', '.join(applied)}")
         return pipe
 
     def _apply_light_optimizations(self, pipe, name: str = "",
@@ -158,21 +161,6 @@ class ModelManager(metaclass=SingletonMeta):
         except Exception:
             pass
 
-        # Attention 分片 - 优先 "auto"，不支持则退到默认
-        try:
-            pipe.enable_attention_slicing("auto")
-            applied.append("attn_slicing(auto)")
-        except Exception:
-            try:
-                if not getattr(self, 'ip_adapter_loaded', False):
-                    try:
-                        pipe.enable_attention_slicing()
-                    except Exception:
-                        pass
-                applied.append("attn_slicing")
-            except Exception:
-                pass
-
         # xformers (装了才用，PyTorch 2.x SDPA 也已是默认快通道)
         try:
             pipe.enable_xformers_memory_efficient_attention()
@@ -183,7 +171,7 @@ class ModelManager(metaclass=SingletonMeta):
         if _return:
             return applied
         if applied:
-            print(f"⚙️ [{name or 'pipe'}] 已启用优化: {', '.join(applied)}")
+            logger.info(f"⚙️ [{name or 'pipe'}] 已启用优化: {', '.join(applied)}")
         return pipe
 
     # ------------------------------------------------------------
@@ -193,7 +181,7 @@ class ModelManager(metaclass=SingletonMeta):
         # 同模型跳过
         if (self.current_model_name == model_name
                 and self.txt2img_pipe is not None):
-            print("⚡ 模型未改变，跳过加载。")
+            logger.info("⚡ 模型未改变，跳过加载。")
             return
     
         # === 智能查找:支持 models/ 根目录 + 子文件夹 ===
@@ -223,7 +211,7 @@ class ModelManager(metaclass=SingletonMeta):
         if model_path is None:
             raise FileNotFoundError(f"找不到模型文件: {model_name}")
     
-        print(f"📂 模型路径: {model_path}", flush=True)
+        logger.info(f"📂 模型路径: {model_path}")
 
         # ========== 模型类型自动识别 ==========
         file_size_gb = os.path.getsize(model_path) / (1024 ** 3)
@@ -250,7 +238,7 @@ class ModelManager(metaclass=SingletonMeta):
         else:
             model_type = "SD 1.5"
     
-        print(f"📦 检测模型类型: {model_type} ({file_size_gb:.2f}GB)")
+        logger.info(f"📦 检测模型类型: {model_type} ({file_size_gb:.2f}GB)")
 
         try:
             # ========== 选择 Pipeline 类 ==========
@@ -273,7 +261,7 @@ class ModelManager(metaclass=SingletonMeta):
                 img2img_class = StableDiffusionImg2ImgPipeline
                 inpaint_class = StableDiffusionInpaintPipeline
 
-            print(f"⏳ 正在加载 {model_type} 模型...")
+            logger.info(f"⏳ 正在加载 {model_type} 模型...")
 
             # ========== 加载主 Pipeline ==========
             self.txt2img_pipe = pipe_class.from_single_file(
@@ -297,20 +285,20 @@ class ModelManager(metaclass=SingletonMeta):
                 self.img2img_pipe = img2img_class(**self.txt2img_pipe.components)
                 self._apply_light_optimizations(self.img2img_pipe, name="img2img")
             except Exception as e:
-                print(f"⚠️ img2img pipe 创建失败: {e}")
+                logger.warning(f"⚠️ img2img pipe 创建失败: {e}")
                 self.img2img_pipe = None
         
             try:
                 self.inpaint_pipe = inpaint_class(**self.txt2img_pipe.components)
                 self._apply_light_optimizations(self.inpaint_pipe, name="inpaint")
             except Exception as e:
-                print(f"⚠️ inpaint pipe 创建失败: {e}")
+                logger.warning(f"⚠️ inpaint pipe 创建失败: {e}")
                 self.inpaint_pipe = None
 
             self.current_model_name = model_name
             self.current_lora_name  = None
             self._compel_cache.clear()
-            print(f"✅ {model_type} 模型加载与显存优化完成！")
+            logger.info(f"✅ {model_type} 模型加载与显存优化完成！")
 
             # ========== Compel 长提示词（仅 SD1.5/SDXL）==========
             if not (self.is_sd3 or self.is_flux):
@@ -328,12 +316,12 @@ class ModelManager(metaclass=SingletonMeta):
                         tokenizer=self.controlnet_pipe.tokenizer,
                         text_encoder=self.controlnet_pipe.text_encoder,
                     )
-                print("✅ Compel 长提示词支持已启用", flush=True)
+                logger.info("✅ Compel 长提示词支持已启用")
             else:
                 # SD3/Flux 原生支持长提示词，不需要 Compel
                 self.compel_txt2img = None
                 self.compel_img2img = None
-                print(f"✅ {model_type} 原生支持长提示词")
+                logger.info(f"✅ {model_type} 原生支持长提示词")
 
         except Exception as e:
             import traceback
@@ -352,7 +340,7 @@ class ModelManager(metaclass=SingletonMeta):
         # 1. 卸载之前所有的 LoRA 插件，保持底模纯净
         try:
             self.txt2img_pipe.unload_lora_weights()
-            print("🧹 已清空旧的 LoRA 缓存。")
+            logger.info("🧹 已清空旧的 LoRA 缓存。")
         except Exception:
             pass
 
@@ -375,20 +363,20 @@ class ModelManager(metaclass=SingletonMeta):
                     )
                     adapter_names.append(adapter_name)
                     adapter_weights.append(weight)
-                    print(f"✅ 挂载插件: {lora_name} "
+                    logger.info(f"✅ 挂载插件: {lora_name} "
                           f"(独立权重: {weight})")
                 except Exception as e:
-                    print(f"❌ [跳过] 插件 {lora_name} 不兼容或损坏: {e}")
+                    logger.error(f"❌ [跳过] 插件 {lora_name} 不兼容或损坏: {e}")
 
         # 3. 一次性激活全部 LoRA，并分配精确权重
         if adapter_names:
             try:
                 self.txt2img_pipe.set_adapters(
                     adapter_names, adapter_weights=adapter_weights)
-                print(f"⚡ 已激活插件通道: {adapter_names}，"
+                logger.info(f"⚡ 已激活插件通道: {adapter_names}，"
                       f"对应权重: {adapter_weights}")
             except Exception as e:
-                print(f"⚠️ 激活多 LoRA 权重时异常: {e}")
+                logger.warning(f"⚠️ 激活多 LoRA 权重时异常: {e}")
 
     # ------------------------------------------------------------
     #  ControlNet
@@ -413,7 +401,7 @@ class ModelManager(metaclass=SingletonMeta):
             self._sync_ipa_components_to_controlnet()
             return
 
-        print(f"🔄 正在配置 ControlNet: {control_type} "
+        logger.info(f"🔄 正在配置 ControlNet: {control_type} "
               f"(原始输入: {raw_type})...")
 
         model_id_map = {
@@ -444,12 +432,12 @@ class ModelManager(metaclass=SingletonMeta):
 
             )
             if os.path.exists(os.path.join(local_dir, "config.json")):
-                print(f"📂 从本地加载 ControlNet: {local_dir}")
+                logger.info(f"📂 从本地加载 ControlNet: {local_dir}")
                 cn_source = local_dir
                 local_only = True
             else:
                 cn_model_id = use_map[control_type]
-                print(f"🌐 从在线下载 ControlNet: {cn_model_id} "
+                logger.info(f"🌐 从在线下载 ControlNet: {cn_model_id} "
                       f"(via {os.environ.get('HF_ENDPOINT', 'huggingface.co')})")
                 cn_source = cn_model_id
                 local_only = False
@@ -504,34 +492,34 @@ class ModelManager(metaclass=SingletonMeta):
         self._apply_light_optimizations(self.controlnet_pipe, name="controlnet")
 
         self.current_cn_type = control_type
-        print(f"✅ ControlNet ({control_type}) 加载完成")
+        logger.info(f"✅ ControlNet ({control_type}) 加载完成")
 
         self._sync_ipa_components_to_controlnet()
 
         # ===== 预处理器(检测器) =====
         if control_type == "openpose" and not self.pose_detector:
-            print("⏳ 正在加载 OpenPose 骨架提取器...")
+            logger.info("⏳ 正在加载 OpenPose 骨架提取器...")
             local_annot = os.path.join(paths.CONTROLNET_DIR, "Annotators")
             if os.path.exists(os.path.join(local_annot, "body_pose_model.pth")):
-                print(f"📂 从本地加载 OpenPose 检测器: {local_annot}")
+                logger.info(f"📂 从本地加载 OpenPose 检测器: {local_annot}")
                 try:
                     self.pose_detector = OpenposeDetector.from_pretrained(local_annot)
                 except Exception as e:
-                    print(f"⚠️ 本地 OpenPose 加载失败: {e}")
+                    logger.warning(f"⚠️ 本地 OpenPose 加载失败: {e}")
             else:
                 try:
                     self.pose_detector = OpenposeDetector.from_pretrained(
                         "lllyasviel/Annotators")
                 except Exception as e:
-                    print(f"⚠️ 加载 OpenPose 失败: {e}")
+                    logger.warning(f"⚠️ 加载 OpenPose 失败: {e}")
 
         elif control_type == "depth" and not self.depth_estimator:
-            print("⏳ 正在加载 Depth 深度图提取器...")
+            logger.info("⏳ 正在加载 Depth 深度图提取器...")
             try:
                 from transformers import pipeline
                 self.depth_estimator = pipeline('depth-estimation')
             except Exception as e:
-                print(f"⚠️ 加载 Depth 失败: {e}")
+                logger.warning(f"⚠️ 加载 Depth 失败: {e}")
 
     def _sync_ipa_components_to_controlnet(self):
         """
@@ -554,23 +542,22 @@ class ModelManager(metaclass=SingletonMeta):
         src_img_enc = getattr(src, 'image_encoder', None)
         if src_img_enc is not None:
             dst.image_encoder = src_img_enc
-            print("🔧 [sync] image_encoder → controlnet_pipe", flush=True)
+            logger.info("🔧 [sync] image_encoder → controlnet_pipe")
 
         # 2. feature_extractor (CLIP 图像预处理器)
         src_feat = getattr(src, 'feature_extractor', None)
         if src_feat is not None:
             dst.feature_extractor = src_feat
-            print("🔧 [sync] feature_extractor → controlnet_pipe", flush=True)
+            logger.info("🔧 [sync] feature_extractor → controlnet_pipe")
 
         # 3. 同步 IP-Adapter scale (UNet 共享,所以会自动生效,这里只为保险)
         try:
             if getattr(self, 'ip_adapter_loaded', False):
                 current_scale = getattr(self, 'current_ipa_scale', 0.6)
                 dst.set_ip_adapter_scale(current_scale)
-                print(f"🔧 [sync] IPA scale={current_scale} → controlnet_pipe",
-                      flush=True)
+                logger.info(f"🔧 [sync] IPA scale={current_scale} → controlnet_pipe")
         except Exception as e:
-            print(f"⚠️ [sync] 设置 controlnet_pipe IPA scale 失败: {e}", flush=True)
+            logger.warning(f"⚠️ [sync] 设置 controlnet_pipe IPA scale 失败: {e}")
 
 
     def get_control_image(self, input_image, control_type="openpose"):
@@ -601,7 +588,7 @@ class ModelManager(metaclass=SingletonMeta):
         """
         if getattr(self, 'ip_adapter_loaded', False) \
            and getattr(self, 'ip_adapter_variant', None) == variant:
-            print("✅ IP-Adapter 已加载,复用", flush=True)
+            logger.info("✅ IP-Adapter 已加载,复用")
             return True
 
         weight_name = (
@@ -609,7 +596,7 @@ class ModelManager(metaclass=SingletonMeta):
             if variant == "plus"
             else "ip-adapter_sd15.safetensors"
         )
-        print(f"🎭 加载 IP-Adapter ({variant}) ...", flush=True)
+        logger.info(f"🎭 加载 IP-Adapter ({variant}) ...")
 
         pipes = []
         for attr in ("txt2img_pipe", "img2img_pipe"):   
@@ -618,7 +605,7 @@ class ModelManager(metaclass=SingletonMeta):
                 pipes.append((attr, pipe))
 
         # ── 重置 attn processor (只对装载 IPA 的 pipe) ──
-        print("  → 重置 attn processor (关闭 attention slicing) ...", flush=True)
+        logger.info("  → 重置 attn processor (关闭 attention slicing) ...")
         try:
             from diffusers.models.attention_processor import (
                 AttnProcessor2_0, AttnProcessor
@@ -638,14 +625,14 @@ class ModelManager(metaclass=SingletonMeta):
                 try:
                     pipe.unet.set_attn_processor(proc_class())
                 except Exception as e:
-                    print(f"    ⚠️ {attr} 重置 processor 失败: {e}", flush=True)
+                    logger.warning(f"    ⚠️ {attr} 重置 processor 失败: {e}")
         except Exception as e:
-            print(f"  ⚠️ 重置 processor 异常: {e}", flush=True)
+            logger.warning(f"  ⚠️ 重置 processor 异常: {e}")
 
         # ── 装载 IP-Adapter (仅 txt2img / img2img) ──
         try:
             for attr, pipe in pipes:
-                print(f"  → 装载 IP-Adapter 到 {attr} ...", flush=True)
+                logger.info(f"  → 装载 IP-Adapter 到 {attr} ...")
                 pipe.load_ip_adapter(
                     "h94/IP-Adapter",
                     subfolder="models",
@@ -676,15 +663,15 @@ class ModelManager(metaclass=SingletonMeta):
                     # 检查 inpaint 是否和 txt2img 共享 UNet
                     shares_unet = (inpaint_pipe.unet is self.txt2img_pipe.unet)
                     if shares_unet:
-                        print("  ⚠️ inpaint_pipe 与 txt2img 共享 UNet,"
-                              "ADetailer 时需在调用层处理 IPA 占位", flush=True)
+                        logger.warning("  ⚠️ inpaint_pipe 与 txt2img 共享 UNet,"
+                              "ADetailer 时需在调用层处理 IPA 占位")
                     else:
                         # 独立 UNet,直接重置回干净的 processor
                         inpaint_pipe.unet.set_attn_processor(proc_class())
-                        print("  ✅ inpaint_pipe 已重置为标准 attn_processor "
-                              "(无 IPA 干扰)", flush=True)
+                        logger.info("  ✅ inpaint_pipe 已重置为标准 attn_processor "
+                              "(无 IPA 干扰)")
                 except Exception as e:
-                    print(f"  ⚠️ inpaint_pipe 同步失败: {e}", flush=True)
+                    logger.warning(f"  ⚠️ inpaint_pipe 同步失败: {e}")
 
             # 🆕 设置所有状态标志(统一两套变量名)
             self.ip_adapter_loaded  = True
@@ -693,26 +680,26 @@ class ModelManager(metaclass=SingletonMeta):
             self._ipa_variant       = variant
             self._ipa_scale         = 0.7
 
-            print("✅ IP-Adapter 加载完成 (inpaint_pipe 已排除)", flush=True)
+            logger.info("✅ IP-Adapter 加载完成 (inpaint_pipe 已排除)")
 
             # 🆕 如果 controlnet_pipe 已存在,自动同步
             if getattr(self, 'controlnet_pipe', None) is not None:
                 try:
                     self.sync_ipa_to_controlnet()
                 except Exception as e:
-                    print(f"⚠️ 自动同步 IPA 到 controlnet 失败: {e}", flush=True)
+                    logger.warning(f"⚠️ 自动同步 IPA 到 controlnet 失败: {e}")
 
             return True
 
         except Exception as e:
-            print(f"❌ IP-Adapter 加载失败: {e}", flush=True)
+            logger.error(f"❌ IP-Adapter 加载失败: {e}")
             import traceback
             traceback.print_exc()
 
             try:
                 self.unload_ip_adapter()
             except Exception as e2:
-                print(f"⚠️ 清理失败: {e2}", flush=True)
+                logger.warning(f"⚠️ 清理失败: {e2}")
 
             self.ip_adapter_loaded  = False
             self.ip_adapter_variant = None
@@ -723,7 +710,7 @@ class ModelManager(metaclass=SingletonMeta):
 
     def unload_ip_adapter(self):
         """彻底卸载 IP-Adapter，恢复 UNet 到普通模式（覆盖全部 4 个 pipeline）"""
-        print("🧹 卸载 IP-Adapter ...", flush=True)
+        logger.info("🧹 卸载 IP-Adapter ...")
         pipes = [
             self.txt2img_pipe,
             self.img2img_pipe,
@@ -747,13 +734,13 @@ class ModelManager(metaclass=SingletonMeta):
                     pipe.unet.encoder_hid_proj = None
                     pipe.unet.config.encoder_hid_dim_type = None
             except Exception as e:
-                print(f"  ⚠️ 卸载异常: {e}", flush=True)
+                logger.warning(f"  ⚠️ 卸载异常: {e}")
 
         self.ip_adapter_loaded  = False
         self.ip_adapter_variant = None
         self._ipa_loaded        = False
         self._ipa_variant       = None
-        print("✅ IP-Adapter 卸载完成", flush=True)
+        logger.info("✅ IP-Adapter 卸载完成")
 
 
     def set_ip_adapter_scale(self, scale: float = 0.6):
@@ -774,7 +761,7 @@ class ModelManager(metaclass=SingletonMeta):
                     pipe.set_ip_adapter_scale(scale)
             except Exception:
                 pass
-        print(f"🎛️ IP-Adapter scale = {scale}", flush=True)
+        logger.info(f"🎛️ IP-Adapter scale = {scale}")
 
     # ------------------------------------------------------------
     #  提示词编码 (Compel,支持 SD1.5 / SDXL)
@@ -874,10 +861,10 @@ class ModelManager(metaclass=SingletonMeta):
             if getattr(self, 'controlnet_pipe', None) is not None:
                 self.controlnet_pipe.scheduler = new_scheduler
 
-            print(f"🔄 采样器已切换为 -> {sampler_name}")
+            logger.info(f"🔄 采样器已切换为 -> {sampler_name}")
 
         except Exception as e:
-            print(f"⚠️ 切换采样器失败: {e}，将使用原默认采样器")
+            logger.warning(f"⚠️ 切换采样器失败: {e}，将使用原默认采样器")
 
     def _normalize_device(self, raw) -> str:
         import re, torch
@@ -910,7 +897,7 @@ class ModelManager(metaclass=SingletonMeta):
 
     def unload_all(self):
         """彻底释放所有管线和内存"""
-        print("🧹 开始释放所有模型...")
+        logger.info("🧹 开始释放所有模型...")
 
         # 释放管线
         for attr in ['txt2img_pipe', 'img2img_pipe', 'inpaint_pipe',
@@ -972,38 +959,38 @@ class ModelManager(metaclass=SingletonMeta):
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
 
-        print("✅ 所有模型已释放")
+        logger.info("✅ 所有模型已释放")
 
     def sync_ipa_to_controlnet(self):
         """
         给 controlnet_pipe 独立装载 IP-Adapter（不依赖共享 UNet）。
         """
         if self.controlnet_pipe is None:
-            print("⚠️ controlnet_pipe 未初始化", flush=True)
+            logger.warning("⚠️ controlnet_pipe 未初始化")
             return False
 
         if self.txt2img_pipe is None or not getattr(self, '_ipa_loaded', False):
-            print("⚠️ txt2img_pipe 未加载 IPA，无法同步", flush=True)
+            logger.warning("⚠️ txt2img_pipe 未加载 IPA，无法同步")
             return False
 
-        print("🔄 给 controlnet_pipe 独立装载 IP-Adapter...", flush=True)
+        logger.info("🔄 给 controlnet_pipe 独立装载 IP-Adapter...")
 
         try:
             # ── 1. 关闭 attention slicing（IPA 不兼容） ──
             try:
                 self.controlnet_pipe.disable_attention_slicing()
-                print("  → 关闭 controlnet_pipe attention_slicing", flush=True)
+                logger.info("  → 关闭 controlnet_pipe attention_slicing")
             except Exception:
                 pass
 
             # ── 2. 共享 image_encoder 和 feature_extractor（节省显存） ──
             if hasattr(self.txt2img_pipe, 'image_encoder') and self.txt2img_pipe.image_encoder is not None:
                 self.controlnet_pipe.image_encoder = self.txt2img_pipe.image_encoder
-                print("  → 共享 image_encoder", flush=True)
+                logger.info("  → 共享 image_encoder")
 
             if hasattr(self.txt2img_pipe, 'feature_extractor') and self.txt2img_pipe.feature_extractor is not None:
                 self.controlnet_pipe.feature_extractor = self.txt2img_pipe.feature_extractor
-                print("  → 共享 feature_extractor", flush=True)
+                logger.info("  → 共享 feature_extractor")
 
             # ── 3. 关键：独立装载 IP-Adapter 到 controlnet_pipe ──
             variant = getattr(self, '_ipa_variant', 'plus')
@@ -1017,14 +1004,14 @@ class ModelManager(metaclass=SingletonMeta):
             # 优先用本地缓存
             local_dir = os.path.join(paths.CACHE_DIR, "ip_adapter")
             if os.path.exists(os.path.join(local_dir, "models", weight_name)):
-                print(f"  → 从本地装载: {weight_name}", flush=True)
+                logger.info(f"  → 从本地装载: {weight_name}")
                 self.controlnet_pipe.load_ip_adapter(
                     local_dir,
                     subfolder="models",
                     weight_name=weight_name,
                 )
             else:
-                print(f"  → 从 HuggingFace 装载: {weight_name}", flush=True)
+                logger.info(f"  → 从 HuggingFace 装载: {weight_name}")
                 self.controlnet_pipe.load_ip_adapter(
                     "h94/IP-Adapter",
                     subfolder="models",
@@ -1034,7 +1021,7 @@ class ModelManager(metaclass=SingletonMeta):
             # ── 4. 设置 scale ──
             scale = getattr(self, '_ipa_scale', 0.7)
             self.controlnet_pipe.set_ip_adapter_scale(scale)
-            print(f"  → set scale = {scale}", flush=True)
+            logger.info(f"  → set scale = {scale}")
 
             # ── 5. 验证 ──
             ok_count = 0
@@ -1046,11 +1033,11 @@ class ModelManager(metaclass=SingletonMeta):
                     else:
                         err_count += 1
 
-            print(f"✅ ControlNet IPA 装载完成: {ok_count} 正确 / {err_count} 错误", flush=True)
+            logger.warning(f"✅ ControlNet IPA 装载完成: {ok_count} 正确 / {err_count} 错误")
             return ok_count > 0 and err_count == 0
 
         except Exception as e:
-            print(f"❌ IPA 装载失败: {e}", flush=True)
+            logger.error(f"❌ IPA 装载失败: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -1061,18 +1048,18 @@ class ModelManager(metaclass=SingletonMeta):
             return
         try:
             pipe.enable_vae_tiling()
-            print(f"  ✅ [{name}] VAE Tiling 已启用（支持大图）")
+            logger.info(f"  ✅ [{name}] VAE Tiling 已启用（支持大图）")
         except Exception as e:
-            print(f"  ⚠️ [{name}] VAE Tiling 启用失败: {e}")
+            logger.warning(f"  ⚠️ [{name}] VAE Tiling 启用失败: {e}")
         try:
             pipe.enable_vae_slicing()
-            print(f"  ✅ [{name}] VAE Slicing 已启用（省显存）")
+            logger.info(f"  ✅ [{name}] VAE Slicing 已启用（省显存）")
         except Exception as e:
-            print(f"  ⚠️ [{name}] VAE Slicing 启用失败: {e}")
+            logger.warning(f"  ⚠️ [{name}] VAE Slicing 启用失败: {e}")
         # xformers 加速（如果装了）
         try:
             pipe.enable_xformers_memory_efficient_attention()
-            print(f"  ✅ [{name}] xformers 加速已启用")
+            logger.info(f"  ✅ [{name}] xformers 加速已启用")
         except Exception:
             pass  # 没装就算了
 

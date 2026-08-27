@@ -14,6 +14,9 @@ from PyQt6.QtWidgets import (
     QTextBrowser, QCheckBox, QPushButton, QMessageBox
 )
 from PyQt6.QtCore import Qt
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Determine project root robustly (works for source and frozen builds)
 _IS_FROZEN = getattr(sys, 'frozen', False)
@@ -107,7 +110,7 @@ def _save_config(cfg: dict):
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"⚠️ 保存 config.json 失败: {e}")
+        logger.warning(f"⚠️ 保存 config.json 失败: {e}")
 
 
 # ==================== 通用弹窗 ====================

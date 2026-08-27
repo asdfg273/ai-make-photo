@@ -9,6 +9,9 @@ import tempfile
 import shutil
 import cv2
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class RIFEInterpolator:
@@ -56,7 +59,7 @@ class RIFEInterpolator:
             os.makedirs(frames_out)
 
             # === Step 1: 提取帧 ===
-            print(f"🎞️ [RIFE] 提取原始帧...")
+            logger.info(f"🎞️ [RIFE] 提取原始帧...")
             cap = cv2.VideoCapture(input_video)
             idx = 0
             while True:
@@ -66,10 +69,10 @@ class RIFEInterpolator:
                 cv2.imwrite(os.path.join(frames_in, f"{idx:06d}.png"), frame)
                 idx += 1
             cap.release()
-            print(f"   ✅ 提取 {idx} 帧")
+            logger.info(f"   ✅ 提取 {idx} 帧")
 
             # === Step 2: 调 RIFE 插值 ===
-            print(f"🎞️ [RIFE] 插值 x{multiplier}...")
+            logger.info(f"🎞️ [RIFE] 插值 x{multiplier}...")
             cmd = [
                 self.exe,
                 "-i", frames_in,
@@ -90,10 +93,10 @@ class RIFEInterpolator:
             out_frames = sorted(os.listdir(frames_out))
             if not out_frames:
                 raise RuntimeError("RIFE 未产出任何帧")
-            print(f"   ✅ 生成 {len(out_frames)} 帧")
+            logger.info(f"   ✅ 生成 {len(out_frames)} 帧")
 
             # === Step 3: 合成视频 ===
-            print(f"🎞️ [RIFE] 合成 {target_fps}fps 视频...")
+            logger.info(f"🎞️ [RIFE] 合成 {target_fps}fps 视频...")
             first = cv2.imread(os.path.join(frames_out, out_frames[0]))
             h, w = first.shape[:2]
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -102,5 +105,5 @@ class RIFEInterpolator:
                 writer.write(cv2.imread(os.path.join(frames_out, fn)))
             writer.release()
 
-        print(f"✅ [RIFE] 完成: {output_video}")
+        logger.info(f"✅ [RIFE] 完成: {output_video}")
         return output_video

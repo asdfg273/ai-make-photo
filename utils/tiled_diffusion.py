@@ -7,6 +7,9 @@ import torch
 import numpy as np
 from PIL import Image
 from typing import Optional, Callable
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _make_blend_mask(tile_w: int, tile_h: int, overlap: int) -> np.ndarray:
@@ -87,7 +90,7 @@ def tiled_img2img(
     # 2. 计算 tile 网格
     tiles = _compute_tiles(target_width, target_height, tile_size, overlap)
     total = len(tiles)
-    print(f"🧩 Tiled Diffusion: {target_width}x{target_height}, "
+    logger.info(f"🧩 Tiled Diffusion: {target_width}x{target_height}, "
           f"tile={tile_size}, overlap={overlap}, 共 {total} 块")
     
     # 3. 准备输出画布(累加 + 权重)
@@ -100,7 +103,7 @@ def tiled_img2img(
         if cancel_check and cancel_check():
             raise InterruptedError("用户取消")
         
-        print(f"  🧩 [{idx+1}/{total}] 块 ({x},{y}) {w}x{h}")
+        logger.info(f"  🧩 [{idx+1}/{total}] 块 ({x},{y}) {w}x{h}")
         
         # 裁出 tile
         tile_img = init_image.crop((x, y, x + w, y + h))

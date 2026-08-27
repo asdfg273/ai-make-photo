@@ -336,5 +336,5 @@ class TooltipMixin:
             if w is not None:
                 w.setToolTip(tip(key))
                 applied += 1
-        print(f"[Tooltip] 已应用 {applied}/{len(mapping)} 条参数提示")
+        logger.info(f"[Tooltip] 已应用 {applied}/{len(mapping)} 条参数提示")
 

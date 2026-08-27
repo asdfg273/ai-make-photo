@@ -20,11 +20,11 @@ os.environ["DIFFUSERS_CACHE"]      = os.path.join(CACHE_ROOT, "huggingface", "di
 os.environ["MODELSCOPE_CACHE"]     = os.path.join(CACHE_ROOT, "modelscope")
 os.environ["TORCH_HOME"]           = os.path.join(CACHE_ROOT, "torch")
 os.environ["HF_ENDPOINT"]          = "https://hf-mirror.com"
-
-print(f"📦 模型缓存目录: {CACHE_ROOT}")
-
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 from utils.system_utils import setup_logging, log_system_info, logger
 setup_logging()
+logger.info(f"📦 模型缓存目录: {CACHE_ROOT}")
 
 import threading
 import warnings
@@ -122,6 +122,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
         self.gallery.reuse_params_signal.connect(self.reuse_params_from_path)
         self.gallery.send_to_i2i_signal.connect(self.send_path_to_img2img)
         self.gallery.send_to_face_signal.connect(self.send_path_to_face_fix)
+        self.gallery.send_to_editor_signal.connect(self.send_path_to_editor)
         self._setup_menu_and_statusbar()
 
         # ── 生成信号桥 ──
@@ -131,12 +132,12 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
             self._bridge.gallery_add_signal.connect(self._on_new_image_saved)
             self._bridge.live_preview_signal.connect(self.show_preview_image)
         except Exception as e:
-            print(f"[CONNECT] ❌ 预览信号连接失败: {e}")
+            logger.error(f"[CONNECT] ❌ 预览信号连接失败: {e}")
 
         try:
             self.gallery.apply_params_signal.connect(self._on_apply_gallery_params)
         except Exception as e:
-            print(f"[CONNECT] ❌ 失败: {e}")
+            logger.error(f"[CONNECT] ❌ 失败: {e}")
 
         # enhance_done_signal 已在 _init_gen_bridge() 中连接,此处不再重复连接
         self._ui_ready = True
@@ -166,7 +167,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
                 self.on_model_selected(0)   # 刷新模型信息 + LoRA + 备注
                 self._set_status("✅ 默认模型就绪（权重将在首次生成时加载）", "#a6e3a1")
         except Exception as e:
-            print(f"[PRELOAD] ⚠️ 默认模型信息加载失败: {e}")
+            logger.warning(f"[PRELOAD] ⚠️ 默认模型信息加载失败: {e}")
 
     def _set_status(self, text: str, color: str = "#89dceb"):
         self.set_status(text, color)
@@ -448,35 +449,35 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
             pass
 
     def show_preview_image(self, path: str):
-        print(f"[SHOW] 收到预览 path={path}", flush=True)
+        logger.debug(f"[SHOW] 收到预览 path={path}")
         if not path or not os.path.exists(path):
-            print(f"[SHOW] ❌ 文件不存在", flush=True)
+            logger.error(f"[SHOW] ❌ 文件不存在")
             return
         try:
             from PyQt6.QtGui import QPixmap
             pix = QPixmap(path)
             if pix.isNull():
-                print(f"[SHOW] ❌ QPixmap 加载失败", flush=True)
+                logger.error(f"[SHOW] ❌ QPixmap 加载失败")
                 return
             if hasattr(self, 'lbl_preview'):
                 self.lbl_preview.set_pixmap(pix)
-                print(f"[SHOW] ✅ 已刷新 lbl_preview", flush=True)
+                logger.debug(f"[SHOW] ✅ 已刷新 lbl_preview")
         except Exception as e:
             import traceback
-            print(f"[SHOW] ❌ 异常: {e}", flush=True)
+            logger.error(f"[SHOW] ❌ 异常: {e}")
             traceback.print_exc()
 
     def _on_new_image_saved(self, path: str):
-        print(f"[GALLERY-RECV] 收到信号: {path}", flush=True)
+        logger.debug(f"[GALLERY-RECV] 收到信号: {path}")
         if hasattr(self, 'gallery') and path and os.path.exists(path):
             try:
                 self.gallery.add_image(path, prepend=True)
-                print(f"[GALLERY-SIG] ✅ add_image 成功")
+                logger.debug(f"[GALLERY-SIG] ✅ add_image 成功")
             except Exception as e:
-                print(f"[GALLERY-SIG] ❌ add_image 失败: {e}")
+                logger.error(f"[GALLERY-SIG] ❌ add_image 失败: {e}")
 
     def _on_apply_gallery_params(self, meta: dict):
-        print(f"[APPLY] 收到 meta: {list(meta.keys())}", flush=True)
+        logger.debug(f"[APPLY] 收到 meta: {list(meta.keys())}")
         try:
             if meta.get("prompt") and hasattr(self, "txt_prompt"):
                 self.txt_prompt.setPlainText(meta["prompt"])
@@ -498,7 +499,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
                         else:
                             self._safe_set_int(widget_name, int(meta[k]))
                     except Exception as e:
-                        print(f"[APPLY] 跳过 {k}: {e}", flush=True)
+                        logger.debug(f"[APPLY] 跳过 {k}: {e}")
             if "sampler" in meta and hasattr(self, "combo_sampler"):
                 try:
                     self._safe_set_combo("combo_sampler", str(meta["sampler"]))
@@ -506,7 +507,7 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
                     pass
             self._set_status("✅ 已套用画廊参数", "#a6e3a1")
         except Exception as e:
-            print(f"[APPLY] ❌ 异常: {e}", flush=True)
+            logger.error(f"[APPLY] ❌ 异常: {e}")
 
     def apply_meta_params(self, meta: dict):
         try:
@@ -602,12 +603,40 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
         self._set_status("🛠 已发送到 img2img", "#a6e3a1")
 
     def send_path_to_face_fix(self, path: str):
-        self.last_generated_path = path
-        if hasattr(self, 'chk_use_adetailer'):
-            self.chk_use_adetailer.setChecked(True)
-        if hasattr(self, 'send_preview_to_img2img'):
-            self.send_preview_to_img2img()
-        self._set_status("😀 已发送到修脸 (ADetailer 已开启)", "#a6e3a1")
+        """画廊 → 发送到修脸：打开修图编辑器，引擎就绪时自动运行 ADetailer"""
+        if not path or not os.path.exists(path):
+            self._set_status("⚠️ 图片不存在,无法修脸", "#f38ba8")
+            return
+        try:
+            self.show_preview(path)
+        except Exception:
+            self.current_generated_path = path
+            self.last_generated_path = path
+
+        # 引擎已就绪 → 编辑器打开后自动跑一次 ADetailer
+        engine_ready = bool(
+            getattr(self, 'ai', None)
+            and getattr(self.ai, 'img2img_pipe', None) is not None
+        )
+        self._editor_auto_adetailer = engine_ready
+        self._set_status(
+            "😀 已打开发修图编辑器" + ("，ADetailer 自动修复中..." if engine_ready
+                                     else "，请点击左侧「ADetailer 人脸修复」"),
+            "#a6e3a1")
+        self.open_editor()
+
+    def send_path_to_editor(self, path: str):
+        """画廊 → 载入预览并打开修图编辑器"""
+        if not path or not os.path.exists(path):
+            self._set_status("⚠️ 图片不存在,无法编辑", "#f38ba8")
+            return
+        try:
+            self.show_preview(path)   # 同时更新 current_generated_path
+        except Exception:
+            self.current_generated_path = path
+            self.last_generated_path = path
+        self._set_status("✏️ 正在打开修图编辑器...", "#89dceb")
+        self.open_editor()
 
     # ==========================================================
     #  模型切换
@@ -668,7 +697,7 @@ if __name__ == "__main__":
 
     from ui.disclaimer import check_global_disclaimer
     if not check_global_disclaimer():
-        print("❌ 用户未同意免责声明,程序退出")
+        logger.error("❌ 用户未同意免责声明,程序退出")
         sys.exit(0)
 
     splash = create_splash()

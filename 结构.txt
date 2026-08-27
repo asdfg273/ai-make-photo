@@ -1,18 +1,18 @@
 ai make photo/
 │
-├── 📄 main.py                    # PyQt6 主入口
+├── 📄 main.py                    # PyQt6 主入口（AIDesktopApp，Mixin 组合）
 ├── 📄 README.md
-├── 📄 requirements.txt
-├── 📄 app_config.json            # 应用配置
+├── 📄 requirements.txt           # 依赖清单（torch 按注释单独装 CUDA 版）
+├── 📄 requirements-lock.txt      # 本机 pip freeze 冻结环境
+├── 📄 app_config.json            # 应用配置（AppConfig 自动保存）
 ├── 📄 aiUsemono.md               # 使用说明
-├── 📄 结构.txt                   # 项目结构图
+├── 📄 结构.txt                   # 本文件
 │
 ├── 📁 core/                      # 核心模块
 │   ├── __init__.py
-│   ├── config_manager.py         # 配置管理
-│   ├── downup.py                 # 图像放大/缩小
-│   ├── model_manager.py          # 模型加载管理
-│   ├── presets.py                # 预设管理
+│   ├── config_manager.py         # 配置管理（AppConfig dataclass）
+│   ├── model_manager.py          # 模型加载管理（单例 ModelManager）
+│   ├── presets.py                # 提示词预设
 │   └── translation_service.py    # 翻译服务
 │
 ├── 📁 ui/                        # 界面模块
@@ -24,29 +24,30 @@ ai make photo/
 │   ├── preset_manager.py         # 预设管理面板
 │   ├── splash.py                 # 启动画面
 │   ├── tooltips.py               # 工具提示
-│   ├── ui_builder.py             # UI 构建（含动画界面）
-│   ├── video_panel_mixin.py      # 视频面板
+│   ├── ui_builder.py             # UI 构建（UIBuilderMixin）
+│   ├── video_panel_mixin.py      # 视频面板（VideoPanelMixin）
 │   └── widgets.py                # 自定义控件
 │
 ├── 📁 utils/                     # 工具模块
 │   ├── __init__.py
-│   ├── app_events.py             # 事件处理
-│   ├── app_generation.py         # 生成流程
+│   ├── app_events.py             # 事件处理（EventMixin）
+│   ├── app_generation.py         # 生成流程（GenerationMixin）
 │   ├── app_utils.py              # 应用工具函数
+│   ├── chattts_patch.py          # ChatTTS 兼容补丁
 │   ├── extension_manager.py      # 扩展管理
-│   ├── image_processor.py        # 图像处理
+│   ├── gpu_init.py               # GPU 加速初始化
+│   ├── image_processor.py        # 图像处理 / ADetailer
 │   ├── model_downloader.py       # 模型下载
 │   ├── model_scanner.py          # 模型扫描
-│   ├── paths.py                  # 路径管理
+│   ├── paths.py                  # 统一路径管理
 │   ├── prompt_enhancer.py        # Qwen 智能改写
 │   ├── rife_interpolate.py       # RIFE 帧插值
 │   ├── sovits_tts.py             # GPT-SoVITS 配音
-│   ├── system_utils.py           # 系统工具
+│   ├── system_utils.py           # 系统工具 / 日志设施（setup_logging）
 │   ├── tiled_diffusion.py        # 分块扩散
-│   ├── translator.py             # 翻译工具
 │   ├── tts_engine.py             # ChatTTS 配音
-│   ├── video_gen.py              # 视频生成服务
-│   └── vram_manager.py           # 显存管理
+│   ├── video_gen.py              # 视频生成服务（AnimateDiff）
+│   └── vram_manager.py           # 显存管理（分级策略）
 │
 ├── 📁 photo_turn/                # 图像编辑模块（自包含）
 │   ├── __init__.py
@@ -58,56 +59,55 @@ ai make photo/
 │   ├── pro_editor_qt.py
 │   └── 结构图.txt
 │
+├── 📁 scripts/                   # 维护脚本
+│   ├── download_gemma.py
+│   ├── download_ref_voice.py
+│   ├── download_sovits.py
+│   └── codemod_unify_logging.py  # 日志统一迁移脚本（一次性工具）
+│
+├── 📁 tests/                     # 手动测试脚本（非 pytest）
+│
 ├── 📁 models/                    # AI 模型存储
-│   ├── adetailer/                # 面部/手部修复模型
-│   │   └── hand_yolov8n.pt
-│   ├── loras/                    # LoRA 权重
-│   │   ├── sd1.5/
-│   │   └── sdxl/
-│   ├── motion_lora/              # Motion LoRA（运镜特效）
-│   │   ├── pan-left/
-│   │   ├── tilt-up/
-│   │   ├── zoom-in/
-│   │   └── zoom-out/
-│   └── sd15/                     # SD1.5 底模及相关
-│       ├── abyssorangemix2_Hard.txt
-│       ├── meinahentai_v5Final.txt
-│       ├── meinamix_v12Final.txt
-│       ├── hand_yolov8n.pt
-│       └── lbpcascade_animeface.xml
+│   ├── sd15/  sdxl/  sd3/  flux/ # 各系列底模
+│   ├── adetailer/                # 面部/手部修复模型（YOLO）
+│   ├── ip_adapter/               # IP-Adapter 模型
+│   ├── motion_adapter/           # AnimateDiff 运动模块
+│   ├── motion_lora/              # Motion LoRA（pan-left/tilt-up/zoom-in/zoom-out）
+│   └── tts/                      # TTS 模型
+│
+├── 📁 loras/                     # LoRA 权重
+│   ├── sd1.5/
+│   └── sdxl/
+│
+├── 📁 controlnets/               # ControlNet 模型（本地缓存）
 │
 ├── 📁 tools/                     # 外部可执行工具
 │   └── rife/                     # RIFE 帧插值工具
 │       ├── rife-ncnn-vulkan.exe
 │       └── rife-v4.6/
-│           ├── flownet.bin
-│           └── flownet.param
+│
+├── 📁 third_party/               # 第三方源码（GPT-SoVITS 等）
+│
+├── 📁 assets/voices/             # 参考音频
 │
 ├── 📁 data/                      # 运行时数据
-│   ├── dictionaries/             # 分类词典
-│   │   ├── general.json          # 通用词汇
-│   │   ├── nsfw.json             # NSFW 词汇
-│   │   ├── outfit.json           # 服装词汇
-│   │   ├── style.json            # 风格词汇
-│   │   └── user_custom.json      # 用户自定义词汇
-│   ├── app_config.json           # 应用配置
+│   ├── dictionaries/             # 分类词典（general/style/outfit 等）
+│   ├── dict/
+│   ├── gallery_favs.json         # 画廊收藏
 │   └── zh_to_en_dict.json        # 翻译词典
 │
-├── 📁 logs/                      # 日志文件
-│   └── app.log
+├── 📁 models_cache/              # HF/Torch 统一缓存（HF_HOME 等指向此处）
 │
-├── 📁 video/                     # 生成视频输出
-│   ├── *.gif                     # 生成的 GIF 视频
-│   └── *.mp4                     # 生成的 MP4 视频
+├── 📁 photo/                     # 出图输出
+│   └── videos/                   # 生成视频输出
+│
+├── 📁 output/                    # 其他输出（如 TTS 音频）
+│
+├── 📁 logs/                      # 日志文件（app.log，滚动切割 5MB×3）
 │
 ├── 📁 weights/                   # 预训练权重
 │   └── lbpcascade_animeface.xml  # 人脸检测级联分类器
 │
 ├── 📁 logo/                      # 应用图标和资源
-│   ├── dzbut-9fc5g-001.ico
-│   ├── n9pbg-dikvy-001.ico
-│   └── 69ff22c827c53bd759497331.png
 │
 └── 📁 venv/                      # Python 虚拟环境
-    ├── Lib/site-packages/        # 第三方依赖包
-    └── Scripts/                  # 虚拟环境脚本

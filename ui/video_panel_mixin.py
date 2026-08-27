@@ -54,7 +54,7 @@ class VideoPanelMixin:
     # ==========================================================
     def on_generate_video(self):
         """触发视频生成流程 - 支持 4 种模式"""
-        print("🔵 [DEBUG] on_generate_video 被调用")
+        logger.debug("🔵 [DEBUG] on_generate_video 被调用")
 
         if getattr(self, 'is_generating', False):
             self._set_status("⚠️ 正在生成中,请等待", "#ff7a17")
@@ -72,8 +72,8 @@ class VideoPanelMixin:
             mode_label = ["文生视频", "图生视频", "视频转绘", "提示词旅行"][mode_idx] \
                 if 0 <= mode_idx <= 3 else "文生视频"
 
-            print(f"🔵 [DEBUG] mode = {mode_str} ({mode_label})")
-            print(f"🔵 [DEBUG] _video_input_path = {getattr(self, '_video_input_path', '未设置')}")
+            logger.debug(f"🔵 [DEBUG] mode = {mode_str} ({mode_label})")
+            logger.debug(f"🔵 [DEBUG] _video_input_path = {getattr(self, '_video_input_path', '未设置')}")
 
             # ---- 2. 提示词 ----
             prompt = self.txt_video_prompt.toPlainText().strip()
@@ -172,7 +172,7 @@ class VideoPanelMixin:
                         (f, self.translator.translate(p)) for f, p in prompt_travel
                     ]
             except Exception as e:
-                print(f"⚠️ 翻译失败(忽略): {e}")
+                logger.warning(f"⚠️ 翻译失败(忽略): {e}")
 
             # ---- 7. 高级参数 ----
             strength = float(self.spin_video_strength.value()) \
@@ -185,7 +185,7 @@ class VideoPanelMixin:
             # ---- 8. Motion LoRA ----
             motion_loras = self._collect_motion_loras() \
                 if hasattr(self, "_collect_motion_loras") else []
-            print(f"🔵 [DEBUG] motion_loras = {motion_loras}")
+            logger.debug(f"🔵 [DEBUG] motion_loras = {motion_loras}")
 
             # ---- 8.5 配音参数收集 ----
             voice_params = None
@@ -255,13 +255,13 @@ class VideoPanelMixin:
                         if not model_name:
                             raise RuntimeError("请先在图片面板选择一个 SD 底模")
 
-                        print(f"⏳ 视频生成前置:加载 SD 底模 {model_name} ...")
+                        logger.info(f"⏳ 视频生成前置:加载 SD 底模 {model_name} ...")
                         self.ai.load_model(model_name)
-                        print("✅ 底模就绪,继续视频生成")
+                        logger.info("✅ 底模就绪,继续视频生成")
 
                     if hasattr(self, 'video_generator') and self.video_generator is not None:
                         if getattr(self.video_generator, '_base_model_name', None) != self.ai.current_model_name:
-                            print("🔄 底模已更换,重建 VideoGenerator")
+                            logger.info("🔄 底模已更换,重建 VideoGenerator")
                             self.video_generator = None
 
                     if not hasattr(self, 'video_generator') or self.video_generator is None:
@@ -311,7 +311,7 @@ class VideoPanelMixin:
                                     logger.warning(f"⚠️ 删除原视频失败: {e}")
 
                         except Exception as ve:
-                            print(f"⚠️ 配音合成失败(保留原视频): {ve}")
+                            logger.warning(f"⚠️ 配音合成失败(保留原视频): {ve}")
                             traceback.print_exc()
 
                     QMetaObject.invokeMethod(
@@ -323,7 +323,7 @@ class VideoPanelMixin:
 
                 except Exception as e:
                     error_msg = f"❌ 视频生成失败: {str(e)}"
-                    print(f"[VIDEO GEN ERROR]\n{traceback.format_exc()}")
+                    logger.error(f"[VIDEO GEN ERROR]\n{traceback.format_exc()}")
                     QMetaObject.invokeMethod(
                         self, "_on_video_gen_error",
                         Qt.ConnectionType.QueuedConnection,
@@ -334,7 +334,7 @@ class VideoPanelMixin:
             threading.Thread(target=generate_task, daemon=True).start()
 
         except Exception as e:
-            print(f"[VIDEO PARAM ERROR]\n{traceback.format_exc()}")
+            logger.error(f"[VIDEO PARAM ERROR]\n{traceback.format_exc()}")
             self._reset_video_button()
             self._set_status(f"⚠️ 参数校验失败: {e}", "#ff7a17")
 
@@ -477,7 +477,7 @@ class VideoPanelMixin:
                 try:
                     self.play_video(video_path)
                 except Exception as e:
-                    print(f"⚠️ 播放失败: {e}")
+                    logger.warning(f"⚠️ 播放失败: {e}")
 
             if hasattr(self, 'video_list'):
                 self._refresh_video_gallery()
@@ -566,7 +566,7 @@ class VideoPanelMixin:
                 self.travel_segments.remove(widgets)
             self._auto_distribute_frames()
         except Exception as e:
-            print(f"⚠️ 移除旅行分段失败: {e}")
+            logger.warning(f"⚠️ 移除旅行分段失败: {e}")
 
     def _auto_distribute_frames(self):
         if not self.travel_segments:
@@ -630,7 +630,7 @@ class VideoPanelMixin:
         try:
             os.startfile(vpath)
         except Exception as e:
-            print(f"⚠️ 打开视频失败: {e}")
+            logger.warning(f"⚠️ 打开视频失败: {e}")
 
     # ==========================================================
     #  Motion LoRA
@@ -643,7 +643,7 @@ class VideoPanelMixin:
         # 去重
         for item in self.motion_lora_items:
             if item['name'] == name:
-                print(f"⚠️ {name} 已添加")
+                logger.warning(f"⚠️ {name} 已添加")
                 if hasattr(self, '_app_bridge'):
                     self._app_bridge.status_msg.emit(f"⚠️ {name} 已添加", "#ff7a17")
                 return
@@ -685,7 +685,7 @@ class VideoPanelMixin:
         self.motion_lora_items.append({
             'name': name, 'widget': row, 'slider': slider, 'label': lbl_val
         })
-        print(f"✅ 已添加 Motion LoRA: {name}")
+        logger.info(f"✅ 已添加 Motion LoRA: {name}")
 
     def _remove_motion_lora_item(self, name):
         """✕ 移除某个 Motion LoRA"""
@@ -694,7 +694,7 @@ class VideoPanelMixin:
                 item['widget'].setParent(None)
                 item['widget'].deleteLater()
                 self.motion_lora_items.pop(i)
-                print(f"🗑️ 已移除 Motion LoRA: {name}")
+                logger.info(f"🗑️ 已移除 Motion LoRA: {name}")
                 return
 
     def _collect_motion_loras(self):

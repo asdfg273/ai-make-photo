@@ -1,7 +1,28 @@
-photo_turn/
-├── components.py           # 独立的 UI 组件 (CropOverlay)
-├── mixin_history.py        # 撤销/重做/历史记录模块
-├── mixin_filters.py        # 图像调整与滤镜模块
-├── mixin_ai.py             # ADetailer AI 模块
-├── mixin_tools.py          # 鼠标事件、绘图、文字、裁剪模块
-└── pro_editor_tk.py        # 主程序入口及 UI 界面布局
+photo_turn/  修图编辑器模块(自包含, PyQt6)
+│
+├── pro_editor_qt.py        # 主窗口 ProImageEditor:布局/状态栏/快捷键/保存导出
+│                           #   状态栏:👁按住对比原图 / ▦构图网格 / ⛶全屏 / 🖼适配 / 📤另存为
+│
+├── components.py           # ImageCanvas:OpenGL 画布
+│                           #   • 滚轮缩放(光标锚点) / 中键平移 / Ctrl+0 适配窗口
+│                           #   • 三分构图网格(可开关)
+│                           #   • drawPixmap(目标矩形) GPU 缩放,坐标映射共用视图几何
+│                           # CropOverlay:框选预览控件(备用)
+│
+├── mixin_tools.py          # 工具与鼠标事件 ToolsEventsMixin
+│                           #   • 统一笔画管线:画笔/橡皮/遮罩共用,硬度(柔边)+不透明度
+│                           #   • 遮罩精修:清除/反转/羽化(可调半径)/扩边/收缩
+│                           #   • 吸管取色 / 文字(中文字体优先) / 裁剪(实时选区预览)
+│                           #   • 翻转/±90°旋转/任意角度旋转/等比缩放到长边
+│                           #     (均同步原图与遮罩)
+│
+├── mixin_filters.py        # 色彩调整与滤镜 FiltersMixin
+│                           #   • 调色 7 项:亮度/对比度/饱和度/曝光(gamma)/色相/锐度/色温
+│                           #   • 滤镜 18 种:黑白/复古/冷色调/暖色调/胶片颗粒(向量化)
+│                           #     模糊/浮雕/边缘检测/轮廓/锐化/油画
+│                           #     负片/像素化/晕影/色调分离/素描/卡通
+│                           #   • 滤镜锚点:选「无」还原到叠加前状态
+│
+├── mixin_history.py        # 撤销/重做(15 步),状态栏显示可撤销/可重做步数
+│
+└── mixin_ai.py             # ADetailer 人脸修复(后台线程,羽化贴回)

@@ -19,6 +19,9 @@ from typing import Callable, Optional
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 from utils.paths import PROJECT_ROOT
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _proj(p: str) -> str:
@@ -253,10 +256,10 @@ def get_status_summary() -> dict:
 # ============================================================
 def print_scan():
     """CLI 扫描输出"""
-    print("=" * 70)
-    print("🧩 扩展安装状态扫描")
-    print("=" * 70)
-    print()
+    logger.info("=" * 70)
+    logger.info("🧩 扩展安装状态扫描")
+    logger.info("=" * 70)
+    logger.debug("")
 
     by_cat = {}
     for ext_id, info in EXTENSIONS.items():
@@ -266,20 +269,20 @@ def print_scan():
     total = len(EXTENSIONS)
 
     for cat, items in by_cat.items():
-        print(f"📂 {cat}")
+        logger.info(f"📂 {cat}")
         for ext_id, info in items:
             ok = is_installed(ext_id)
             if ok:
                 installed_total += 1
             icon = "✅" if ok else "⚪"
             size = info.get("size_mb", 0)
-            print(f"  {icon} {info['name']} — {size}MB")
-            print(f"      id: {ext_id}")
-        print()
+            logger.info(f"  {icon} {info['name']} — {size}MB")
+            logger.info(f"      id: {ext_id}")
+        logger.debug("")
 
-    print("=" * 70)
-    print(f"📊 汇总: {installed_total}/{total} 已安装")
-    print("=" * 70)
+    logger.info("=" * 70)
+    logger.info(f"📊 汇总: {installed_total}/{total} 已安装")
+    logger.info("=" * 70)
 
 
 # ============================================================
@@ -290,7 +293,7 @@ ProgressCallback = Optional[Callable[[float, str], None]]
 
 def _emit(cb: ProgressCallback, pct: float, msg: str):
     """统一进度输出"""
-    print(f"[{pct:5.1f}%] {msg}")
+    logger.info(f"[{pct:5.1f}%] {msg}")
     if cb:
         try:
             cb(pct, msg)
@@ -618,26 +621,26 @@ if __name__ == "__main__":
         print_scan()
 
     elif args.action == "list":
-        print("\n📋 所有扩展:\n")
+        logger.info("\n📋 所有扩展:\n")
         by_cat = {}
         for ext_id, ext in EXTENSIONS.items():
             by_cat.setdefault(ext["category"], []).append((ext_id, ext))
         for cat, items in by_cat.items():
-            print(f"📂 {cat}")
+            logger.info(f"📂 {cat}")
             for ext_id, ext in items:
                 status = "✅" if is_installed(ext_id) else "⚪"
                 size = ext.get("size_mb", 0)
-                print(f"  {status} {ext_id:22s} — {ext['name']} ({size}MB)")
-            print()
+                logger.info(f"  {status} {ext_id:22s} — {ext['name']} ({size}MB)")
+            logger.debug("")
 
     elif args.action == "install":
         if not args.id:
-            print("❌ 请用 --id 指定扩展")
+            logger.error("❌ 请用 --id 指定扩展")
             sys.exit(1)
         download_extension(args.id)
 
     elif args.action == "uninstall":
         if not args.id:
-            print("❌ 请用 --id 指定扩展")
+            logger.error("❌ 请用 --id 指定扩展")
             sys.exit(1)
         uninstall_extension(args.id)

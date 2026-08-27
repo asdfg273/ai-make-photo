@@ -7,6 +7,9 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFilter
 import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 def make_comic_strip(image_list):
     """纯净的漫画排版函数，只负责计算和绘图，返回 PIL Image"""
@@ -112,7 +115,7 @@ def _download_adetailer_model(url, save_path):
     try:
         # 走 hf-mirror 加速
         url_mirror = url.replace("huggingface.co", "hf-mirror.com")
-        print(f"  📥 下载 ADetailer 模型: {os.path.basename(save_path)}")
+        logger.info(f"  📥 下载 ADetailer 模型: {os.path.basename(save_path)}")
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         for attempt_url in [url_mirror, url]:
             try:
@@ -121,14 +124,14 @@ def _download_adetailer_model(url, save_path):
                 with open(save_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
-                print(f"  ✅ 下载完成: {save_path}")
+                logger.info(f"  ✅ 下载完成: {save_path}")
                 return True
             except Exception as e:
-                print(f"  ⚠️ 从 {attempt_url} 下载失败: {e}")
+                logger.warning(f"  ⚠️ 从 {attempt_url} 下载失败: {e}")
                 continue
         return False
     except Exception as e:
-        print(f"  ❌ 模型下载失败: {e}")
+        logger.error(f"  ❌ 模型下载失败: {e}")
         return False
 
 
@@ -140,7 +143,7 @@ def _yolo_detect(model_path, cv_image, conf=0.3):
     try:
         from ultralytics import YOLO
     except ImportError:
-        print("⚠️ 缺少 ultralytics 库,请运行: pip install ultralytics")
+        logger.warning("⚠️ 缺少 ultralytics 库,请运行: pip install ultralytics")
         return []
 
     try:
@@ -163,7 +166,7 @@ def _yolo_detect(model_path, cv_image, conf=0.3):
                 boxes.append((int(x1), int(y1), w, h))
         return boxes
     except Exception as e:
-        print(f"⚠️ YOLO 检测异常: {e}")
+        logger.warning(f"⚠️ YOLO 检测异常: {e}")
         return []
 
 
@@ -189,7 +192,7 @@ def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt,
     try:
         # ── 1. 校验 target ──
         if target not in ADETAILER_MODELS:
-            print(f"⚠️ 未知 ADetailer 目标: {target},支持: {list(ADETAILER_MODELS.keys())}")
+            logger.warning(f"⚠️ 未知 ADetailer 目标: {target},支持: {list(ADETAILER_MODELS.keys())}")
             return base_image
         
         cfg = ADETAILER_MODELS[target]
@@ -204,7 +207,7 @@ def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt,
         model_dir = os.path.join(paths.MODEL_DIR, "adetailer")   # 与扩展市场下载位置统一
         model_path = os.path.join(model_dir, cfg["name"])
         if not _download_adetailer_model(cfg["url"], model_path):
-            print(f"⚠️ ADetailer 模型不可用,跳过 {target}")
+            logger.warning(f"⚠️ ADetailer 模型不可用,跳过 {target}")
             return base_image
         
         # ── 3. 准备图像 ──
@@ -216,10 +219,10 @@ def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt,
         # ── 4. 目标检测 ──
         boxes = _yolo_detect(model_path, cv_image, conf=cfg["conf"])
         if not boxes:
-            print(f"🤷‍♂️ 未在图中检测到 [{target}],跳过修复。")
+            logger.info(f"🤷‍♂️ 未在图中检测到 [{target}],跳过修复。")
             return base_image
         
-        print(f"🔍 [ADetailer] 成功定位 {len(boxes)} 处 [{target}],开始进行局部重绘...")
+        logger.info(f"🔍 [ADetailer] 成功定位 {len(boxes)} 处 [{target}],开始进行局部重绘...")
         
         # ── 5. 构建 prompt(融合用户原 prompt + 模板) ──
         # 取用户 prompt 前 80 字符作为上下文(避免太长被截断)
@@ -256,7 +259,7 @@ def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt,
                     # 用纯黑占位图(IPA scale=0 时不会真的产生影响)
                     placeholder = Image.new("RGB", (224, 224), (0, 0, 0))
                     ip_kwargs['ip_adapter_image'] = placeholder
-                    print(f"  🩹 [ADetailer] 检测到 IPA,将传入占位图")
+                    logger.info(f"  🩹 [ADetailer] 检测到 IPA,将传入占位图")
                 
                 output = inpaint_pipe(
                     prompt=target_pos,
@@ -271,15 +274,15 @@ def process_adetailer(base_image, inpaint_pipe, prompt, negative_prompt,
                     **ip_kwargs,
                 )
                 result_image = output.images[0]
-                print(f"  ✅ [ADetailer] {target} {idx}/{len(boxes)} 修复完成")
+                logger.info(f"  ✅ [ADetailer] {target} {idx}/{len(boxes)} 修复完成")
             except Exception as e:
-                print(f"  ⚠️ [ADetailer] 第 {idx} 处修复异常: {e}")
+                logger.warning(f"  ⚠️ [ADetailer] 第 {idx} 处修复异常: {e}")
                 continue
         
         return result_image
     
     except Exception as e:
-        print(f"⚠️ ADetailer 致命错误: {e}")
+        logger.warning(f"⚠️ ADetailer 致命错误: {e}")
         import traceback
         traceback.print_exc()
         return base_image

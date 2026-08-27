@@ -39,7 +39,7 @@
 
 ### 2.3 扩展功能
 
-- **多模型支持**：支持 SD 1.5 和 SDXL 模型
+- **多模型支持**：支持 SD 1.5 和 SDXL 模型，可识别加载 SD3 / Flux（部分功能）
 - **多 LoRA 挂载**：支持同时加载多个 LoRA 插件，独立权重控制
 - **Motion LoRA**：支持缩放、平移、旋转等运镜特效
 - **采样器切换**：支持 Euler A、Euler、DPM++ 2M、DDIM、UniPC 等多种采样器
@@ -97,23 +97,38 @@
 
 | 分类 | 技术 | 版本 | 用途 |
 |-----|------|------|------|
-| **UI 框架** | PyQt6 | 6.x | 主界面、对话框 |
+| **UI 框架** | PyQt6 | ≥6.7 | 主界面、对话框 |
 | **视频播放** | QtMultimedia | 6.x | 视频预览播放 |
 | **绘图引擎** | PyQt6 | 6.x | 修图编辑器 |
 | **图像处理** | PIL/Pillow | 10.x | 图像加载、处理、保存 |
-| **深度学习** | PyTorch | 2.x | GPU 加速推理 |
-| **扩散模型** | Diffusers | 0.x | Stable Diffusion 管线 |
+| **深度学习** | PyTorch | 2.x（CUDA 12.8 单独安装） | GPU 加速推理 |
+| **扩散模型** | Diffusers | 0.32.2 | Stable Diffusion 管线 |
+| **文本编码** | Transformers | 4.49.0 | CLIP / T5 文本编码器 |
 | **视频扩散** | AnimateDiff | - | 视频生成管线 |
 | **控制网络** | ControlNet | - | 姿态/深度控制 |
-| **提示词编码** | Compel | - | 高级提示词处理 |
+| **提示词编码** | Compel | ≥2.0 | 高级提示词处理（SD1.5/SDXL） |
 | **人脸检测** | OpenCV + YOLO | 4.x / 8.x | ADetailer 人脸/手部检测 |
 
 ### 3.3 显存优化策略
 
-- **CPU Offload**：模型权重动态卸载到 CPU，节省显存
-- **VAE Tiling/Slicing**：分块解码，支持大图生成
-- **Attention Slicing**：注意力计算分片处理
-- **xFormers**：内存高效注意力机制
+由 `utils/vram_manager.py` 按 GPU 显存总量自动分级：
+
+| 显存 | 策略 |
+|------|------|
+| 充足（SD1.5 ≥6GB / SDXL ≥16GB） | 🚀 全速模式：全量驻留 GPU |
+| 中等（SD1.5 ≥4GB / SDXL ≥11GB） | ⚡ 标准模式：驻留 + VAE/Attention 切片 |
+| 偏低（SD1.5 ≥2.5GB / SDXL ≥5GB） | 💾 节能模式：Model CPU Offload |
+| 极低 | 🐢 极限模式：Sequential CPU Offload |
+
+通用优化：**VAE Tiling/Slicing**（分块解码，支持大图）、**Attention Slicing**、**xFormers**（装了才启用）。
+
+### 3.4 日志设施
+
+全项目统一使用 Python `logging`（不再有裸 `print`）：
+
+- 初始化入口：`utils/system_utils.py::setup_logging()`（幂等，含滚动文件 + 控制台双输出）
+- 日志文件：`logs/app.log`（RotatingFileHandler，单文件 5MB × 3 备份，UTF-8）
+- 各模块约定：`logger = logging.getLogger(__name__)`，按 ❌=error / ⚠️=warning / 调试标记=debug 分级
 
 ---
 
@@ -121,66 +136,88 @@
 
 ```
 ai  make photo/
-├── main.py                    # 主入口，PyQt6 主窗口
-├── requirements.txt           # 依赖清单
-├── app_config.json            # 应用配置
+├── main.py                    # 主入口，PyQt6 主窗口（Mixin 组合）
+├── requirements.txt           # 依赖清单（torch 需按注释单独安装 CUDA 版）
+├── requirements-lock.txt      # 本机完整冻结环境（pip freeze）
+├── app_config.json            # 应用配置（运行时自动生成/更新）
 ├── aiUsemono.md               # 使用说明
 ├── 结构.txt                   # 项目结构图
+│
 ├── core/                      # 核心模块
-│   ├── __init__.py
-│   ├── config_manager.py      # 配置管理
-│   ├── downup.py              # 图像放大/缩小
-│   ├── model_manager.py       # 模型加载管理
-│   ├── presets.py             # 预设管理
-│   └── translation_service.py # 翻译服务
-├── utils/                     # 工具模块
-│   ├── __init__.py
-│   ├── app_events.py          # 事件处理
-│   ├── app_generation.py      # 生成流程
-│   ├── app_utils.py           # 应用工具函数
+│   ├── config_manager.py      # 配置管理（AppConfig dataclass）
+│   ├── model_manager.py       # 模型加载管理（单例 ModelManager）
+│   ├── presets.py             # 提示词预设
+│   └── translation_service.py # 翻译服务（词典/AI/自动）
+│
+├── ui/                        # 界面模块
+│   ├── design_tokens.py       # 样式令牌（DARK_STYLE 等）
+│   ├── disclaimer.py          # 免责声明
+│   ├── extension_market.py    # 扩展市场
 │   ├── gallery_panel.py       # 画廊面板
-│   ├── image_processor.py     # 图像处理
+│   ├── preset_manager.py      # 预设管理面板
+│   ├── splash.py              # 启动画面
+│   ├── tooltips.py            # 工具提示
+│   ├── ui_builder.py          # UI 构建（UIBuilderMixin）
+│   ├── video_panel_mixin.py   # 视频面板（VideoPanelMixin）
+│   └── widgets.py             # 自定义控件（FloatSlider 等）
+│
+├── utils/                     # 工具模块
+│   ├── app_events.py          # 事件处理（EventMixin）
+│   ├── app_generation.py      # 生成流程（GenerationMixin）
+│   ├── app_utils.py           # 应用工具函数（动态提示词解析等）
+│   ├── chattts_patch.py       # ChatTTS 兼容补丁
+│   ├── extension_manager.py   # 扩展管理
+│   ├── gpu_init.py            # GPU 加速初始化
+│   ├── image_processor.py     # 图像处理 / ADetailer 流程
+│   ├── model_downloader.py    # 模型下载
 │   ├── model_scanner.py       # 模型扫描
-│   ├── paths.py               # 路径管理
-│   ├── preset_manager.py      # 预设管理
+│   ├── paths.py               # 统一路径管理（所有目录常量）
 │   ├── prompt_enhancer.py     # Qwen 智能改写
 │   ├── rife_interpolate.py    # RIFE 帧插值
-│   ├── system_utils.py        # 系统工具
+│   ├── sovits_tts.py          # GPT-SoVITS 配音
+│   ├── system_utils.py        # 系统工具 / 日志设施
 │   ├── tiled_diffusion.py     # 分块扩散
-│   ├── tooltips.py            # 工具提示
-│   ├── ui_builder.py          # UI 构建（含动画界面）
-│   ├── video_gen.py           # 视频生成服务
-│   └── vram_manager.py        # 显存管理
-├── photo_turn/                # 修图编辑器模块
-│   ├── __init__.py
+│   ├── tts_engine.py          # ChatTTS 配音
+│   ├── video_gen.py           # 视频生成服务（AnimateDiff）
+│   └── vram_manager.py        # 显存管理（按容量分级策略）
+│
+├── photo_turn/                # 修图编辑器模块（自包含）
 │   ├── components.py
 │   ├── mixin_ai.py
 │   ├── mixin_filters.py
 │   ├── mixin_history.py
 │   ├── mixin_tools.py
 │   └── pro_editor_qt.py
+│
+├── scripts/                   # 维护脚本
+│   ├── download_gemma.py      # 模型下载
+│   ├── download_ref_voice.py  # 参考音频下载
+│   ├── download_sovits.py     # SoVITS 下载
+│   └── codemod_unify_logging.py # 日志统一迁移脚本（一次性工具）
+│
+├── tests/                     # 手动测试脚本（非 pytest）
+│
 ├── models/                    # AI 模型存储
-│   ├── adetailer/             # 面部/手部修复模型
-│   ├── loras/                 # LoRA 权重
-│   │   ├── sd1.5/
-│   │   └── sdxl/
-│   ├── motion_lora/           # Motion LoRA（运镜特效）
-│   │   ├── pan-left/
-│   │   ├── tilt-up/
-│   │   ├── zoom-in/
-│   │   └── zoom-out/
-│   └── sd15/                  # SD1.5 底模及相关
-├── tools/                     # 外部可执行工具
-│   └── rife/                  # RIFE 帧插值工具
-├── data/                      # 运行时数据
+│   ├── sd15/  sdxl/  sd3/  flux/   # 各系列底模
+│   ├── adetailer/             # 面部/手部修复模型（YOLO）
+│   ├── ip_adapter/            # IP-Adapter 模型
+│   ├── motion_adapter/        # AnimateDiff 运动模块
+│   ├── motion_lora/           # Motion LoRA（pan-left/tilt-up/zoom-in/zoom-out）
+│   └── tts/                   # TTS 模型
+│
+├── loras/                     # LoRA 权重（sd1.5/ sdxl/）
+├── controlnets/               # ControlNet 模型（本地缓存）
+├── tools/rife/                # RIFE 帧插值可执行工具
+├── third_party/               # 第三方源码（GPT-SoVITS 等）
+├── assets/voices/             # 参考音频
+├── weights/                   # 预训练权重（人脸检测级联等）
+├── data/                      # 运行时数据（词典、收藏等）
 │   ├── dictionaries/          # 分类词典
-│   ├── app_config.json        # 应用配置
 │   └── zh_to_en_dict.json     # 翻译词典
-├── logs/                      # 日志文件
-├── video/                     # 生成视频输出
-├── weights/                   # 预训练权重
-├── logo/                      # 应用图标和资源
-└── venv/                      # Python 虚拟环境
+├── models_cache/              # HF/Torch 统一缓存（HF_HOME 等指向此处）
+├── photo/                     # 出图输出（videos/ 子目录存放视频）
+├── output/                    # 其他输出（如 TTS 音频）
+└── logs/                      # 日志（app.log，滚动切割）
 ```
 
 ---
@@ -205,15 +242,18 @@ cd "ai  make photo"
 python -m venv venv
 venv\Scripts\activate
 
-# 3. 安装依赖
+# 3. 安装 PyTorch（CUDA 12.8，务必单独安装，不要用 requirements.txt 装）
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# 4. 安装其余依赖
 pip install -r requirements.txt
 
-# 4. 下载模型文件
-# 将 SD 模型(.safetensors 或 .ckpt)放入 models/sd15/ 目录
-# 将 LoRA 文件放入 models/loras/sd1.5/ 或 models/loras/sdxl/ 目录
+# 5. 下载模型文件
+# 将 SD 模型(.safetensors)放入 models/sd15/ 或 models/sdxl/ 等对应目录
+# 将 LoRA 文件放入 loras/sd1.5/ 或 loras/sdxl/ 目录
 # 将 Motion LoRA 文件放入 models/motion_lora/ 目录
 
-# 5. 运行应用
+# 6. 运行应用
 python main.py
 ```
 
@@ -222,8 +262,9 @@ python main.py
 | 文件类型 | 放置位置 | 说明 |
 |---------|---------|------|
 | SD 底模 | `models/sd15/*.safetensors` | SD 1.5 模型 |
-| LoRA 插件 | `models/loras/sd1.5/*.safetensors` | SD 1.5 专用 |
-| LoRA 插件 | `models/loras/sdxl/*.safetensors` | SDXL 专用 |
+| SDXL 底模 | `models/sdxl/*.safetensors` | SDXL 模型 |
+| LoRA 插件 | `loras/sd1.5/*.safetensors` | SD 1.5 专用 |
+| LoRA 插件 | `loras/sdxl/*.safetensors` | SDXL 专用 |
 | Motion LoRA | `models/motion_lora/*/` | 运镜特效模型 |
 | ADetailer 模型 | `models/adetailer/*.pt` | 人脸/手部检测模型 |
 
@@ -330,12 +371,18 @@ python main.py
 
 **工具功能**：
 
-- **绘图工具**：画笔、橡皮擦、遮罩画笔
-- **选择工具**：裁剪
-- **文字工具**：添加、编辑文字
-- **变换工具**：水平/垂直翻转、旋转
-- **调整工具**：亮度、对比度、饱和度、锐化、色温
-- **滤镜工具**：11 种预设滤镜
+- **画布**：OpenGL 加速，滚轮缩放（光标锚点）、中键平移、`Ctrl+0` 适配窗口、三分构图网格
+- **绘图工具**：画笔（大小 `[`/`]` 微调 + 不透明度 + 硬度柔边）、橡皮擦、AI 遮罩画笔
+- **遮罩操作**：清除 / 反转 / 羽化（可调半径）/ 扩边 / 收缩（配合局部重绘工作流）
+- **取色**：吸管工具 + 调色板
+- **对比**：按住「👁 对比原图」快速查看编辑前后差异
+- **选择工具**：裁剪（拖拽实时选区预览）
+- **文字工具**：添加、编辑文字（中文字体优先回退链）
+- **变换工具**：水平/垂直翻转、±90°/任意角度旋转、等比缩放到长边（512–2048）
+- **调整工具**：亮度、对比度、饱和度、曝光、色相、锐化、色温
+- **滤镜工具**：18 种预设滤镜（含素描、卡通、晕影、像素化等），选「无」可还原到叠加前
+- **导出**：编辑器内「另存为」直接导出
+- **历史**：撤销/重做 15 步，状态栏显示剩余步数
 
 ---
 
@@ -343,15 +390,20 @@ python main.py
 
 ### 8.1 配置文件 (`app_config.json`)
 
-```json
-{
-  "default_model": "majicmixrealisticV6_v10.safetensors",
-  "default_sampler": "Euler a",
-  "output_format": "png",
-  "auto_save": true,
-  "show_preview": true
-}
-```
+配置由 `core/config_manager.py` 的 `AppConfig` dataclass 定义，关闭应用时自动保存，加载时高容错（忽略废弃字段、补全缺失字段）。主要字段：
+
+| 字段 | 说明 |
+|------|------|
+| `default_steps` / `default_cfg` / `default_sampler` | 默认采样参数 |
+| `default_width` / `default_height` / `default_batch` | 默认尺寸与批数 |
+| `default_strength` / `default_lora_weight` | 默认图生图强度 / LoRA 权重 |
+| `device_preference` | 设备偏好（自动 / CUDA:x / CPU） |
+| `use_adetailer` / `adetailer_strength` | 人脸修复开关与强度 |
+| `use_ad_hand` / `ad_hand_strength` / `ad_hand_blend` | 手部修复参数 |
+| `use_hires` / `hires_denoise` | 高清修复开关与重绘幅度 |
+| `output_format` / `output_dir` | 输出格式与目录 |
+| `last_prompt` / `last_neg` | 上次使用的提示词 |
+| `recent_models` / `recent_prompts` | 历史记录 |
 
 ### 8.2 扩展开发
 
@@ -365,31 +417,28 @@ python main.py
 
 ---
 
-## 九、已知问题与解决方案
+## 九、已知限制与说明
 
-### 9.1 文件缺失问题
+### 9.1 模型识别
 
-| 问题 | 描述 | 解决方案 |
-|------|------|---------|
-| `pro_editor_tk.py` 不存在 | Tkinter 版修图编辑器文件缺失 | 使用 Qt 版 `pro_editor_qt.py` 替代 |
+| 限制 | 说明 |
+|------|------|
+| 模型类型靠文件名/体积推断 | SDXL 以文件名关键词（xl/pony 等）或体积 4.2~8GB 判定，冷僻命名可能误判 |
+| SD3 / Flux 仅部分支持 | 可识别并加载文生图/图生图，局部重绘回退到主 Pipeline，功能不完整 |
 
-### 9.2 依赖兼容性问题
+### 9.2 网络依赖
 
-| 问题 | 描述 | 解决方案 |
-|------|------|---------|
-| `ScrolledFrame` 导入失败 | ttkbootstrap 版本兼容性问题 | 使用标准 Tkinter Canvas + Scrollbar 实现 |
+| 限制 | 说明 |
+|------|------|
+| 默认使用 hf-mirror 镜像 | `main.py` 中 `HF_ENDPOINT=https://hf-mirror.com`，海外环境可手动移除 |
+| ControlNet / OpenPose 首次需联网 | 也可手动下载到 `controlnets/` 对应目录后离线加载 |
 
-### 9.3 UI 控件联动问题
+### 9.3 运行时
 
-| 问题 | 描述 | 解决方案 |
-|------|------|---------|
-| 控件初始化顺序问题 | 某些控件在初始化时可能不存在 | 使用 `hasattr()` 检查或调整初始化顺序 |
-
-### 9.4 视频播放问题
-
-| 问题 | 描述 | 解决方案 |
-|------|------|---------|
-| 视频无法播放 | QtMultimedia 缺少解码支持 | 确保安装了 FFmpeg 相关依赖 |
+| 限制 | 说明 |
+|------|------|
+| 视频无法播放 | QtMultimedia 缺少解码支持时，确保系统可用 FFmpeg |
+| 后台生成线程 | 生成在后台线程执行，关闭应用前请先等待或中断当前任务 |
 
 ---
 
@@ -405,4 +454,4 @@ python main.py
 ---
 
 **版本**：v5.0  
-**更新日期**：2026-07-08
+**更新日期**：2026-08-24

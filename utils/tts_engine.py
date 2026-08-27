@@ -10,6 +10,9 @@ import torch
 import numpy as np
 from pathlib import Path
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 AUDIO_OUT_DIR = PROJECT_ROOT / "photo" / "audio"
@@ -46,19 +49,19 @@ class TTSEngine:
 
         model_dir = PROJECT_ROOT / "models" / "tts" / "ChatTTS"
         if not (model_dir / "asset" / "GPT.pt").is_file():
-            print("📥 ChatTTS 缺失,开始自动下载...")
+            logger.info("📥 ChatTTS 缺失,开始自动下载...")
             from utils.model_downloader import install
             install("chattts")
 
         if not (model_dir / "asset" / "GPT.pt").is_file():
             raise RuntimeError("❌ ChatTTS 模型下载失败")
 
-        print("🎙️ 加载 ChatTTS...")
+        logger.info("🎙️ 加载 ChatTTS...")
         import ChatTTS
         chat = ChatTTS.Chat()
         chat.load(source="custom", custom_path=str(model_dir), compile=False)
         self._chattts = chat
-        print("✅ ChatTTS 就绪")
+        logger.info("✅ ChatTTS 就绪")
 
     def generate_chattts(
         self,
@@ -87,7 +90,7 @@ class TTSEngine:
             top_K=top_k,
         )
 
-        print(f"🎙️ [ChatTTS] 合成: {text[:40]}...")
+        logger.info(f"🎙️ [ChatTTS] 合成: {text[:40]}...")
         wavs = self._chattts.infer(
             [text],
             params_infer_code=params_infer,
@@ -102,7 +105,7 @@ class TTSEngine:
         if audio.ndim == 2:
             audio = audio.squeeze(0)
         sf.write(str(out_path), audio, 24000)
-        print(f"💾 已保存: {out_path}")
+        logger.info(f"💾 已保存: {out_path}")
         return str(out_path)
 
     # ============================================================

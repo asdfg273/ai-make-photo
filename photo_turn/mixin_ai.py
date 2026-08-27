@@ -119,6 +119,7 @@ class AIToolsMixin:
         self, result_img: Image.Image, result_mask: Image.Image
     ):
         self.push_history(self.current_img, self.mask_img)
+        self._filter_anchor = None   # AI 修复后,滤镜锚点失效
         self.current_img = result_img
         self.mask_img    = result_mask
         self.update_canvas(self.current_img)

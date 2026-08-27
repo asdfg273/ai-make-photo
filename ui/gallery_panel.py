@@ -13,6 +13,9 @@ from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPoint, QTimer
 from PyQt6.QtGui import QPixmap, QIcon, QWheelEvent
 
 from utils.paths import DATA_DIR
+import logging
+
+logger = logging.getLogger(__name__)
 
 NSFW_KEYWORDS = {
     # 英文
@@ -270,6 +273,7 @@ class GalleryPanel(QWidget):
     reuse_params_signal = pyqtSignal(str)   # 🔁 复用 PNG 参数
     send_to_i2i_signal  = pyqtSignal(str)   # 🛠 发送到 img2img
     send_to_face_signal = pyqtSignal(str)   # 😀 发送到修脸
+    send_to_editor_signal = pyqtSignal(str) # ✏️ 载入预览并打开修图编辑器
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -363,7 +367,7 @@ class GalleryPanel(QWidget):
                 with open(self._favs_path, "r", encoding="utf-8") as f:
                     return set(json.load(f))
         except Exception as e:
-            print(f"⚠️ 加载收藏失败: {e}")
+            logger.warning(f"⚠️ 加载收藏失败: {e}")
         return set()
 
     def _save_favs(self):
@@ -371,7 +375,7 @@ class GalleryPanel(QWidget):
             with open(self._favs_path, "w", encoding="utf-8") as f:
                 json.dump(sorted(self._favs), f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"⚠️ 保存收藏失败: {e}")
+            logger.warning(f"⚠️ 保存收藏失败: {e}")
 
     # ========== 数据管理 ==========
     def add_image(self, path: str, prepend: bool = False):
@@ -603,7 +607,7 @@ class GalleryPanel(QWidget):
         if chosen == act_open:
             self._on_double_clicked(selected[0])
         elif chosen == act_edit:
-            self.image_selected.emit(path)
+            self.send_to_editor_signal.emit(path)
         elif chosen == act_reuse:
             self.reuse_params_signal.emit(path)
         elif chosen == act_i2i:
@@ -650,7 +654,7 @@ class GalleryPanel(QWidget):
                 shutil.copy2(p, os.path.join(dst_dir, os.path.basename(p)))
                 ok += 1
             except Exception as e:
-                print(f"⚠️ 导出失败 {p}: {e}")
+                logger.warning(f"⚠️ 导出失败 {p}: {e}")
                 fail += 1
         QMessageBox.information(
             self, "批量导出",
@@ -685,7 +689,7 @@ class GalleryPanel(QWidget):
                 deleted.append(p)
                 ok += 1
             except Exception as e:
-                print(f"⚠️ 删除失败 {p}: {e}")
+                logger.warning(f"⚠️ 删除失败 {p}: {e}")
                 fail += 1
         self._remove_from_view(deleted)
         # 同步清空收藏中已删除的条目
@@ -729,7 +733,7 @@ class GalleryPanel(QWidget):
             else:
                 subprocess.Popen(['xdg-open', os.path.dirname(path)])
         except Exception as e:
-            print(f"⚠️ 打开文件夹失败: {e}")
+            logger.warning(f"⚠️ 打开文件夹失败: {e}")
 
     def closeEvent(self, event):
         if hasattr(self, 'meta_panel'):
