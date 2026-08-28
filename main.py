@@ -6,7 +6,7 @@ import warnings
 warnings.simplefilter("always", RuntimeWarning)
 import os
 import sys
-
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 # 项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 

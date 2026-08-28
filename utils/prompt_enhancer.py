@@ -242,6 +242,18 @@ Output ONLY the translated text.
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dtype = torch.float16 if self.device == "cuda" else torch.float32
+        self._idle_timer = None
+        self._idle_seconds = 90        # 90 秒没人用就自动释放
+        self._device_used = None
+
+    def _touch(self):
+        """刷新空闲计时器"""
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+        self._idle_timer = threading.Timer(
+            self._idle_seconds, lambda: self.unload(reason="idle timeout"))
+        self._idle_timer.daemon = True
+        self._idle_timer.start()
 
     # ============================================================
     #  兼容旧 API
@@ -271,10 +283,28 @@ Output ONLY the translated text.
     # ============================================================
     def load(self, model_id: str = "qwen/Qwen2-VL-2B-Instruct", **kwargs):
         """加载 Qwen2-VL（优先 4bit 量化,失败降级 fp16）"""
-        if self.model is not None:
-            return
+        with self._lock:
+            if self.model is not None:
+                self._touch()          # 刷新空闲计时（见 1-C）
+                return
 
-        logger.info(f"📥 加载模型: {model_id}")
+            # ── 用驱动真实数据判断剩余显存 ──
+            device = "cpu"
+            if torch.cuda.is_available():
+                free_b, total_b = torch.cuda.mem_get_info()   # ✅ 真实剩余
+                free = free_b / 1024**3
+                # 4bit Qwen2-VL-2B + 视觉激活，实测峰值约 3GB，留 0.5GB 余量
+                need = 3.5
+                if free < need:
+                    logger.warning(
+                        f"⚠️ 剩余显存 {free:.2f}GB < {need}GB，Qwen 改用 CPU 加载（会较慢）")
+                    device = "cpu"
+                else:
+                    logger.info(f"🟢 剩余显存 {free:.2f}GB，Qwen 使用 CUDA")
+                    device = "cuda"
+            self._device_used = device
+
+            logger.info(f"📥 加载模型: {model_id}")
 
         from modelscope import snapshot_download
         from transformers import (
@@ -314,7 +344,7 @@ Output ONLY the translated text.
             self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                 local_dir,
                 quantization_config=bnb_config,   # 之前漏传 → 实际加载的是 fp16
-                device_map="auto",
+                device_map=device, 
                 low_cpu_mem_usage=True,
             )
             logger.info("✅ 4bit 量化加载成功")
@@ -323,7 +353,7 @@ Output ONLY the translated text.
             self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                 local_dir,
                 torch_dtype=torch.float16,
-                device_map="auto",
+                device_map=device,
                 low_cpu_mem_usage=True,
             )
 
@@ -379,11 +409,20 @@ Output ONLY the translated text.
             skip_special_tokens=True,
         ).strip()
         logger.info(f"[TEXT-{mode}] 耗时 {time.time()-t0:.1f}s")
+        self._touch()
         return self._postprocess(result)
 
     # ============================================================
     #  识图 + 合并用户意图
     # ============================================================
+    def _vram(tag):
+        import torch
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info()
+            logger.info(f"[VRAM][{tag}] 空闲 {free/1024**3:.2f}GB / "
+                        f"torch_alloc {torch.cuda.memory_allocated()/1024**3:.2f}GB / "
+                        f"torch_reserved {torch.cuda.memory_reserved()/1024**3:.2f}GB")
+
     def describe_image(self, image_path_or_pil, user_hint: str = "") -> str:
         if self.model is None:
             self.load()
@@ -457,6 +496,7 @@ Output ONLY the translated text.
             skip_special_tokens=True,
         ).strip()
         logger.info(f"[VISION] 耗时 {time.time()-t0:.1f}s")
+        self._touch()
         return self._postprocess(result)
 
     def extract_character_features(self, image_path_or_pil) -> str:
@@ -475,6 +515,7 @@ Output ONLY the translated text.
                 image = image_path_or_pil.convert("RGB")
         except Exception as e:
             logger.warning(f"⚠️ [extract_features] 图片读取失败: {e}")
+            self._touch()
             return ""
 
         # ── 2. 缩放(防止 OOM,与 describe_image 一致) ──
@@ -675,6 +716,7 @@ Output ONLY the translated text.
             return result
         except Exception as e:
             logger.warning(f"Qwen 翻译失败: {e}")
+            self._touch()
             return text  # 失败保留原文
 
     def translate(self, text: str, target_lang: str = "ja") -> str:
@@ -756,26 +798,39 @@ Output ONLY the translated text.
             logger.warning(f"翻译失败: {e}")
             import traceback
             traceback.print_exc()
+            self._touch()
             return text  # 失败返回原文
 
     # ============================================================
     #  释放
     # ============================================================
-    def unload(self):
+    def unload(self, reason: str = ""):
         with self._lock:
+            if self.model is None:
+                return
             try:
-                if self.model is not None:
-                    del self.model
-                    del self.processor
-                    del self.tokenizer
-            except Exception:
-                pass
-            self.model = None
-            self.processor = None
-            self.tokenizer = None
+                # 断开 accelerate/bnb 的 hook 引用
+                try:
+                    from accelerate.hooks import remove_hook_from_module
+                    remove_hook_from_module(self.model, recurse=True)
+                except Exception:
+                    pass
+                self.model = None
+                self.processor = None
+                self.tokenizer = None
+            except Exception as e:
+                logger.warning(f"⚠️ unload 异常: {e}")
+
+            gc.collect()
             gc.collect()
             if torch.cuda.is_available():
+                torch.cuda.synchronize()
                 torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+                free_b, total_b = torch.cuda.mem_get_info()
+                logger.info(
+                    f"🧹 Qwen 已卸载{f'({reason})' if reason else ''}，"
+                    f"当前空闲显存 {free_b/1024**3:.2f}GB / {total_b/1024**3:.2f}GB")
 
 # ============================================================
 #  全局单例（注意：这部分顶格，不在类里）
@@ -789,3 +844,15 @@ def get_enhancer() -> "PromptEnhancer":
     if _global_enhancer is None:
         _global_enhancer = PromptEnhancer()
     return _global_enhancer
+
+def run_once(method: str, *args, **kwargs):
+    """
+    一次性调用 Qwen，调用结束**立即**释放显存。
+    适合识图这种低频、且和 SD 争显存的场景。
+    用法: run_once("describe_image", img, user_hint)
+    """
+    enh = get_enhancer()
+    try:
+        return getattr(enh, method)(*args, **kwargs)
+    finally:
+        enh.unload(reason=f"after {method}")

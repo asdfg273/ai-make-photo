@@ -107,6 +107,7 @@ class ModelManager(metaclass=SingletonMeta):
 
         gc.collect()
         if self.device == "cuda":
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
 
@@ -1070,23 +1071,18 @@ class ModelManager(metaclass=SingletonMeta):
         vae = pipe.vae
         if getattr(vae, '_fp32_patched', False):
             return
-        # 记录 UNet 的 dtype，encode 结果要转回它
-        _dt = pipe.unet.dtype
-        vae.to(torch.float32)
 
-        _dec, _enc = vae.decode, vae.encode
+        _orig_decode = vae.decode
+        _orig_dtype  = next(vae.parameters()).dtype  # 记住原始 dtype（通常 fp16）
 
-        def decode(z, *a, **k):
-            return _dec(z.to(torch.float32), *a, **k)
+        def _decode_fp32(z, *a, **k):
+            vae.to(dtype=torch.float32)
+            try:
+                result = _orig_decode(z.to(torch.float32), *a, **k)
+            finally:
+                vae.to(dtype=_orig_dtype)   # 解码后立即还原，不影响 encode
+            return result
 
-        def encode(x, *a, **k):
-            out = _enc(x.to(torch.float32), *a, **k)
-            dist = getattr(out, 'latent_dist', None)
-            if dist is not None:
-                # 用同一个类重建，参数转回 fp16 → sample() 出 fp16 latents
-                out.latent_dist = type(dist)(dist.parameters.to(_dt))
-            return out
-
-        vae.decode, vae.encode = decode, encode
+        vae.decode = _decode_fp32
         vae._fp32_patched = True
-        logger.info(f"🛡️ VAE 已升 fp32（encode 输出转回 {_dt}）")
+        logger.info(f"🛡️ VAE decode 临时升 fp32（encode 保持 {_orig_dtype}）")

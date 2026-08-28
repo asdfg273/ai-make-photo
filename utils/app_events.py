@@ -642,8 +642,20 @@ class EventMixin:
             except Exception as e:
                 import traceback; traceback.print_exc()
                 logger.error(f"❌ [enhance_prompt] 异常: {e}")
-                
+                from PyQt6.QtCore import QMetaObject, Qt
+                QMetaObject.invokeMethod(
+                    self, "_restore_enhance_button",
+                    Qt.ConnectionType.QueuedConnection,
+                )
 
+            finally:
+                if not getattr(self, 'is_generating', False):
+                    try:
+                        get_enhancer().unload()
+                        logger.info("🧹 Qwen 已卸载 (智能改写完成)")
+                    except Exception:
+                        pass
+                
         import threading
         threading.Thread(target=task, daemon=True).start()
 
@@ -731,7 +743,6 @@ class EventMixin:
 
         def task():
             try:
-                from PIL import Image
                 enhancer = get_enhancer()
                 if enhancer.model is None:
                     enhancer.load()
@@ -740,6 +751,11 @@ class EventMixin:
             except Exception as e:
                 traceback.print_exc()
                 self._bridge.video_enhance_done_signal.emit(f"[识图失败] {e}")
+            finally:
+                try:
+                    get_enhancer().unload(reason="video vision done")
+                except Exception as e:
+                    logger.warning(f"⚠️ Qwen 卸载失败: {e}")
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -896,32 +912,40 @@ class EventMixin:
 
         def task():
             try:
-                from utils.prompt_enhancer import PromptEnhancer
                 from PIL import Image
-
                 enhancer = get_enhancer()
-            
-                # 强制使用视觉模型
-                if enhancer.wd_session is None:
-                    enhancer.load_wd_tagger()
-                # 如果用户输入了 hint,还需要 LLM
-                if user_hint and enhancer.llm_model is None:
-                    enhancer.load_llm()
 
-                # 读图（限制大小防 OOM）
+                # 识图前先清 SD 的 embedding 缓存，给 Qwen 腾显存
+                try:
+                    from core.model_manager import ModelManager
+                    ModelManager()._compel_cache.clear()
+                    import gc, torch
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+                if enhancer.model is None:
+                    enhancer.load()
+
                 img = Image.open(img_path).convert("RGB")
-
-                # 调用识图接口
                 result = enhancer.describe_image(img)
-            
-                # 通过信号回到主线程更新 UI
+                del img
+
                 self._bridge.enhance_done_signal.emit(result)
 
             except Exception as e:
                 import traceback
-                err = traceback.format_exc()
-                logger.error(f"❌ [vision_prompt] 异常:\n{err}")
+                logger.error(f"❌ [vision_prompt] 异常:\n{traceback.format_exc()}")
                 self._bridge.enhance_done_signal.emit(f"[识图失败] {str(e)}")
+
+            finally:
+                # ✅ 关键：无论成功失败都释放 Qwen 显存
+                try:
+                    get_enhancer().unload(reason="vision done")
+                except Exception as e:
+                    logger.warning(f"⚠️ Qwen 卸载失败: {e}")
 
         import threading
         threading.Thread(target=task, daemon=True).start()
