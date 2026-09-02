@@ -129,9 +129,23 @@ class ShellMixin:
         sb.addPermanentWidget(self.progress_gen)
         sb.showMessage("AI 绘画工作站 v6.0 已就绪")
 
-    # ---------- 方法契约（Task 6/10 换成完整实现）----------
+    # ---------- 方法契约 ----------
     def append_log(self, text: str, color: str = "#dfe5ec"):
-        logger.info(text)
+        """从旧 append_log 迁入：写图片/动画日志框，带颜色，自动滚底。"""
+        html = (
+            f'<span style="color:{color}; font-family:Consolas;">'
+            f'{text}</span>'
+        )
+        wrote = False
+        for attr in ("txt_log_image", "txt_log_video"):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.append(html)
+                sb = widget.verticalScrollBar()
+                sb.setValue(sb.maximum())
+                wrote = True
+        if not wrote:
+            logger.info(text)
 
     def set_status(self, text: str, color: str = "#dfe5ec"):
         if getattr(self, "lbl_status", None) is not None:

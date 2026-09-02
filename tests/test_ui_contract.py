@@ -80,11 +80,34 @@ def test_core_widgets():
     print("PASS test_core_widgets")
 
 
+def test_txt2img_page():
+    from ui.shell import ShellMixin
+    from PyQt6.QtWidgets import QMainWindow
+
+    class MiniApp(QMainWindow, ShellMixin):
+        pass
+
+    win = MiniApp()
+    win.setup_ui()
+    assert "txt2img" in win._pages
+    assert win.lbl_preview is not None
+    assert win.txt_log_image is not None
+    assert win.gallery is not None
+    assert win.preview_canvas is win.lbl_preview   # 别名指向同一实例
+    win.append_log("hello")            # 方法契约：写入 txt_log_image
+    assert "hello" in win.txt_log_image.toPlainText()
+    win.nav.select("txt2img")
+    assert win.center_stack.currentWidget() is win._pages["txt2img"].workspace()
+    win.close()
+    print("PASS test_txt2img_page")
+
+
 if __name__ == "__main__":
     test_contract_lists()
     test_check_and_degrade()
     test_shell_skeleton()
     test_core_widgets()
+    test_txt2img_page()
     # Qt offscreen 退出时销毁控件可能段错误，直接 os._exit 跳过 teardown
     sys.stdout.flush()
     os._exit(0)
