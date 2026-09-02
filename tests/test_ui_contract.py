@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import QApplication, QLineEdit, QPushButton
 
 # 进程级唯一 QApplication，驻留全局防止被 GC（GC 后 Qt 状态损坏会崩）
 _APP = QApplication.instance() or QApplication([])
+# 测试窗口驻留列表：防止提前 GC，退出前统一清理（QMediaPlayer 线程需显式停）
+_WINDOWS = []
 
 
 def test_contract_lists():
@@ -49,6 +51,7 @@ def test_shell_skeleton():
         pass
 
     win = MiniApp()
+    _WINDOWS.append(win)
     win.setup_ui()
     assert win.nav is not None and win.center_stack is not None
     assert callable(win.append_log) and callable(win.set_status)
@@ -66,6 +69,7 @@ def test_core_widgets():
         pass
 
     win = MiniApp()
+    _WINDOWS.append(win)
     win.setup_ui()
     crit, minor = check_contract(win)
     for name in ("txt_prompt", "txt_neg", "combo_model", "combo_sampler",
@@ -88,6 +92,7 @@ def test_txt2img_page():
         pass
 
     win = MiniApp()
+    _WINDOWS.append(win)
     win.setup_ui()
     assert "txt2img" in win._pages
     assert win.lbl_preview is not None
@@ -110,6 +115,7 @@ def test_img2img_page():
         pass
 
     win = MiniApp()
+    _WINDOWS.append(win)
     win.setup_ui()
     assert "img2img" in win._pages
     assert win.btn_load_img is not None
@@ -130,6 +136,7 @@ def test_shared_groups():
         pass
 
     win = MiniApp()
+    _WINDOWS.append(win)
     win.setup_ui()
     crit, minor = check_contract(win)
     assert crit == [], f"关键契约缺失: {crit}"
@@ -141,6 +148,27 @@ def test_shared_groups():
     print("PASS test_shared_groups")
 
 
+def test_video_page():
+    from ui.shell import ShellMixin
+    from PyQt6.QtWidgets import QMainWindow
+
+    class MiniApp(QMainWindow, ShellMixin):
+        pass
+
+    win = MiniApp()
+    _WINDOWS.append(win)
+    win.setup_ui()
+    assert "video" in win._pages
+    for name in ("btn_gen_video", "txt_video_prompt", "combo_video_mode",
+                 "video_player", "txt_log_video"):
+        assert getattr(win, name) is not None, name
+    win.nav.select("video")
+    assert win.params_stack.currentWidget() is win._pages["video"].params_widget()
+    assert not win.params_scroll.isHidden()
+    win.close()
+    print("PASS test_video_page")
+
+
 if __name__ == "__main__":
     test_contract_lists()
     test_check_and_degrade()
@@ -149,6 +177,14 @@ if __name__ == "__main__":
     test_txt2img_page()
     test_img2img_page()
     test_shared_groups()
-    # Qt offscreen 退出时销毁控件可能段错误，直接 os._exit 跳过 teardown
+    test_video_page()
+    # Qt offscreen 退出时销毁控件可能段错误，直接 os._exit 跳过 teardown;
+    # 但 QMediaPlayer 线程需先显式停掉，否则进程悬挂
+    for w in _WINDOWS:
+        p = getattr(w, "video_player", None)   # 无 parent，不在对象树里
+        if p is not None:
+            p.stop()
+            p.deleteLater()
+    _APP.processEvents()
     sys.stdout.flush()
     os._exit(0)

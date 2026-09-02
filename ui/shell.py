@@ -95,12 +95,27 @@ class ShellMixin:
         page = self._pages.get(page_id)
         if page is None:
             return
+        # 离开动画页时停止播放；进入时刷新视频历史
+        prev = getattr(self, "_current_page_id", None)
+        if prev == "video" and page_id != "video" and hasattr(self, "stop_video"):
+            try:
+                self.stop_video()
+            except Exception:
+                pass
+        self._current_page_id = page_id
         self.center_stack.setCurrentWidget(page.workspace())
         pw = page.params_widget()
         if pw is not None:
             self.params_stack.setCurrentWidget(pw)
         # 只切换/隐藏"页面专属区"；生成核心区与生成按钮永远常驻
         self.params_scroll.setVisible(pw is not None)
+        # 共享折叠分组是图片专属：动画页隐藏
+        is_video = (page_id == "video")
+        for sec in getattr(self, "_group_sections", {}).values():
+            sec.setVisible(not is_video)
+        if is_video and hasattr(self, "_refresh_video_gallery"):
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, self._refresh_video_gallery)
 
     # ---------- 右侧面板（本任务先骨架，Task 6 填核心区）----------
     def _build_params_panel(self) -> QWidget:
@@ -164,7 +179,33 @@ class ShellMixin:
             self.progress_gen.setValue(value)
 
     def play_video(self, video_path: str):
-        logger.info(f"play_video 占位: {video_path}")  # Task 10 实现
+        """播放指定路径的视频（从旧 UIBuilderMixin 迁入）"""
+        import os as _os
+        from PyQt6.QtCore import QUrl
+        _status = getattr(self, "_set_status", None) or \
+            (lambda msg, color=None: logger.info(msg))
+        logger.info(f"🎥 尝试播放视频: {video_path}")
+        if not _os.path.exists(video_path):
+            _status(f"⚠️ 视频文件不存在: {video_path}", "#e06c75")
+            return
+        try:
+            self.video_player.stop()
+            self.video_player.setSource(QUrl.fromLocalFile(video_path))
+            if hasattr(self, 'video_stacked'):
+                self.video_stacked.setCurrentIndex(1)
+            else:
+                self.lbl_video_placeholder.hide()
+                self.video_widget.show()
+            self.video_player.play()
+            _status(f"🎥 正在播放: {_os.path.basename(video_path)}", "#dfe5ec")
+            self.current_video_path = video_path
+        except Exception as e:
+            import traceback
+            _status(f"⚠️ 视频播放失败: {e}", "#e06c75")
+            logger.error(f"❌ 视频播放失败: {e}")
+            logger.error(traceback.format_exc())
+            if hasattr(self, 'video_stacked'):
+                self.video_stacked.setCurrentIndex(0)
 
     # ============================================================
     #  以下方法从旧 UIBuilderMixin 迁入（业务层/菜单依赖）

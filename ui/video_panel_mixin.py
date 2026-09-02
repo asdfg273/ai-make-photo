@@ -713,3 +713,165 @@ class VideoPanelMixin:
                 'weight': item['slider'].value() / 100.0,
             })
         return result
+    # ============================================================
+    #  以下方法从旧 UIBuilderMixin 迁入（视频面板 UI 辅助）
+    # ============================================================
+
+    def _on_video_mode_changed(self, idx: int):
+        """切换生成模式时刷新 UI"""
+        is_travel = (idx == 3)
+        if hasattr(self, 'grp_prompt_travel'):
+            self.grp_prompt_travel.setVisible(is_travel)
+
+    def _on_travel_edit_mode_changed(self, idx: int):
+        """切换旅行编辑方式：分段编辑 / 文本格式"""
+        self.wrap_travel_segments.setVisible(idx == 0)
+        self.wrap_travel_text.setVisible(idx == 1)
+
+    def _spread_travel_frames(self):
+        """均匀分布旅行分段帧号"""
+        if not self.travel_segments:
+            return
+        self._auto_distribute_frames()
+        self._set_status("✅ 已均匀分布旅行分段帧号", "#dadbdf")
+
+    def _scan_motion_loras(self):
+        """扫描 models/motion_lora 目录"""
+        result = []
+        lora_dir = "models/motion_lora"
+        try:
+            if os.path.isdir(lora_dir):
+                for d in sorted(os.listdir(lora_dir)):
+                    if os.path.isdir(os.path.join(lora_dir, d)):
+                        result.append(d)
+        except Exception:
+            pass
+        return result
+
+    def _update_video_duration_hint(self):
+        """更新视频时长提示标签"""
+        if not hasattr(self, 'lbl_video_duration'):
+            return
+        try:
+            frames = self.spin_video_frames.value()
+            fps = self.spin_video_fps.value()
+            sec = frames / max(fps, 1)
+            self.lbl_video_duration.setText(f"≈ {sec:.1f} 秒")
+        except Exception:
+            self.lbl_video_duration.setText("—")
+
+    def _clear_video_input(self):
+        """清除已选视频/图片输入文件"""
+        self._video_input_path = None
+        self.lbl_video_input.setText("未选择文件")
+        self._set_status("🗑️ 已清除输入文件", "#dadbdf")
+
+    def on_pick_video_input(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择首帧图/输入视频",
+            "", "图片/视频 (*.png *.jpg *.jpeg *.mp4 *.gif)")
+        if path:
+            self._video_input_path = path
+            self.lbl_video_input.setText(os.path.basename(path))
+
+    def _on_tts_engine_changed(self, idx):
+        """引擎切换 → 显示对应参数面板"""
+        engine_text = self.combo_tts_engine.currentText() \
+            if hasattr(self, "combo_tts_engine") else ""
+        is_sovits = "SoVITS" in engine_text
+
+        if hasattr(self, "wrap_chattts"):
+            self.wrap_chattts.setVisible(not is_sovits)
+        if hasattr(self, "wrap_sovits"):
+            self.wrap_sovits.setVisible(is_sovits)
+
+        if not hasattr(self, "lbl_voice_hint"):
+            return
+        if is_sovits:
+            self.lbl_voice_hint.setText("首次使用会加载 GPT-SoVITS (~2GB 显存,常驻)")
+            self.txt_video_voice.setPlaceholderText("输入中文或日文,例如:今日はとても楽しかったです")
+        else:
+            self.lbl_voice_hint.setText("首次使用会自动下载 ChatTTS 模型 (~1.1GB)")
+            self.txt_video_voice.setPlaceholderText("输入要配音的旁白文字,例如:清晨的阳光洒在草地上")
+
+    def _on_pick_sovits_ref(self):
+        """选择自定义参考音频"""
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择参考音频 (3-10秒)", "", "音频文件 (*.wav *.mp3 *.flac)")
+        if path:
+            name = os.path.basename(path)
+            for i in range(self.combo_sovits_ref.count() - 1, 0, -1):
+                if self.combo_sovits_ref.itemText(i).startswith("🎵 "):
+                    self.combo_sovits_ref.removeItem(i)
+            self.combo_sovits_ref.addItem(f"🎵 {name}", path)
+            self.combo_sovits_ref.setCurrentIndex(self.combo_sovits_ref.count() - 1)
+
+    def _on_long_video_toggled(self, checked: bool):
+        """长视频模式：勾选后帧数上限扩展至 150，不勾选恢复 80"""
+        if not hasattr(self, 'spin_video_frames'):
+            return
+        if checked:
+            self.spin_video_frames.setRange(8, 150)
+            if self.spin_video_frames.value() <= 80:
+                self.spin_video_frames.setValue(64)
+        else:
+            self.spin_video_frames.setRange(8, 80)
+            if self.spin_video_frames.value() > 80:
+                self.spin_video_frames.setValue(16)
+
+    # ---------- 播放控制（从旧 UIBuilderMixin 迁入）----------
+    def _save_current_video(self):
+        """保存当前播放的视频"""
+        if not hasattr(self, 'current_video_path') or not self.current_video_path:
+            self._set_status("⚠️ 没有正在播放的视频", "#ff7a17")
+            return
+        try:
+            from PyQt6.QtWidgets import QFileDialog
+            current_path = self.current_video_path
+            ext = os.path.splitext(current_path)[1]
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, "保存视频", os.path.basename(current_path),
+                f"视频文件 (*{ext});;所有文件 (*)")
+            if save_path:
+                shutil.copy2(current_path, save_path)
+                self._set_status(
+                    f"✅ 视频已保存: {os.path.basename(save_path)}", "#dadbdf")
+        except Exception as e:
+            self._set_status(f"⚠️ 保存失败: {e}", "#ff7a17")
+
+    def _on_video_media_changed(self, status):
+        """视频媒体状态变化回调"""
+        from PyQt6.QtMultimedia import QMediaPlayer
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self.video_player.pause()
+            if hasattr(self, 'video_stacked'):
+                self.video_stacked.setCurrentIndex(1)
+        elif status == QMediaPlayer.MediaStatus.NoMedia:
+            if hasattr(self, 'video_stacked'):
+                self.video_stacked.setCurrentIndex(0)
+            else:
+                self.lbl_video_placeholder.show()
+                self.video_widget.hide()
+
+    def stop_video(self):
+        """停止当前视频播放"""
+        if hasattr(self, 'video_player') and self.video_player:
+            self.video_player.stop()
+        if hasattr(self, 'video_stacked'):
+            self.video_stacked.setCurrentIndex(0)
+        elif hasattr(self, 'lbl_video_placeholder'):
+            self.lbl_video_placeholder.show()
+            if hasattr(self, 'video_widget'):
+                self.video_widget.hide()
+
+    def pause_video(self):
+        """暂停/恢复当前视频"""
+        from PyQt6.QtMultimedia import QMediaPlayer
+        if not hasattr(self, 'video_player') or not self.video_player:
+            return
+        if self.video_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.video_player.pause()
+        else:
+            self.video_player.play()
