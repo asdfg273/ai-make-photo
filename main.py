@@ -1,6 +1,6 @@
 # main.py
 # ============================================================
-#  PyQt6 主入口 — AI 绘画工作站 v5.0
+#  PyQt6 主入口 — AI 绘画工作站 v6.0
 # ============================================================
 import warnings
 warnings.simplefilter("always", RuntimeWarning)
@@ -727,7 +727,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("AI 绘画工作站")
-    app.setApplicationVersion("5.0")
+    app.setApplicationVersion("6.0")
     if os.environ.get("AI_STUDIO_UI") == "v2":
         from ui.theme import apply_theme
         logger.info(f"🎨 主题: {apply_theme(app)}")

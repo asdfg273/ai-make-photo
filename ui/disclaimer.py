@@ -35,7 +35,7 @@ CONFIG_PATH = os.path.join(_PROJECT_ROOT, "config.json")
 # ==================== 文案 ====================
 GLOBAL_DISCLAIMER_HTML = """
 <div style="color:#dadbdf; font-size:13px; line-height:1.7;">
-<h2 style="color:#4a9eff; margin-top:0;">欢迎使用 AI 绘画工作站 v5.0</h2>
+<h2 style="color:#4a9eff; margin-top:0;">欢迎使用 AI 绘画工作站 v6.0</h2>
 <p>本软件是基于开源模型的 AI 内容创作工具,在使用前请了解:</p>
 
 <h3 style="color:#ffb84a;">【关于本软件】</h3>
