@@ -545,13 +545,8 @@ class VideoPage(PageBase):
             host._add_travel_segment()
             host._add_travel_segment()
 
-        # 包一层滚动区（原结构）
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setWidget(w)
-        return scroll
+        # 外层 params_scroll 已负责滚动，直接返回内容 widget
+        return w
 
     # ========================================================
     #  中央工作区（原 _build_video_right_panel）
@@ -611,32 +606,27 @@ class VideoPage(PageBase):
         _wire(host, host.btn_video_stop.clicked, "stop_video")
         video_preview_layout.addLayout(video_btn_row)
 
-        video_gallery_wrap = QWidget()
-        video_gallery_layout = QVBoxLayout(video_gallery_wrap)
-        video_gallery_layout.setContentsMargins(0, 0, 0, 0)
-        video_gallery_layout.setSpacing(2)
-
-        lbl_video_gallery_title = QLabel("📂 视频历史 (双击播放)")
-        lbl_video_gallery_title.setProperty("role", "title")
-        video_gallery_layout.addWidget(lbl_video_gallery_title)
-
+        # 视频历史已统一到「画廊」页（媒体过滤=动画），此处保留隐藏实例兼容契约
         host.video_list = QListWidget()
         host.video_list.setViewMode(QListWidget.ViewMode.IconMode)
         host.video_list.setIconSize(QSize(160, 90))
-        host.video_list.setResizeMode(QListWidget.ResizeMode.Adjust)
-        host.video_list.setSpacing(10)
+        host.video_list.setVisible(False)   # 不入布局，仅供 _refresh_video_gallery 等旧逻辑写入
         _wire(host, host.video_list.itemDoubleClicked, "_on_video_item_clicked")
-        video_gallery_layout.addWidget(host.video_list, 1)
 
-        video_splitter = QSplitter(Qt.Orientation.Vertical)
-        video_splitter.addWidget(video_preview_wrap)
-        video_splitter.addWidget(video_gallery_wrap)
-        video_splitter.setSizes([400, 350])
-        video_splitter.setStretchFactor(0, 1)
-        video_splitter.setStretchFactor(1, 1)
-        video_splitter.setChildrenCollapsible(False)
-        video_splitter.setHandleWidth(4)
-        layout.addWidget(video_splitter, 1)
+        # 统一画廊入口
+        gallery_row = QHBoxLayout()
+        gallery_row.setSpacing(6)
+        hint = QLabel("📂 历史视频已统一到「画廊」页")
+        hint.setProperty("role", "hint")
+        gallery_row.addWidget(hint, 1)
+        btn_to_gallery = QPushButton("🖼️ 打开画廊（动画）")
+        btn_to_gallery.clicked.connect(lambda: (
+            host.gallery.set_media_filter("video") if hasattr(host, "gallery") else None,
+            host.nav.select("gallery") if hasattr(host, "nav") else None))
+        gallery_row.addWidget(btn_to_gallery)
+        video_preview_layout.addLayout(gallery_row)
+
+        layout.addWidget(video_preview_wrap, 1)
 
         lbl_log = QLabel("📋 生成日志:")
         lbl_log.setProperty("role", "hint")

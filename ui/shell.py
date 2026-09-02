@@ -111,13 +111,26 @@ class ShellMixin:
                 pass
         self._current_page_id = page_id
         self.center_stack.setCurrentWidget(page.workspace())
+
+        # 画廊页：隐藏整个右侧面板，画廊全宽
+        self.params_panel.setVisible(page_id != "gallery")
+
+        # 动画页：图片核心区与图片生成按钮不适用（它有专属参数和生成按钮）
+        is_video = (page_id == "video")
+        self.core_wrap.setVisible(not is_video)
+        self.gen_wrap.setVisible(not is_video)
+
+        # 只切换/隐藏"页面专属区"；生成核心区与生成按钮永远常驻
         pw = page.params_widget()
         if pw is not None:
             self.params_stack.setCurrentWidget(pw)
-        # 只切换/隐藏"页面专属区"；生成核心区与生成按钮永远常驻
-        self.params_scroll.setVisible(pw is not None)
+            pw.adjustSize()
+            # 按当前页内容撑高 stack，外层滚动区负责滚动，互不挤压
+            self.params_stack.setMinimumHeight(max(pw.sizeHint().height(), 80))
+        else:
+            self.params_stack.setMinimumHeight(0)
+        self.params_stack.setVisible(pw is not None)
         # 共享折叠分组是图片专属：动画页隐藏
-        is_video = (page_id == "video")
         for sec in getattr(self, "_group_sections", {}).values():
             sec.setVisible(not is_video)
         if is_video and hasattr(self, "_refresh_video_gallery"):
@@ -139,7 +152,14 @@ class ShellMixin:
         gallery = getattr(self, "gallery", None)
         if gallery is None or getattr(self, "filmstrip", None) is None:
             return
-        paths = [p for p, _, _ in gallery._all_items][:24]
+        # 跟随画廊当前过滤后的可见项（全部/图片/动画 + 搜索 + 收藏过滤）
+        paths = []
+        for i in range(gallery.list_widget.count()):
+            p = gallery.list_widget.item(i).data(Qt.ItemDataRole.UserRole)
+            if p:
+                paths.append(p)
+            if len(paths) >= 24:
+                break
         self.filmstrip.refresh(paths)
 
     def _on_filmstrip_clicked(self, path: str):
@@ -160,28 +180,49 @@ class ShellMixin:
         self.nav.select("video")
         self.play_video(path)
 
-    # ---------- 右侧面板（本任务先骨架，Task 6 填核心区）----------
+    # ---------- 右侧面板（整体可滚动，生成按钮固定底部）----------
     def _build_params_panel(self) -> QWidget:
         w = QWidget()
-        w.setFixedWidth(360)
+        w.setFixedWidth(400)
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.core_area = QVBoxLayout()       # 生成核心区（全局单例）
-        from ui.core_panel import build_core, build_gen_area
-        build_core(self, self.core_area)
-        lay.addLayout(self.core_area)
-        self.params_stack = QStackedWidget() # 页面专属区
+        lay.setSpacing(6)
+
+        # 单一滚动区：核心区 + 页面专属区 + 共享折叠分组，内容再多也不挤压
         self.params_scroll = QScrollArea()
         self.params_scroll.setWidgetResizable(True)
-        self.params_scroll.setWidget(self.params_stack)
-        lay.addWidget(self.params_scroll, 1)
+        self.params_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        clay = QVBoxLayout(content)
+        clay.setContentsMargins(4, 4, 4, 4)
+        clay.setSpacing(8)
+
+        # 生成核心区（全局单例，包一层容器便于整区显隐）
+        self.core_wrap = QWidget()
+        self.core_area = QVBoxLayout(self.core_wrap)
+        self.core_area.setContentsMargins(0, 0, 0, 0)
+        from ui.core_panel import build_core, build_gen_area
+        build_core(self, self.core_area)
+        clay.addWidget(self.core_wrap)
+
+        self.params_stack = QStackedWidget() # 页面专属区
+        clay.addWidget(self.params_stack)
+
         self.shared_groups = QVBoxLayout()   # 共享折叠分组（LoRA/CN/高级/X-Y）
         from ui.shared_groups import build_shared_groups
         self._group_sections = build_shared_groups(self, self.shared_groups)
-        lay.addLayout(self.shared_groups)
-        self.gen_area = QVBoxLayout()        # 生成/停止按钮
+        clay.addLayout(self.shared_groups)
+        clay.addStretch()
+
+        self.params_scroll.setWidget(content)
+        lay.addWidget(self.params_scroll, 1)
+
+        self.gen_wrap = QWidget()            # 生成/停止按钮（固定底部）
+        self.gen_area = QVBoxLayout(self.gen_wrap)
+        self.gen_area.setContentsMargins(0, 0, 0, 0)
         build_gen_area(self, self.gen_area)
-        lay.addLayout(self.gen_area)
+        lay.addWidget(self.gen_wrap)
         return w
 
     # ---------- 状态栏 ----------
@@ -193,7 +234,6 @@ class ShellMixin:
         self.progress_gen.setMaximumWidth(220)
         sb.addWidget(self.lbl_status, 1)
         sb.addPermanentWidget(self.progress_gen)
-        sb.showMessage("AI 绘画工作站 v6.0 已就绪")
 
     # ---------- 方法契约 ----------
     def append_log(self, text: str, color: str = "#dfe5ec"):

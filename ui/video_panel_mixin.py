@@ -590,7 +590,16 @@ class VideoPanelMixin:
             spin_frame.blockSignals(False)
 
     def _refresh_video_gallery(self):
-        if not hasattr(self, 'video_list'):
+        # 视频历史已统一到「画廊」页：让统一画廊重扫输出目录（含 videos 子目录）
+        gallery = getattr(self, 'gallery', None)
+        if gallery is not None:
+            try:
+                from utils.paths import OUTPUT_DIR
+                gallery.reload_from_dir(OUTPUT_DIR, limit=80)
+            except Exception as e:
+                logger.warning(f'⚠️ 画廊刷新失败: {e}')
+        # 旧 video_list 已隐藏（v6 统一画廊），不再填缩略图
+        if not hasattr(self, 'video_list') or self.video_list.isHidden():
             return
         self.video_list.clear()
         video_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "photo", "videos")
