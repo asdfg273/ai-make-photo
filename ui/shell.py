@@ -25,6 +25,9 @@ class ShellMixin:
         self.setWindowTitle("AI 绘画工作站 v6.0")
         # 主题由 main.py 的 apply_theme(QApplication) 统一应用
 
+        from ui.core_panel import build_status_widgets
+        build_status_widgets(self)   # lbl_status / progress_gen 先建，状态栏复用
+
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
@@ -99,7 +102,9 @@ class ShellMixin:
         w.setFixedWidth(360)
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.core_area = QVBoxLayout()       # Task 6 填充生成核心区
+        self.core_area = QVBoxLayout()       # 生成核心区（全局单例）
+        from ui.core_panel import build_core, build_gen_area
+        build_core(self, self.core_area)
         lay.addLayout(self.core_area)
         self.params_stack = QStackedWidget() # 页面专属区
         self.params_scroll = QScrollArea()
@@ -108,7 +113,8 @@ class ShellMixin:
         lay.addWidget(self.params_scroll, 1)
         self.shared_groups = QVBoxLayout()   # Task 9 填充共享折叠分组
         lay.addLayout(self.shared_groups)
-        self.gen_area = QVBoxLayout()        # Task 6 填充生成/停止按钮
+        self.gen_area = QVBoxLayout()        # 生成/停止按钮
+        build_gen_area(self, self.gen_area)
         lay.addLayout(self.gen_area)
         return w
 

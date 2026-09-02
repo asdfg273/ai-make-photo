@@ -15,6 +15,8 @@ GLOBAL_WIDGETS = [
     "spin_seed", "spin_count", "combo_img_format", "combo_device",
     "chk_auto_enhance", "chk_auto_features", "btn_enhance_prompt",
     "btn_vision_prompt", "lbl_model_info",
+    "combo_ai_model", "combo_trans_mode", "scale_cfg", "spin_batch",
+    "lbl_dynamic_hint", "chk_make_comic",
     # 生成控制
     "btn_generate", "btn_interrupt", "progress_gen", "lbl_status",
     "btn_preset_menu", "btn_save_preset", "btn_restore_preset",
@@ -54,7 +56,7 @@ PAGE_WIDGETS = {
         "combo_video_mode", "combo_video_fmt", "combo_video_sched",
         "chk_long_video", "chk_frame_interp", "combo_frame_interp",
         "chk_video_upscale", "chk_video_voice", "combo_tts_engine",
-        "chk_make_comic", "cmb_motion_lora_pick", "motion_lora_container",
+        "cmb_motion_lora_pick", "motion_lora_container",
         "travel_container", "wrap_travel_segments", "wrap_travel_text",
         "txt_neg_prompt_travel", "combo_travel_mode",
         "wrap_chattts", "wrap_sovits", "combo_sovits_ref",
@@ -62,7 +64,7 @@ PAGE_WIDGETS = {
         "txt_video_voice", "audio_output", "lbl_video_status",
         "lbl_video_duration", "lbl_video_input", "lbl_video_placeholder",
         "btn_video_pause", "btn_video_stop", "btn_video_save",
-        "btn_video_refresh", "lbl_dynamic_hint",
+        "btn_video_refresh",
     ],
     "gallery": [],  # 复用全局 self.gallery
 }

@@ -57,10 +57,34 @@ def test_shell_skeleton():
     print("PASS test_shell_skeleton")
 
 
+def test_core_widgets():
+    from ui.shell import ShellMixin
+    from PyQt6.QtWidgets import QMainWindow
+    from ui.contracts import check_contract, GLOBAL_WIDGETS
+
+    class MiniApp(QMainWindow, ShellMixin):
+        pass
+
+    win = MiniApp()
+    win.setup_ui()
+    crit, minor = check_contract(win)
+    for name in ("txt_prompt", "txt_neg", "combo_model", "combo_sampler",
+                 "spin_steps", "spin_width", "spin_height", "btn_generate",
+                 "btn_interrupt", "progress_gen"):
+        assert name not in crit, f"关键控件缺失: {name}"
+        assert getattr(win, name) is not None
+    # 别名指向同一实例
+    assert win.btn_gen is win.btn_generate
+    # preview_canvas 别名在 Task 7（预览画布迁移）后断言
+    win.close()
+    print("PASS test_core_widgets")
+
+
 if __name__ == "__main__":
     test_contract_lists()
     test_check_and_degrade()
     test_shell_skeleton()
+    test_core_widgets()
     # Qt offscreen 退出时销毁控件可能段错误，直接 os._exit 跳过 teardown
     sys.stdout.flush()
     os._exit(0)
