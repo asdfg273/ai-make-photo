@@ -9,10 +9,10 @@ def main():
     from ui.components.collapsible import CollapsibleSection
     sec = CollapsibleSection("LoRA", collapsed=True)
     assert sec.is_collapsed() is True
-    assert not sec.content.isVisible()
+    assert sec.content.isHidden()
     sec.content_layout.addWidget(QLabel("x"))
     sec.set_collapsed(False)
-    assert sec.content.isVisible()
+    assert not sec.content.isHidden()
     print("PASS test_collapsible")
 
 if __name__ == "__main__":
