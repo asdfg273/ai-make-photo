@@ -54,7 +54,7 @@ class ImageViewerDialog(QDialog):
         btn_fit = QPushButton("📐 适配窗口")
         btn_actual = QPushButton("1:1 原始")
         self.lbl_zoom = QLabel("100%")
-        self.lbl_zoom.setStyleSheet("color:#a6e3a1; padding:0 12px;")
+        self.lbl_zoom.setProperty("role", "value")
         for b in (btn_zoom_in, btn_zoom_out, btn_fit, btn_actual):
             b.setStyleSheet("padding:6px 12px;")
             toolbar.addWidget(b)
@@ -65,7 +65,8 @@ class ImageViewerDialog(QDialog):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(False)
         self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.scroll.setStyleSheet("background:#1e1e2e;")
+        from ui.theme import PALETTE
+        self.scroll.setStyleSheet(f"background:{PALETTE['bg']};")
         self.lbl_img = QLabel()
         self.lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scroll.setWidget(self.lbl_img)
@@ -130,35 +131,27 @@ class MetadataPanel(QWidget):
         layout.setSpacing(6)
 
         title = QLabel("📋 元数据")
-        title.setStyleSheet("font-weight:bold; color:#cdd6f4; font-size:13px;")
+        title.setProperty("role", "title")
         layout.addWidget(title)
 
         lbl_p = QLabel("Prompt:")
-        lbl_p.setStyleSheet("color:#a6e3a1; font-weight:bold; font-size:11px;")
+        lbl_p.setProperty("role", "value")
         layout.addWidget(lbl_p)
         self.txt_prompt = QTextEdit()
         self.txt_prompt.setReadOnly(True)
         self.txt_prompt.setFixedHeight(80)
-        self.txt_prompt.setStyleSheet(
-            "background:#181825; color:#cdd6f4; border:1px solid #313244; "
-            "padding:4px; font-size:11px;"
-        )
         layout.addWidget(self.txt_prompt)
 
         lbl_n = QLabel("Negative:")
-        lbl_n.setStyleSheet("color:#f38ba8; font-weight:bold; font-size:11px;")
+        lbl_n.setProperty("role", "hint")
         layout.addWidget(lbl_n)
         self.txt_neg = QTextEdit()
         self.txt_neg.setReadOnly(True)
         self.txt_neg.setFixedHeight(60)
-        self.txt_neg.setStyleSheet(
-            "background:#181825; color:#cdd6f4; border:1px solid #313244; "
-            "padding:4px; font-size:11px;"
-        )
         layout.addWidget(self.txt_neg)
 
         lbl_param = QLabel("参数:")
-        lbl_param.setStyleSheet("color:#89b4fa; font-weight:bold; font-size:11px;")
+        lbl_param.setProperty("role", "hint")
         layout.addWidget(lbl_param)
         self.lbl_params = QLabel()
         self.lbl_params.setWordWrap(True)
@@ -166,10 +159,7 @@ class MetadataPanel(QWidget):
         self.lbl_params.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
-        self.lbl_params.setStyleSheet(
-            "background:#181825; color:#cdd6f4; border:1px solid #313244; "
-            "padding:6px; font-family:Consolas; font-size:10px;"
-        )
+        self.lbl_params.setProperty("role", "hint")
         scroll = QScrollArea()
         scroll.setWidget(self.lbl_params)
         scroll.setWidgetResizable(True)
@@ -181,10 +171,6 @@ class MetadataPanel(QWidget):
         self.btn_copy_prompt = QPushButton("📋 复制 Prompt")
         self.btn_apply = QPushButton("↩️ 套用全部参数")
         for b in (self.btn_copy_prompt, self.btn_apply):
-            b.setStyleSheet(
-                "background:#45475a; color:#cdd6f4; padding:6px; "
-                "border-radius:3px; font-size:11px;"
-            )
             b.setFixedHeight(30)
         btn_row.addWidget(self.btn_copy_prompt)
         btn_row.addWidget(self.btn_apply)
@@ -305,10 +291,6 @@ class GalleryPanel(QWidget):
 
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("🔍 搜索文件名或 prompt 关键字...")
-        self.search_box.setStyleSheet(
-            "background:#313244; color:#cdd6f4; border:1px solid #45475a; "
-            "padding:6px; border-radius:4px;"
-        )
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(300)   # 防抖 300ms
@@ -337,7 +319,7 @@ class GalleryPanel(QWidget):
         self.btn_show_meta.clicked.connect(self._toggle_meta_panel)
 
         self.lbl_count = QLabel("0 张")
-        self.lbl_count.setStyleSheet("color:#a6e3a1; padding:0 6px;")
+        self.lbl_count.setProperty("role", "value")
 
         search_row.addWidget(self.search_box, 1)
         search_row.addWidget(self.btn_clear_search)
@@ -630,13 +612,6 @@ class GalleryPanel(QWidget):
 
         is_multi = len(selected_paths) > 1
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background:#1e1e2e; color:#cdd6f4; border:1px solid #45475a; padding:4px; }
-            QMenu::item { padding:6px 24px; }
-            QMenu::item:selected { background:#45475a; }
-            QMenu::item:disabled { color:#6c7086; }
-            QMenu::separator { height:1px; background:#45475a; margin:4px 8px; }
-        """)
 
         # ─────── 多选菜单 ───────
         if is_multi:

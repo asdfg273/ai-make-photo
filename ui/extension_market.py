@@ -18,6 +18,12 @@ from utils.extension_manager import (
     EXTENSIONS, get_status_summary,
     download_extension, uninstall_extension,
 )
+from ui.theme import PALETTE
+
+# 语义状态色（从 PALETTE 派生，深浅同族）
+_C_OK_BG, _C_OK_FG   = "#274a35", "#7fd69a"
+_C_BAD_BG, _C_BAD_FG = "#5a2e35", PALETTE["danger"]
+_C_DIM_BG, _C_DIM_FG = PALETTE["bg_soft"], PALETTE["fg_mute"]
 
 
 # ============================================================
@@ -61,13 +67,13 @@ class ExtensionCard(QFrame):
         self.busy = False
 
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet("""
-            QFrame {
-                background: #2b2d31;
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {PALETTE['bg_soft']};
                 border-radius: 8px;
                 padding: 10px;
-            }
-            QLabel { background: transparent; color: #dadbdf; }
+            }}
+            QLabel {{ background: transparent; color: {PALETTE['fg']}; }}
         """)
 
         lay = QVBoxLayout(self)
@@ -77,12 +83,12 @@ class ExtensionCard(QFrame):
         row1 = QHBoxLayout()
         req_tag = " [必需]" if ext_info.get("required") else ""
         self.lbl_name = QLabel(f"<b>{ext_info['name']}</b>{req_tag}")
-        self.lbl_name.setStyleSheet("color:#dadbdf; font-size:14px;")
+        self.lbl_name.setProperty("role", "title")
         row1.addWidget(self.lbl_name)
         row1.addStretch()
 
         self.lbl_size = QLabel(f"{ext_info['size_mb']} MB")
-        self.lbl_size.setStyleSheet("color:#7d8187; font-size:12px;")
+        self.lbl_size.setProperty("role", "hint")
         row1.addWidget(self.lbl_size)
 
         self.lbl_status = QLabel()
@@ -93,7 +99,7 @@ class ExtensionCard(QFrame):
         # 第二行: 描述
         self.lbl_desc = QLabel(ext_info.get("desc", ""))
         self.lbl_desc.setWordWrap(True)
-        self.lbl_desc.setStyleSheet("color:#a3a6ac; font-size:12px;")
+        self.lbl_desc.setProperty("role", "hint")
         lay.addWidget(self.lbl_desc)
 
         # 第三行: 进度条 (默认隐藏)
@@ -102,24 +108,11 @@ class ExtensionCard(QFrame):
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
         self.progress.setVisible(False)
-        self.progress.setStyleSheet("""
-            QProgressBar {
-                background: #1e1f22;
-                border: 1px solid #3a3c42;
-                border-radius: 4px;
-                text-align: center;
-                color: #dadbdf;
-                height: 18px;
-            }
-            QProgressBar::chunk {
-                background: #5865f2;
-                border-radius: 3px;
-            }
-        """)
+        self.progress.setFixedHeight(18)
         lay.addWidget(self.progress)
 
         self.lbl_progress_msg = QLabel("")
-        self.lbl_progress_msg.setStyleSheet("color:#7d8187; font-size:11px;")
+        self.lbl_progress_msg.setProperty("role", "hint")
         self.lbl_progress_msg.setVisible(False)
         lay.addWidget(self.lbl_progress_msg)
 
@@ -138,35 +131,35 @@ class ExtensionCard(QFrame):
         if self.installed:
             self.lbl_status.setText("✅ 已安装")
             self.lbl_status.setStyleSheet(
-                "background:#2d5a3d; color:#a6e3a1; font-size:12px; padding:2px 8px; border-radius:4px;"
+                f"background:{_C_OK_BG}; color:{_C_OK_FG}; font-size:12px; padding:2px 8px; border-radius:4px;"
             )
             self.btn_action.setText("🗑️ 卸载")
-            self.btn_action.setStyleSheet("""
-                QPushButton {
-                    background:#5c3232; color:#f5a5a5; border:none;
+            self.btn_action.setStyleSheet(f"""
+                QPushButton {{
+                    background:{_C_BAD_BG}; color:{_C_BAD_FG}; border:none;
                     padding:6px 12px; border-radius:4px; font-weight:bold;
-                }
-                QPushButton:hover { background:#7a4040; }
+                }}
+                QPushButton:hover {{ background:#6a3a42; }}
             """)
         else:
             required = self.ext_info.get("required", False)
             if required:
                 self.lbl_status.setText("🔴 缺失(必需)")
                 self.lbl_status.setStyleSheet(
-                    "background:#5c3232; color:#f5a5a5; font-size:12px; padding:2px 8px; border-radius:4px;"
+                    f"background:{_C_BAD_BG}; color:{_C_BAD_FG}; font-size:12px; padding:2px 8px; border-radius:4px;"
                 )
             else:
                 self.lbl_status.setText("⚪ 未安装")
                 self.lbl_status.setStyleSheet(
-                    "background:#3a3c42; color:#a3a6ac; font-size:12px; padding:2px 8px; border-radius:4px;"
+                    f"background:{_C_DIM_BG}; color:{_C_DIM_FG}; font-size:12px; padding:2px 8px; border-radius:4px;"
                 )
             self.btn_action.setText("⬇️ 下载")
-            self.btn_action.setStyleSheet("""
-                QPushButton {
-                    background:#3d5a80; color:#c8dcf0; border:none;
+            self.btn_action.setStyleSheet(f"""
+                QPushButton {{
+                    background:{PALETTE['accent']}; color:#0d1620; border:none;
                     padding:6px 12px; border-radius:4px; font-weight:bold;
-                }
-                QPushButton:hover { background:#4d70a0; }
+                }}
+                QPushButton:hover {{ background:{PALETTE['accent_hi']}; }}
             """)
 
     def _on_click(self):
@@ -223,12 +216,6 @@ class ExtensionMarketDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("🧩 扩展市场")
         self.resize(880, 720)
-        self.setStyleSheet("""
-            QDialog { background:#1e1f22; }
-            QLabel { color:#dadbdf; }
-            QScrollArea { background:#1e1f22; border:none; }
-            QScrollArea > QWidget > QWidget { background:#1e1f22; }
-        """)
 
         self.cards = {}       # ext_id -> ExtensionCard
         self.workers = {}     # ext_id -> ExtensionWorker
@@ -239,21 +226,21 @@ class ExtensionMarketDialog(QDialog):
 
         # 顶部标题
         title = QLabel("🧩 扩展市场")
-        title.setStyleSheet("font-size:20px; font-weight:bold; color:#dadbdf;")
+        title.setStyleSheet("font-size:20px; font-weight:bold;")
         root.addWidget(title)
 
         hint = QLabel(
             "所有扩展均为可选下载。带 <b>[必需]</b> 标记的是核心功能所需模型。<br>"
             "下载使用 <b>hf-mirror.com</b> 国内镜像,失败自动回退官方源。"
         )
-        hint.setStyleSheet("color:#a3a6ac; font-size:12px;")
+        hint.setProperty("role", "hint")
         hint.setWordWrap(True)
         root.addWidget(hint)
 
         # 全局状态栏
         self.lbl_summary = QLabel()
         self.lbl_summary.setStyleSheet(
-            "background:#2b2d31; color:#dadbdf; padding:8px; border-radius:6px; font-size:13px;"
+            f"background:{PALETTE['bg_soft']}; color:{PALETTE['fg']}; padding:8px; border-radius:6px; font-size:13px;"
         )
         root.addWidget(self.lbl_summary)
 
@@ -300,7 +287,7 @@ class ExtensionMarketDialog(QDialog):
             # 分类标题
             cat_lbl = QLabel(f"📂 {cat}")
             cat_lbl.setStyleSheet(
-                "font-size:15px; font-weight:bold; color:#5865f2; padding:6px 0 2px 0;"
+                f"font-size:15px; font-weight:bold; color:{PALETTE['accent']}; padding:6px 0 2px 0;"
             )
             self.content_lay.addWidget(cat_lbl)
 

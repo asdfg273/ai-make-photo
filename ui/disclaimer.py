@@ -133,27 +133,28 @@ class DisclaimerDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(600, 520)
-        self.setStyleSheet("""
-            QDialog { background:#1e1f25; }
-            QCheckBox { color:#dadbdf; font-size:13px; padding:6px; }
-            QCheckBox::indicator { width:18px; height:18px; }
-            QPushButton {
-                background:#3a3d4a; color:#dadbdf; border:none;
+        from ui.theme import PALETTE
+        self.setStyleSheet(f"""
+            QDialog {{ background:{PALETTE['bg']}; }}
+            QCheckBox {{ color:{PALETTE['fg']}; font-size:13px; padding:6px; }}
+            QCheckBox::indicator {{ width:18px; height:18px; }}
+            QPushButton {{
+                background:{PALETTE['bg_soft']}; color:{PALETTE['fg']}; border:none;
                 padding:10px 24px; border-radius:6px; font-size:13px;
                 font-weight:bold; min-width:120px;
-            }
-            QPushButton:hover { background:#4a4d5a; }
-            QPushButton#btnConfirm {
-                background:#4a9eff; color:#fff;
-            }
-            QPushButton#btnConfirm:hover { background:#5aaeff; }
-            QPushButton#btnConfirm:disabled {
-                background:#2a2d34; color:#7d8187;
-            }
-            QTextBrowser {
-                background:#2a2d34; border:1px solid #3a3d4a;
+            }}
+            QPushButton:hover {{ background:#2d3d4d; }}
+            QPushButton#btnConfirm {{
+                background:{PALETTE['accent']}; color:#fff;
+            }}
+            QPushButton#btnConfirm:hover {{ background:{PALETTE['accent_hi']}; }}
+            QPushButton#btnConfirm:disabled {{
+                background:{PALETTE['bg_soft']}; color:{PALETTE['fg_mute']};
+            }}
+            QTextBrowser {{
+                background:{PALETTE['bg_soft']}; border:1px solid #2d3d4d;
                 border-radius:6px; padding:12px;
-            }
+            }}
         """)
 
         layout = QVBoxLayout(self)

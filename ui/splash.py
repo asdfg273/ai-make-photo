@@ -31,12 +31,13 @@ class SplashScreen(QDialog):
 
         container = QWidget()
         container.setObjectName("splash_container")
-        container.setStyleSheet("""
-            #splash_container {
-                background: #0a0a0a;
+        from ui.theme import PALETTE
+        container.setStyleSheet(f"""
+            #splash_container {{
+                background: {PALETTE['bg']};
                 border-radius: 8px;
-                border: 1px solid #212327;
-            }
+                border: 1px solid {PALETTE['bg_soft']};
+            }}
         """)
         inner = QVBoxLayout(container)
         inner.setContentsMargins(40, 40, 40, 30)
@@ -63,26 +64,26 @@ class SplashScreen(QDialog):
         lbl_title = QLabel("AI 绘画工作站")
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_title.setStyleSheet(
-            "color:#ffffff; font-size:22px;")
+            f"color:{PALETTE['fg']}; font-size:22px;")
         inner.addWidget(lbl_title)
 
-        lbl_sub = QLabel("v5.0  PyQt6 Edition")
+        lbl_sub = QLabel("v6.0  PyQt6 Edition")
         lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_sub.setStyleSheet("color:#7d8187; font-size:12px;")
+        lbl_sub.setStyleSheet(f"color:{PALETTE['fg_mute']}; font-size:12px;")
         inner.addWidget(lbl_sub)
 
         self.lbl_msg = QLabel("正在初始化...")
         self.lbl_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_msg.setStyleSheet("color:#7d8187; font-size:11px;")
+        self.lbl_msg.setStyleSheet(f"color:{PALETTE['fg_mute']}; font-size:11px;")
         inner.addWidget(self.lbl_msg)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setFixedHeight(6)
         self.progress.setTextVisible(False)
-        self.progress.setStyleSheet("""
-            QProgressBar { background:#1a1c20; border-radius:3px; }
-            QProgressBar::chunk { background:#ffffff; border-radius:3px; }
+        self.progress.setStyleSheet(f"""
+            QProgressBar {{ background:{PALETTE['bg_soft']}; border-radius:3px; }}
+            QProgressBar::chunk {{ background:{PALETTE['accent']}; border-radius:3px; }}
         """)
         inner.addWidget(self.progress)
         layout.addWidget(container)
