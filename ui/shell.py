@@ -81,6 +81,7 @@ class ShellMixin:
 
         # ── 画廊 ↔ 胶片条联动（gallery 由画廊页创建，此处已存在）──
         if getattr(self, "gallery", None) is not None:
+            self.filmstrip._gallery = self.gallery   # 右键菜单动作委托
             self.gallery.items_changed.connect(self._refresh_filmstrip)
             self.gallery.video_selected.connect(self._on_gallery_video_picked)
             self.filmstrip.media_clicked.connect(self._on_filmstrip_clicked)
@@ -96,6 +97,27 @@ class ShellMixin:
         self._build_statusbar_v6()
         self._build_menu_v6()
         self._init_defaults()
+        self._setup_shortcuts()
+
+    # ---------- 全局快捷键 ----------
+    def _setup_shortcuts(self):
+        from PyQt6.QtGui import QShortcut, QKeySequence
+        self._shortcuts = []   # 驻留防 GC
+
+        def _add(seq, fn):
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.setContext(Qt.ShortcutContext.WindowShortcut)
+            sc.activated.connect(fn)
+            self._shortcuts.append(sc)
+
+        _add("Ctrl+Return", lambda: getattr(self, "btn_generate", None)
+             and self.btn_generate.isEnabled() and self.btn_generate.click())
+        _add("Escape", lambda: getattr(self, "btn_interrupt", None)
+             and self.btn_interrupt.isEnabled() and self.btn_interrupt.click())
+        # Ctrl+1..4 切换页面
+        for i, cls in enumerate(PAGES, 1):
+            _add(f"Ctrl+{i}",
+                 lambda pid=cls.page_id: self.nav.select(pid))
 
     # ---------- 页面切换 ----------
     def _on_page_selected(self, page_id: str):

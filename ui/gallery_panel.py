@@ -321,8 +321,21 @@ class GalleryPanel(QWidget):
         self.lbl_count = QLabel("0 张")
         self.lbl_count.setProperty("role", "value")
 
+        # 排序 + 时间过滤
+        from PyQt6.QtWidgets import QComboBox
+        self.combo_sort = QComboBox()
+        self.combo_sort.addItems(["最新优先", "最旧优先", "按文件名"])
+        self.combo_sort.setToolTip("排序方式")
+        self.combo_sort.currentIndexChanged.connect(self._apply_filter)
+        self.combo_time = QComboBox()
+        self.combo_time.addItems(["全部时间", "今天", "近 7 天", "近 30 天"])
+        self.combo_time.setToolTip("按修改时间过滤")
+        self.combo_time.currentIndexChanged.connect(self._apply_filter)
+
         search_row.addWidget(self.search_box, 1)
         search_row.addWidget(self.btn_clear_search)
+        search_row.addWidget(self.combo_time)
+        search_row.addWidget(self.combo_sort)
         search_row.addWidget(self.btn_only_fav)
         search_row.addWidget(self.btn_show_nsfw)
         search_row.addWidget(self.btn_show_meta)
@@ -436,6 +449,13 @@ class GalleryPanel(QWidget):
             self._all_items.append((path, prompt_text, nsfw))
         self._apply_filter()
 
+    @staticmethod
+    def _mtime(path: str) -> float:
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0.0
+
     def _extract_prompt(self, path: str) -> str:
         try:
             from PIL import Image
@@ -453,15 +473,39 @@ class GalleryPanel(QWidget):
 
     # ========== 搜索过滤 ==========
     def _apply_filter(self):
+        import time as _time
         keyword = self.search_box.text().strip().lower()
         only_fav = self.btn_only_fav.isChecked()
         show_nsfw = self.btn_show_nsfw.isChecked()
         media = self._media_filter
+        time_idx = self.combo_time.currentIndex() if hasattr(self, "combo_time") else 0
+        sort_idx = self.combo_sort.currentIndex() if hasattr(self, "combo_sort") else 0
+
+        # 时间过滤阈值
+        cutoff = None
+        if time_idx == 1:
+            cutoff = _time.time() - 86400
+        elif time_idx == 2:
+            cutoff = _time.time() - 7 * 86400
+        elif time_idx == 3:
+            cutoff = _time.time() - 30 * 86400
+
+        items = list(self._all_items)
+        # 排序
+        if sort_idx == 0:
+            items.sort(key=lambda it: -self._mtime(it[0]))
+        elif sort_idx == 1:
+            items.sort(key=lambda it: self._mtime(it[0]))
+        elif sort_idx == 2:
+            items.sort(key=lambda it: os.path.basename(it[0]).lower())
+
         self.list_widget.clear()
         shown = 0
         nsfw_hidden = 0
-        for path, prompt_text, nsfw in self._all_items:
+        for path, prompt_text, nsfw in items:
             if media != "all" and self.media_kind(path) != media:
+                continue
+            if cutoff is not None and self._mtime(path) < cutoff:
                 continue
             if nsfw and not show_nsfw:
                 nsfw_hidden += 1
@@ -498,6 +542,53 @@ class GalleryPanel(QWidget):
             cls._video_thumb_cache = QIcon(pix)
         return cls._video_thumb_cache
 
+    @staticmethod
+    def video_frame_icon(path: str, size: int = 110) -> QIcon | None:
+        """cv2 抽视频首帧做缩略图，右下角画时长角标。失败返回 None（调用方回落占位图）。"""
+        try:
+            import cv2
+            from PyQt6.QtGui import QImage, QPainter, QColor
+            cap = cv2.VideoCapture(path)
+            ret, frame = cap.read()
+            fps = cap.get(cv2.CAP_PROP_FPS) or 0
+            frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            cap.release()
+            if not ret:
+                return None
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = frame_rgb.shape
+            qimg = QImage(frame_rgb.data, w, h, ch * w,
+                          QImage.Format.Format_RGB888).copy()
+            pix = QPixmap.fromImage(qimg).scaled(
+                size, size,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation)
+            # 居中裁剪成方形
+            if pix.width() > size or pix.height() > size:
+                x = max(0, (pix.width() - size) // 2)
+                y = max(0, (pix.height() - size) // 2)
+                pix = pix.copy(x, y, min(size, pix.width()), min(size, pix.height()))
+            # 时长角标
+            if fps > 0 and frames > 0:
+                secs = frames / fps
+                label = f"{int(secs // 60)}:{int(secs % 60):02d}"
+                p = QPainter(pix)
+                f = p.font(); f.setPointSize(9); f.setBold(True); p.setFont(f)
+                tw = p.fontMetrics().horizontalAdvance(label) + 8
+                p.fillRect(pix.width() - tw - 2, pix.height() - 18, tw, 16,
+                           QColor(0, 0, 0, 160))
+                p.setPen(QColor("#ffffff"))
+                p.drawText(pix.width() - tw, pix.height() - 5, label)
+                # 左下 ▶ 标记
+                p.setPen(QColor(255, 255, 255, 200))
+                f.setPointSize(12); p.setFont(f)
+                p.drawText(6, pix.height() - 8, "▶")
+                p.end()
+            return QIcon(pix)
+        except Exception as e:
+            logger.debug(f"视频抽帧失败 {path}: {e}")
+            return None
+
     def _add_to_list(self, path: str):
         item = QListWidgetItem()
         # 缩略图缓存：同一路径只解码/缩放一次
@@ -506,7 +597,7 @@ class GalleryPanel(QWidget):
         icon = self._thumb_cache.get(path)
         if icon is None:
             if self.media_kind(path) == "video":
-                icon = self._video_placeholder_icon()
+                icon = self.video_frame_icon(path) or self._video_placeholder_icon()
                 self._thumb_cache[path] = icon
             else:
                 pix = QPixmap(path)

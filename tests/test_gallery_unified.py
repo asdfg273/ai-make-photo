@@ -206,11 +206,98 @@ def test_gallery_page():
     print("PASS test_gallery_page")
 
 
+def test_video_frame_icon():
+    """cv2 抽帧：真实 mp4 → 非占位缩略图；坏文件 → None 回落。"""
+    import cv2, numpy as np
+    from ui.gallery_panel import GalleryPanel
+    tmp = tempfile.mkdtemp()
+    mp4 = os.path.join(tmp, "real.mp4")
+    vw = cv2.VideoWriter(mp4, cv2.VideoWriter_fourcc(*"mp4v"), 8, (64, 64))
+    for i in range(16):
+        vw.write(np.full((64, 64, 3), i * 10, dtype=np.uint8))
+    vw.release()
+    icon = GalleryPanel.video_frame_icon(mp4)
+    assert icon is not None and not icon.isNull(), "真实视频应抽出首帧"
+    assert GalleryPanel.video_frame_icon(os.path.join(tmp, "bad.mp4")) is None
+    print("PASS test_video_frame_icon")
+
+
+def test_gallery_sort_time():
+    """排序与时间过滤生效。"""
+    g = _fresh_gallery()
+    tmp = tempfile.mkdtemp()
+    old_png = os.path.join(tmp, "old.png"); _make_png(old_png)
+    new_png = os.path.join(tmp, "new.png"); _make_png(new_png)
+    old_time = time.time() - 40 * 86400
+    os.utime(old_png, (old_time, old_time))
+    g.add_media(old_png); g.add_media(new_png); _drain()
+    from PyQt6.QtCore import Qt
+    # 默认最新优先：new.png 在前
+    first = g.list_widget.item(0).data(Qt.ItemDataRole.UserRole)
+    assert first.endswith("new.png"), f"最新优先失效: {first}"
+    g.combo_sort.setCurrentIndex(1)   # 最旧优先
+    first = g.list_widget.item(0).data(Qt.ItemDataRole.UserRole)
+    assert first.endswith("old.png"), f"最旧优先失效: {first}"
+    g.combo_time.setCurrentIndex(1)   # 今天
+    assert g.list_widget.count() == 1, "时间过滤'今天'应只剩 1 张"
+    print("PASS test_gallery_sort_time")
+
+
+def test_filmstrip_menu():
+    """胶片条右键菜单依赖 gallery 引用。"""
+    from ui.components.filmstrip import FilmStrip
+    g = _fresh_gallery()
+    fs = FilmStrip(gallery=g)
+    _WINDOWS.append(fs)
+    assert fs._gallery is g
+    print("PASS test_filmstrip_menu")
+
+
+def test_shortcuts_registered():
+    """shell 快捷键注册：Ctrl+Return / Esc / Ctrl+1..4。"""
+    from ui.shell import ShellMixin
+    from PyQt6.QtWidgets import QMainWindow
+
+    class MiniApp(QMainWindow, ShellMixin):
+        pass
+
+    win = MiniApp()
+    _WINDOWS.append(win)
+    win.setup_ui()
+    seqs = [sc.key().toString() for sc in win._shortcuts]
+    assert "Ctrl+Return" in seqs and "Esc" in seqs
+    assert all(f"Ctrl+{i}" in seqs for i in (1, 2, 3, 4))
+    win.close()
+    print("PASS test_shortcuts_registered")
+
+
+def test_gallery_meta_embedded():
+    """画廊页内嵌元数据侧栏（不再是浮窗）。"""
+    from ui.shell import ShellMixin
+    from PyQt6.QtWidgets import QMainWindow
+
+    class MiniApp(QMainWindow, ShellMixin):
+        pass
+
+    win = MiniApp()
+    _WINDOWS.append(win)
+    win.setup_ui()
+    gpage = win._pages["gallery"]
+    ws = gpage.workspace()
+    meta = win.gallery.meta_panel
+    assert ws.isAncestorOf(meta), "元数据面板未内嵌进画廊页"
+    win.close()
+    print("PASS test_gallery_meta_embedded")
+
+
 if __name__ == "__main__":
     for fn in (test_media_filter_switch, test_add_image_compat, test_add_debounce,
                test_reload_scans_videos_subdir, test_video_placeholder_thumb,
                test_items_changed_signal, test_video_selected_signal,
-               test_filmstrip, test_gallery_page):
+               test_filmstrip, test_gallery_page,
+               test_video_frame_icon, test_gallery_sort_time,
+               test_filmstrip_menu, test_shortcuts_registered,
+               test_gallery_meta_embedded):
         fn()
     for w in _WINDOWS:
         w.close()

@@ -1,6 +1,6 @@
 # ui/components/filmstrip.py — 底部胶片条：最近媒体一览，点击跳画廊
 import os
-from PyQt6.QtWidgets import QListWidget, QListWidgetItem
+from PyQt6.QtWidgets import QListWidget, QListWidgetItem, QMenu
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QPixmap, QIcon
 
@@ -12,8 +12,9 @@ class FilmStrip(QListWidget):
 
     media_clicked = pyqtSignal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, gallery=None):
         super().__init__(parent)
+        self._gallery = gallery          # 右键菜单动作委托给统一画廊
         self.setViewMode(QListWidget.ViewMode.IconMode)
         self.setFlow(QListWidget.Flow.LeftToRight)
         self.setWrapping(False)
@@ -23,6 +24,8 @@ class FilmStrip(QListWidget):
         self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_menu)
         self.itemClicked.connect(self._on_clicked)
         self.itemDoubleClicked.connect(self._on_clicked)
 
@@ -35,7 +38,9 @@ class FilmStrip(QListWidget):
     def _add(self, path: str):
         item = QListWidgetItem()
         if GalleryPanel.media_kind(path) == "video":
-            item.setIcon(GalleryPanel._video_placeholder_icon())
+            icon = GalleryPanel.video_frame_icon(path, 96) or \
+                GalleryPanel._video_placeholder_icon()
+            item.setIcon(icon)
         else:
             pix = QPixmap(path)
             if not pix.isNull():
@@ -51,3 +56,30 @@ class FilmStrip(QListWidget):
         path = item.data(Qt.ItemDataRole.UserRole)
         if path:
             self.media_clicked.emit(path)
+
+    # ---------- 右键菜单（与画廊一致的收藏/文件夹/移除/删除）----------
+    def _show_menu(self, pos):
+        item = self.itemAt(pos)
+        if item is None or self._gallery is None:
+            return
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if not path:
+            return
+        g = self._gallery
+        menu = QMenu(self)
+        is_fav = os.path.abspath(path) in g._favs
+        act_fav = menu.addAction("💔 取消收藏" if is_fav else "⭐ 加入收藏")
+        act_folder = menu.addAction("📁 打开所在文件夹")
+        menu.addSeparator()
+        act_remove = menu.addAction("🗑 从画廊移除")
+        act_del = menu.addAction("❌ 删除文件")
+
+        chosen = menu.exec(self.viewport().mapToGlobal(pos))
+        if chosen == act_fav:
+            g._toggle_fav([path])
+        elif chosen == act_folder:
+            g._open_folder(path)
+        elif chosen == act_remove:
+            g._remove_from_view([path])
+        elif chosen == act_del:
+            g._batch_delete_files([path])

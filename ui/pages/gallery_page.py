@@ -56,7 +56,21 @@ class GalleryPage(PageBase):
             host.gallery.image_selected.connect(host._on_gallery_picked)
         if hasattr(host, "apply_meta_params"):
             host.gallery.apply_params_signal.connect(host.apply_meta_params)
-        layout.addWidget(host.gallery, 1)
+
+        # ── 内嵌元数据侧栏（替代 📋 浮窗；选中即显示，点"套用"回填参数）──
+        from PyQt6.QtWidgets import QSplitter
+        meta = host.gallery.meta_panel
+        meta.setWindowFlags(Qt.WindowType.Widget)   # 浮窗 → 内嵌子控件
+        meta.setVisible(True)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(host.gallery)
+        splitter.addWidget(meta)
+        splitter.setSizes([1000, 340])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setChildrenCollapsible(True)       # 侧栏可拖没
+        layout.addWidget(splitter, 1)
+        self._meta_panel = meta
 
         # 工具条 → 画廊过滤
         self._media_group.buttonClicked.connect(

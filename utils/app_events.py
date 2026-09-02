@@ -72,6 +72,12 @@ class EventMixin:
         if hasattr(self, 'spin_height'):
             self.spin_height.setValue(
                 getattr(cfg, 'default_height', 768))
+        # 分辨率下拉框同步还原（生成实际读 combo_res）
+        if hasattr(self, 'combo_res'):
+            _res = f"{getattr(cfg, 'default_width', 512)}x{getattr(cfg, 'default_height', 768)}"
+            _idx = self.combo_res.findText(_res)
+            if _idx >= 0:
+                self.combo_res.setCurrentIndex(_idx)
 
         if hasattr(self, 'spin_batch'):
             self.spin_batch.setValue(

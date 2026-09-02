@@ -407,8 +407,14 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         logger.info("💾 正在保存配置并退出...")
         try:
             self.config.default_steps    = self.spin_steps.value()
-            self.config.default_width    = self.spin_width.value()
-            self.config.default_height   = self.spin_height.value()
+            # 分辨率以下拉框 combo_res 为准（spin_width/height 是隐藏兼容字段）
+            _res = self.combo_res.currentText() if hasattr(self, 'combo_res') else ""
+            if "x" in _res:
+                _w, _h = _res.split("x")
+                self.config.default_width, self.config.default_height = int(_w), int(_h)
+            else:
+                self.config.default_width    = self.spin_width.value()
+                self.config.default_height   = self.spin_height.value()
             self.config.default_batch    = self.spin_batch.value()
             self.config.default_cfg      = self.scale_cfg.float_value()
             self.config.default_strength = self.scale_strength.float_value()
