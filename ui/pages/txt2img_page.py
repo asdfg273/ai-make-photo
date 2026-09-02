@@ -1,16 +1,15 @@
 # ui/pages/txt2img_page.py
 # ============================================================
-#  文生图页 — 中央工作区：预览画布 + 操作按钮 + 画廊(暂) + 日志
+#  文生图页 — 中央工作区：预览画布 + 操作按钮 + 日志
 #  从 ui_builder._build_right_panel（1509-1606 行）迁入，属性名不变
+#  画廊已迁往独立画廊页（ui/pages/gallery_page.py）
 # ============================================================
 import logging
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QTextEdit, QLabel, QSplitter, QSizePolicy)
-from PyQt6.QtCore import Qt
+                             QTextEdit, QLabel, QSizePolicy)
 
 from ui.pages.base import PageBase
 from ui.widgets import GpuCanvas
-from ui.gallery_panel import GalleryPanel
 from ui.core_panel import _wire
 
 logger = logging.getLogger(__name__)
@@ -54,35 +53,8 @@ class Txt2ImgPage(PageBase):
         _wire(host, host.btn_send_img2img.clicked, "send_preview_to_img2img")
         _wire(host, host.btn_send_inpaint.clicked, "send_preview_to_inpaint")
 
-        # ── 下半区: 画廊（Task 11 迁往独立画廊页，此处先保留）──
-        gallery_wrap = QWidget()
-        gallery_layout = QVBoxLayout(gallery_wrap)
-        gallery_layout.setContentsMargins(0, 0, 0, 0)
-        gallery_layout.setSpacing(2)
-
-        lbl_gallery_title = QLabel("🖼️ 历史画廊 (双击大图 · 右键菜单)")
-        lbl_gallery_title.setProperty("role", "title")
-        gallery_layout.addWidget(lbl_gallery_title)
-
-        host.gallery = GalleryPanel()
-        host.gallery.setMinimumHeight(180)
-        if hasattr(host, "_on_gallery_picked"):
-            host.gallery.image_selected.connect(host._on_gallery_picked)
-        if hasattr(host, 'apply_meta_params'):
-            host.gallery.apply_params_signal.connect(host.apply_meta_params)
-        gallery_layout.addWidget(host.gallery, 1)
-
-        # ── 上下分割，可拖动 ──
-        right_splitter = QSplitter(Qt.Orientation.Vertical)
-        right_splitter.addWidget(preview_wrap)
-        right_splitter.addWidget(gallery_wrap)
-        right_splitter.setSizes([500, 400])
-        right_splitter.setStretchFactor(0, 1)
-        right_splitter.setStretchFactor(1, 1)
-        right_splitter.setChildrenCollapsible(False)
-        right_splitter.setHandleWidth(4)
-        layout.addWidget(right_splitter, 1)
-        host.right_splitter = right_splitter
+        # ── 预览区直接铺满（画廊已迁往独立画廊页）──
+        layout.addWidget(preview_wrap, 1)
 
         # ── 日志 ──
         lbl_log = QLabel("📋 生成日志:")

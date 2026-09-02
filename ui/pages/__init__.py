@@ -3,5 +3,6 @@
 from ui.pages.txt2img_page import Txt2ImgPage
 from ui.pages.img2img_page import Img2ImgPage
 from ui.pages.video_page import VideoPage
+from ui.pages.gallery_page import GalleryPage
 
-PAGES = [Txt2ImgPage, Img2ImgPage, VideoPage]
+PAGES = [Txt2ImgPage, Img2ImgPage, VideoPage, GalleryPage]

@@ -50,9 +50,9 @@ class ShellMixin:
 
         root.addLayout(body, 1)
 
-        # ── 底部胶片条（Task 11 接入真实组件，先占位）──
-        self.filmstrip = QLabel("胶片条占位")
-        self.filmstrip.setFixedHeight(110)
+        # ── 底部胶片条（真实组件，联动画廊 items_changed）──
+        from ui.components.filmstrip import FilmStrip
+        self.filmstrip = FilmStrip()
         root.addWidget(self.filmstrip)
 
         # ── 页面注册与切换 ──
@@ -78,6 +78,13 @@ class ShellMixin:
         self.nav.page_selected.connect(self._on_page_selected)
         if PAGES:
             self.nav.select(PAGES[0].page_id)
+
+        # ── 画廊 ↔ 胶片条联动（gallery 由画廊页创建，此处已存在）──
+        if getattr(self, "gallery", None) is not None:
+            self.gallery.items_changed.connect(self._refresh_filmstrip)
+            self.gallery.video_selected.connect(self._on_gallery_video_picked)
+            self.filmstrip.media_clicked.connect(self._on_filmstrip_clicked)
+            self._refresh_filmstrip()
 
         # ── 契约自检 + 分级降级 ──
         install_aliases(self)
@@ -116,6 +123,42 @@ class ShellMixin:
         if is_video and hasattr(self, "_refresh_video_gallery"):
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(100, self._refresh_video_gallery)
+        # 进入画廊页：重新扫描输出目录（图片 + videos 子目录）
+        if page_id == "gallery" and getattr(self, "gallery", None) is not None:
+            from PyQt6.QtCore import QTimer
+            def _reload():
+                try:
+                    from utils.paths import OUTPUT_DIR
+                    self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
+                except Exception as e:
+                    logger.warning(f"画廊刷新失败: {e}")
+            QTimer.singleShot(100, _reload)
+
+    # ---------- 胶片条联动 ----------
+    def _refresh_filmstrip(self):
+        gallery = getattr(self, "gallery", None)
+        if gallery is None or getattr(self, "filmstrip", None) is None:
+            return
+        paths = [p for p, _, _ in gallery._all_items][:24]
+        self.filmstrip.refresh(paths)
+
+    def _on_filmstrip_clicked(self, path: str):
+        """点击胶片条 → 跳画廊页并选中对应项。"""
+        self.nav.select("gallery")
+        gallery = getattr(self, "gallery", None)
+        if gallery is None:
+            return
+        for i in range(gallery.list_widget.count()):
+            item = gallery.list_widget.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == path:
+                gallery.list_widget.setCurrentItem(item)
+                gallery.list_widget.scrollToItem(item)
+                break
+
+    def _on_gallery_video_picked(self, path: str):
+        """画廊双击视频 → 跳动画页播放。"""
+        self.nav.select("video")
+        self.play_video(path)
 
     # ---------- 右侧面板（本任务先骨架，Task 6 填核心区）----------
     def _build_params_panel(self) -> QWidget:

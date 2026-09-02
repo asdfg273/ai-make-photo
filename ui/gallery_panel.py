@@ -274,10 +274,22 @@ class GalleryPanel(QWidget):
     send_to_i2i_signal  = pyqtSignal(str)   # 🛠 发送到 img2img
     send_to_face_signal = pyqtSignal(str)   # 😀 发送到修脸
     send_to_editor_signal = pyqtSignal(str) # ✏️ 载入预览并打开修图编辑器
+    video_selected      = pyqtSignal(str)   # ▶️ 双击视频条目（交由宿主播放）
+    items_changed       = pyqtSignal()      # 🔄 可见列表重建完成（供胶片条联动）
+
+    IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    VIDEO_EXT = {".mp4", ".gif", ".webm", ".mov"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._all_items = []
+        self._media_filter = "all"          # all / image / video
+
+        # 批量添加防洪：200ms 防抖合并刷新（X-Y 矩阵一次几十张不疯狂重排）
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(200)
+        self._refresh_timer.timeout.connect(self._apply_filter)
 
         # 收藏持久化
         self._favs_path = os.path.join(DATA_DIR, "gallery_favs.json")
@@ -378,20 +390,43 @@ class GalleryPanel(QWidget):
             logger.warning(f"⚠️ 保存收藏失败: {e}")
 
     # ========== 数据管理 ==========
-    def add_image(self, path: str, prepend: bool = False):
+    @classmethod
+    def media_kind(cls, path: str) -> str:
+        ext = os.path.splitext(path)[1].lower()
+        if ext in cls.VIDEO_EXT:
+            return "video"
+        if ext in cls.IMAGE_EXT:
+            return "image"
+        return "other"
+
+    def set_media_filter(self, mode: str):
+        """切换媒体类型过滤：all / image / video。"""
+        assert mode in ("all", "image", "video"), f"未知媒体过滤模式: {mode}"
+        self._media_filter = mode
+        self._apply_filter()
+
+    def add_media(self, path: str, prepend: bool = False):
+        """统一入口：图片/视频都走这里。防抖刷新，批量添加不逐张重排。"""
         if not os.path.exists(path):
             return
         # 去重
         for p, _, _ in self._all_items:
             if os.path.abspath(p) == os.path.abspath(path):
                 return
-        prompt_text = self._extract_prompt(path)
-        nsfw = is_nsfw_prompt(prompt_text)
+        if self.media_kind(path) == "video":
+            prompt_text, nsfw = "", False
+        else:
+            prompt_text = self._extract_prompt(path)
+            nsfw = is_nsfw_prompt(prompt_text)
         if prepend:
             self._all_items.insert(0, (path, prompt_text, nsfw))
         else:
             self._all_items.append((path, prompt_text, nsfw))
-        self._apply_filter()
+        self._refresh_timer.start()   # 200ms 合并刷新
+
+    def add_image(self, path: str, prepend: bool = False):
+        """兼容包装：保持旧行为（不存在路径静默 return）。"""
+        self.add_media(path, prepend)
 
     def reload_from_dir(self, directory: str, limit: int = 80):
         self._all_items.clear()
@@ -399,14 +434,24 @@ class GalleryPanel(QWidget):
             return
         files = []
         for f in os.listdir(directory):
-            if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            if os.path.splitext(f)[1].lower() in self.IMAGE_EXT:
                 full = os.path.join(directory, f)
                 files.append((full, os.path.getmtime(full)))
+        # 统一画廊：同时扫描 videos 子目录
+        vdir = os.path.join(directory, "videos")
+        if os.path.isdir(vdir):
+            for f in os.listdir(vdir):
+                if os.path.splitext(f)[1].lower() in self.VIDEO_EXT:
+                    full = os.path.join(vdir, f)
+                    files.append((full, os.path.getmtime(full)))
         files.sort(key=lambda x: -x[1])
         for path, _ in files[:limit]:
-            prompt_text = self._extract_prompt(path)
-            nsfw = is_nsfw_prompt(prompt_text)
-            self._all_items.append((path, prompt_text, nsfw))  
+            if self.media_kind(path) == "video":
+                prompt_text, nsfw = "", False
+            else:
+                prompt_text = self._extract_prompt(path)
+                nsfw = is_nsfw_prompt(prompt_text)
+            self._all_items.append((path, prompt_text, nsfw))
         self._apply_filter()
 
     def _extract_prompt(self, path: str) -> str:
@@ -428,11 +473,14 @@ class GalleryPanel(QWidget):
     def _apply_filter(self):
         keyword = self.search_box.text().strip().lower()
         only_fav = self.btn_only_fav.isChecked()
-        show_nsfw = self.btn_show_nsfw.isChecked()  
+        show_nsfw = self.btn_show_nsfw.isChecked()
+        media = self._media_filter
         self.list_widget.clear()
         shown = 0
         nsfw_hidden = 0
-        for path, prompt_text, nsfw in self._all_items:   
+        for path, prompt_text, nsfw in self._all_items:
+            if media != "all" and self.media_kind(path) != media:
+                continue
             if nsfw and not show_nsfw:
                 nsfw_hidden += 1
                 continue
@@ -449,6 +497,24 @@ class GalleryPanel(QWidget):
             self.lbl_count.setText(f"{shown}/{len(self._all_items)} 张 (🔞 隐藏 {nsfw_hidden})")
         else:
             self.lbl_count.setText(f"{shown}/{len(self._all_items)} 张")
+        self.items_changed.emit()
+
+    _video_thumb_cache = None
+
+    @classmethod
+    def _video_placeholder_icon(cls) -> QIcon:
+        """视频占位缩略图：纯色底 + ▶ 标记。"""
+        if cls._video_thumb_cache is None:
+            from PyQt6.QtGui import QColor, QPainter
+            pix = QPixmap(110, 110)
+            pix.fill(QColor("#2a2a3c"))
+            p = QPainter(pix)
+            p.setPen(QColor("#cdd6f4"))
+            f = p.font(); f.setPointSize(28); p.setFont(f)
+            p.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, "▶")
+            p.end()
+            cls._video_thumb_cache = QIcon(pix)
+        return cls._video_thumb_cache
 
     def _add_to_list(self, path: str):
         item = QListWidgetItem()
@@ -457,14 +523,18 @@ class GalleryPanel(QWidget):
             self._thumb_cache = {}
         icon = self._thumb_cache.get(path)
         if icon is None:
-            pix = QPixmap(path)
-            if not pix.isNull():
-                icon = QIcon(pix.scaled(
-                    110, 110,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                ))
+            if self.media_kind(path) == "video":
+                icon = self._video_placeholder_icon()
                 self._thumb_cache[path] = icon
+            else:
+                pix = QPixmap(path)
+                if not pix.isNull():
+                    icon = QIcon(pix.scaled(
+                        110, 110,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    ))
+                    self._thumb_cache[path] = icon
         if icon is not None:
             item.setIcon(icon)
         name = os.path.basename(path)[:20]
@@ -536,9 +606,13 @@ class GalleryPanel(QWidget):
 
     def _on_double_clicked(self, item):
         path = item.data(Qt.ItemDataRole.UserRole)
-        if path and os.path.exists(path):
-            dlg = ImageViewerDialog(path, self)
-            dlg.exec()
+        if not path or not os.path.exists(path):
+            return
+        if self.media_kind(path) == "video":
+            self.video_selected.emit(path)   # 交给宿主播放（跳动画页/播放）
+            return
+        dlg = ImageViewerDialog(path, self)
+        dlg.exec()
 
     # ========== 右键菜单 (单选/多选自动切换) ==========
     def _show_menu(self, pos: QPoint):
@@ -587,6 +661,30 @@ class GalleryPanel(QWidget):
 
         # ─────── 单选菜单 ───────
         path = selected_paths[0]
+
+        # 视频条目：简化菜单（播放/文件夹/收藏/移除/删除）
+        if self.media_kind(path) == "video":
+            act_play   = menu.addAction("▶️ 播放")
+            is_fav = os.path.abspath(path) in self._favs
+            act_fav    = menu.addAction("💔 取消收藏" if is_fav else "⭐ 加入收藏")
+            act_folder = menu.addAction("📁 打开所在文件夹")
+            menu.addSeparator()
+            act_remove = menu.addAction("🗑 从画廊移除")
+            act_del    = menu.addAction("❌ 删除文件")
+
+            chosen = menu.exec(self.list_widget.viewport().mapToGlobal(pos))
+            if chosen == act_play:
+                self.video_selected.emit(path)
+            elif chosen == act_fav:
+                self._toggle_fav([path])
+            elif chosen == act_folder:
+                self._open_folder(path)
+            elif chosen == act_remove:
+                self._remove_from_view([path])
+            elif chosen == act_del:
+                self._batch_delete_files([path])
+            return
+
         act_open   = menu.addAction("🖼️ 大图查看")
         act_edit   = menu.addAction("✏️ 载入预览/发送到编辑")
         menu.addSeparator()
