@@ -117,6 +117,10 @@ class ProImageEditor(
         self.is_mask_brush       = False
         self.pick_mode           = False
         self.brush_color         = "#ff0000"
+        self._mask_preview_on    = True
+        self._filter_preview     = None
+        self._stroke_end         = None
+        self._dirty              = False
         self.is_eraser           = False
         self.adjust_vars         = {}
         self.adjust_timer: QTimer | None = None
@@ -214,6 +218,8 @@ class ProImageEditor(
         self.canvas.sig_drag.connect(self.on_mouse_drag)
         self.canvas.sig_release.connect(self.on_mouse_release)
         self.canvas.sig_right_click.connect(self.on_mouse_right_click)
+        self.canvas.sig_hover.connect(self._on_canvas_hover)
+        self.canvas.sig_view_changed.connect(self._refresh_view_info)
         splitter.addWidget(self.canvas)
         splitter.setSizes([300, 1200])
 
@@ -232,6 +238,15 @@ class ProImageEditor(
         self.lbl_status = QLabel("✅ 就绪")
         self.lbl_status.setStyleSheet("color:#585b70; font-size:13px; padding:4px;")
         bar.addWidget(self.lbl_status)
+
+        # 光标坐标 / 图像尺寸信息
+        self.lbl_cursor = QLabel("")
+        self.lbl_cursor.setStyleSheet("color:#7f849c; font-size:11px; padding:4px;")
+        self.lbl_cursor.setMinimumWidth(150)
+        bar.addWidget(self.lbl_cursor)
+        self.lbl_img_info = QLabel("")
+        self.lbl_img_info.setStyleSheet("color:#7f849c; font-size:11px; padding:4px;")
+        bar.addWidget(self.lbl_img_info)
         bar.addStretch()
 
         # 按住对比原图
@@ -270,7 +285,7 @@ class ProImageEditor(
         bar.addWidget(btn_save)
 
         btn_close = _make_btn("✖ 取消")
-        btn_close.clicked.connect(self.reject)
+        btn_close.clicked.connect(self._try_close)
         bar.addWidget(btn_close)
 
         return bar
@@ -308,6 +323,16 @@ class ProImageEditor(
         row2.addWidget(self.btn_text)
         layout.addLayout(row2)
 
+        # 裁剪比例锁定
+        ratio_row = QHBoxLayout()
+        self.combo_crop_aspect = QComboBox()
+        self.combo_crop_aspect.addItems(
+            ["自由", "1:1", "4:3", "3:4", "16:9", "9:16"])
+        self.combo_crop_aspect.setStyleSheet(self._combo_style())
+        ratio_row.addWidget(QLabel("比例:"))
+        ratio_row.addWidget(self.combo_crop_aspect)
+        layout.addLayout(ratio_row)
+
         # ── ✅ 画笔大小 — 改为滑块 ────────────────────────
         layout.addWidget(self._sec("🔘 画笔大小  ( [ / ] 微调 )"))
         brush_row = QHBoxLayout()
@@ -316,7 +341,8 @@ class ProImageEditor(
         self.lbl_brush_val.setFixedWidth(45)
         self.lbl_brush_val.setStyleSheet("color:#cdd6f4; font-size:12px;")
         self.sld_brush_size.valueChanged.connect(
-            lambda v: self.lbl_brush_val.setText(f"{v} px")
+            lambda v: (self.lbl_brush_val.setText(f"{v} px"),
+                       self._refresh_brush_cursor())
         )
         brush_row.addWidget(self.sld_brush_size)
         brush_row.addWidget(self.lbl_brush_val)
@@ -351,14 +377,20 @@ class ProImageEditor(
         hd_row.addWidget(self.lbl_hardness_val)
         layout.addLayout(hd_row)
 
-        # ── 文字大小 ───────────────────────────────────────
-        layout.addWidget(self._sec("🔤 文字大小"))
+        # ── 文字大小 / 描边 ─────────────────────────────
+        layout.addWidget(self._sec("🔤 文字大小 / 描边"))
         text_row = QHBoxLayout()
         self.spin_text_size = QSpinBox()
         self.spin_text_size.setRange(8, 200)
         self.spin_text_size.setValue(40)
         self.spin_text_size.setStyleSheet(self._input_style())
         text_row.addWidget(self.spin_text_size)
+        self.spin_text_stroke = QSpinBox()
+        self.spin_text_stroke.setRange(0, 8)
+        self.spin_text_stroke.setValue(0)
+        self.spin_text_stroke.setPrefix("描边 ")
+        self.spin_text_stroke.setStyleSheet(self._input_style())
+        text_row.addWidget(self.spin_text_stroke)
         layout.addLayout(text_row)
 
         # ── 颜色 ───────────────────────────────────────────
@@ -458,6 +490,13 @@ class ProImageEditor(
         m2.addWidget(bmg); m2.addWidget(bms)
         layout.addLayout(m2)
 
+        m3 = QHBoxLayout()
+        bmp = _make_btn("🙈 遮罩预览 开/关",
+                        tip="临时隐藏红色叠加,查看原图效果")
+        bmp.clicked.connect(self.toggle_mask_preview)
+        m3.addWidget(bmp)
+        layout.addLayout(m3)
+
         # ── 历史 ───────────────────────────────────────────
         layout.addWidget(self._sec("⏪ 历史 (Ctrl+Z/Y)"))
         h1 = QHBoxLayout()
@@ -535,9 +574,15 @@ class ProImageEditor(
         blur_row.addWidget(self.lbl_blur_val)
         layout.addLayout(blur_row)
 
+        filter_btn_row = QHBoxLayout()
+        btn_preview_filter = _make_btn("👁 预览滤镜",
+                                       tip="先看效果,不入历史,Esc 取消")
+        btn_preview_filter.clicked.connect(self.preview_filter)
         btn_apply_filter = _make_btn("▶ 应用滤镜", color="#45475a")
         btn_apply_filter.clicked.connect(self.apply_selected_filter)
-        layout.addWidget(btn_apply_filter)
+        filter_btn_row.addWidget(btn_preview_filter)
+        filter_btn_row.addWidget(btn_apply_filter)
+        layout.addLayout(filter_btn_row)
 
         # ── AI 工具 ────────────────────────────────────────
         layout.addWidget(self._sec("🤖 AI 工具"))
@@ -570,6 +615,78 @@ class ProImageEditor(
             "border:1px solid #45475a; border-radius:4px; "
             "padding:3px; font-size:12px; }"
         )
+
+    def _combo_style(self) -> str:
+        return (
+            "QComboBox { background:#313244; color:#cdd6f4; "
+            "border:1px solid #45475a; border-radius:4px; "
+            "padding:4px; font-size:12px; }"
+            "QComboBox::drop-down { border:none; }"
+            "QComboBox QAbstractItemView { background:#313244; color:#cdd6f4; "
+            "selection-background-color:#45475a; }"
+        )
+
+    # ----------------------------------------------------------
+    #  状态栏信息区
+    # ----------------------------------------------------------
+    def _on_canvas_hover(self, x: int, y: int):
+        """光标位置 + 取色值"""
+        w, h = self.current_img.size
+        if 0 <= x < w and 0 <= y < h:
+            r, g, b = self.current_img.convert("RGB").getpixel((x, y))
+            self.lbl_cursor.setText(f"({x},{y}) #{r:02x}{g:02x}{b:02x}")
+        else:
+            self.lbl_cursor.setText("")
+
+    def _refresh_view_info(self):
+        """图像尺寸 + 缩放百分比"""
+        if not hasattr(self, "lbl_img_info"):
+            return
+        w, h = self.current_img.size
+        pct  = self.canvas.current_scale_pct()
+        self.lbl_img_info.setText(f"{w}×{h} @ {pct}%")
+
+    # ----------------------------------------------------------
+    #  单键快捷键(带输入框焦点保护)
+    # ----------------------------------------------------------
+    def keyPressEvent(self, e):
+        from PyQt6.QtWidgets import QApplication, QLineEdit, QTextEdit, QSpinBox, QComboBox
+        fw = QApplication.focusWidget()
+        if isinstance(fw, (QLineEdit, QTextEdit, QSpinBox, QComboBox)):
+            super().keyPressEvent(e)
+            return
+        k = e.key()
+        if   k == Qt.Key.Key_B: self.toggle_brush()
+        elif k == Qt.Key.Key_E: self.toggle_eraser()
+        elif k == Qt.Key.Key_M: self.toggle_mask_brush()
+        elif k == Qt.Key.Key_G: self._toggle_grid()
+        else: super().keyPressEvent(e)
+
+    # ----------------------------------------------------------
+    #  退出确认(有未保存修改时)
+    # ----------------------------------------------------------
+    def _confirm_discard(self) -> bool:
+        """返回 True 表示可以关闭"""
+        if not getattr(self, "_dirty", False):
+            return True
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self, "放弃修改",
+            "有未保存的修改,确定放弃并关闭吗?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _try_close(self):
+        if self._confirm_discard():
+            self.reject()
+
+    def closeEvent(self, e):
+        if self._confirm_discard():
+            e.accept()
+        else:
+            e.ignore()
 
     # ----------------------------------------------------------
     #  画布更新

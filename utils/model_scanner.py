@@ -3,7 +3,12 @@
 🔍 模型扫描器 —— 按类型管理模型
 """
 import os
+from utils import paths
+from core.arch import REGISTRY
 
+MODELS_ROOT = paths.MODEL_DIR
+
+_DEFAULT_EXT = [".safetensors", ".ckpt", ".gguf", ".pt"]
 from utils import paths
 
 MODELS_ROOT = paths.MODEL_DIR
@@ -23,6 +28,22 @@ def ensure_model_dirs():
         os.makedirs(os.path.join(MODELS_ROOT, t), exist_ok=True)
 
 
+def _build_model_types() -> dict:
+    """从 REGISTRY 派生扫描配置，避免和架构定义脱节。
+    按 model_subdir 去重（如 sd15/sd21 共用同一目录）。"""
+    result = {}
+    for arch_id, info in REGISTRY.items():
+        if not info.caps.is_base_model:
+            continue
+        subdir = info.model_subdir or arch_id
+        if subdir in result:
+            continue
+        result[subdir] = {"label": info.display_name, "ext": _DEFAULT_EXT}
+    return result
+
+
+MODEL_TYPES = _build_model_types()
+
 def scan_models(model_type: str) -> list[dict]:
     """
     扫描某类型下的所有模型
@@ -32,8 +53,8 @@ def scan_models(model_type: str) -> list[dict]:
     sub_dir = os.path.join(MODELS_ROOT, model_type)
     if not os.path.exists(sub_dir):
         return []
-    
-    exts = MODEL_TYPES[model_type]["ext"]
+
+    exts = MODEL_TYPES.get(model_type, {}).get("ext", _DEFAULT_EXT)
     results = []
     
     for fname in sorted(os.listdir(sub_dir)):

@@ -109,8 +109,8 @@ MODEL_REGISTRY = {
     },
     "nllb_200": {
         "type": "hf_snapshot",
-        "repo_id": "facebook/nllb-200-distilled-600M",
-        "target_dir": "models_cache/models--facebook--nllb-200-distilled-600M",
+        "repo": "facebook/nllb-200-distilled-600M",
+        "local": "models_cache/models--facebook--nllb-200-distilled-600M",
         "required": False,
         "size_mb": 1200,
         "desc": "NLLB-200 多语言翻译(中日互译)",

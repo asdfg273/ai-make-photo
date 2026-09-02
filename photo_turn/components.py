@@ -24,6 +24,8 @@ class ImageCanvas(QOpenGLWidget):
     sig_drag        = pyqtSignal(int, int)   # 拖拽移动
     sig_release     = pyqtSignal(int, int)   # 鼠标释放
     sig_right_click = pyqtSignal(int, int)   # 右键
+    sig_hover       = pyqtSignal(int, int)   # 悬停（图像坐标,可能越界）
+    sig_view_changed = pyqtSignal()          # 缩放/平移/适配变化
 
     MIN_SCALE = 0.05
     MAX_SCALE = 40.0
@@ -40,6 +42,10 @@ class ImageCanvas(QOpenGLWidget):
         self._offset = QPointF(0, 0)     # 自由模式下图像左上角在控件中的位置
         self._pan_anchor = None          # 中键平移起点(屏幕坐标)
         self._show_grid  = False         # 三分构图网格
+
+        # 画笔光标圈: None 或 (直径_图像像素, 颜色hex)
+        self._brush_cursor = None
+        self._cursor_pos   = None        # 悬停位置(控件坐标)
 
         self.setMouseTracking(True)
         self.setSizePolicy(
@@ -58,17 +64,35 @@ class ImageCanvas(QOpenGLWidget):
         if size_changed:
             self._fit = True   # 换了图(裁剪/旋转)回到适配窗口
         self.update()
+        if size_changed:
+            self.sig_view_changed.emit()
 
     def reset_view(self):
         """恢复适配窗口"""
         self._fit = True
         self.update()
+        self.sig_view_changed.emit()
 
     def toggle_grid(self) -> bool:
         """切换三分构图网格,返回当前状态"""
         self._show_grid = not self._show_grid
         self.update()
         return self._show_grid
+
+    def set_brush_cursor(self, diameter_img: int, color: str):
+        """显示画笔光标圈(直径为图像像素);直径<=0 时隐藏"""
+        if diameter_img <= 0:
+            self._brush_cursor = None
+        else:
+            self._brush_cursor = (diameter_img, color)
+        self.update()
+
+    def current_scale_pct(self) -> int:
+        """当前缩放百分比"""
+        rect = self._target_rect()
+        if rect is None or self._pixmap.width() <= 0:
+            return 100
+        return round(rect.width() / self._pixmap.width() * 100)
 
     @property
     def is_fit_mode(self) -> bool:
@@ -107,7 +131,24 @@ class ImageCanvas(QOpenGLWidget):
                                QRectF(self._pixmap.rect()))
             if self._show_grid:
                 self._draw_grid(painter, rect)
+            self._draw_brush_cursor(painter, rect)
         painter.end()
+
+    def _draw_brush_cursor(self, painter: QPainter, rect: QRectF):
+        """画笔光标圈:直径随视图缩放,颜色跟随笔刷"""
+        if not self._brush_cursor or self._cursor_pos is None:
+            return
+        d_img, color = self._brush_cursor
+        if self._pixmap.width() <= 0:
+            return
+        scale = rect.width() / self._pixmap.width()
+        d_w   = max(2.0, d_img * scale)
+        cx, cy = self._cursor_pos.x(), self._cursor_pos.y()
+        # 外圈白色内圈笔刷色,任何底色上都看得清
+        painter.setPen(QPen(QColor(255, 255, 255, 200), 2.5))
+        painter.drawEllipse(QPointF(cx, cy), d_w / 2, d_w / 2)
+        painter.setPen(QPen(QColor(color), 1.2))
+        painter.drawEllipse(QPointF(cx, cy), d_w / 2, d_w / 2)
 
     def _draw_grid(self, painter: QPainter, rect: QRectF):
         """三分构图网格 + 边框"""
@@ -165,6 +206,7 @@ class ImageCanvas(QOpenGLWidget):
                                my - iy * new_scale)
         self._fit = False
         self.update()
+        self.sig_view_changed.emit()
 
     def _start_pan(self, pos):
         self._pan_anchor = pos
@@ -203,16 +245,27 @@ class ImageCanvas(QOpenGLWidget):
             self.sig_press.emit(x, y)
 
     def mouseMoveEvent(self, e):
+        self._cursor_pos = e.position()
+        ix, iy = self._to_image_pos(e.position().x(), e.position().y())
+        self.sig_hover.emit(ix, iy)
+        if self._brush_cursor:
+            self.update()
         if self._pan_anchor is not None:
             delta = e.position() - self._pan_anchor
             self._offset += delta
             self._pan_anchor = e.position()
             self.update()
+            self.sig_view_changed.emit()
             return
         if self._is_pressing:
-            x, y = self._to_image_pos(e.position().x(), e.position().y())
-            self.sig_drag.emit(x, y)
-            self._last_pos = (x, y)
+            self.sig_drag.emit(ix, iy)
+            self._last_pos = (ix, iy)
+
+    def leaveEvent(self, e):
+        self._cursor_pos = None
+        if self._brush_cursor:
+            self.update()
+        super().leaveEvent(e)
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.MouseButton.MiddleButton and self._pan_anchor is not None:

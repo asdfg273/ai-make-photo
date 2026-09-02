@@ -118,6 +118,16 @@ class EventMixin:
             if idx >= 0:
                 self.combo_img_format.setCurrentIndex(idx)
 
+        # ── AI 改写模型档位 ───────────────────────────────────
+        if hasattr(self, 'combo_ai_model'):
+            idx = self.combo_ai_model.findData(getattr(cfg, 'qwen_model_key', 'qwen2vl_2b'))
+            if idx >= 0:
+                self.combo_ai_model.setCurrentIndex(idx)
+                _key = getattr(cfg, 'qwen_model_key', 'qwen2vl_2b')
+                from utils.prompt_enhancer import PromptEnhancer
+                PromptEnhancer().set_model_key(_key)
+                logger.info(f"🎚️ 启动档位同步 → {_key}")
+
         # ── 输出目录 ─────────────────────────────────────────
         if hasattr(self, 'combo_output_dir'):
             self.combo_output_dir.setCurrentText(
@@ -138,21 +148,30 @@ class EventMixin:
 
 
     def refresh_lora_by_model(self):
-        """切换主模型时同步刷新 LoRA 下拉框（按架构过滤）"""
+        """切换主模型时同步刷新 LoRA 下拉框（按架构检测结果过滤）"""
         if self.ai is None:
             return
-        
+
         data = self._current_model_data()
-        if not data:
+        if not data or not data.get("path"):
             return
-        
-        # SDXL 识别：与 core/model_manager.py 口径一致（体积 4.2~8.0GB,兜底关键词）
-        is_sdxl = 4.2 < data.get("size_gb", 0) < 8.0
-        if not is_sdxl:
-            name_lower = data["name"].lower()
-            is_sdxl = any(k in name_lower for k in ["xl", "sdxl", "pony", "turbo", "lightning"])
-        
-        loras = self.ai.get_available_loras("sdxl" if is_sdxl else "sd1.5")
+
+        from core.arch import detect, get_arch
+
+        try:
+            result = detect(data["path"])
+            info = get_arch(result.arch_id)
+            sub_dir = info.lora_subdir
+            arch_str = info.display_name
+        except Exception as e:
+            logger.warning(f"⚠️ 检测底模架构失败，跳过 LoRA 刷新: {e}")
+            return
+
+        if not sub_dir:
+            loras = []
+            arch_str = f"{arch_str}（无对应 LoRA 目录）"
+        else:
+            loras = self.ai.get_available_loras(sub_dir)
 
         for combo in self.combo_loras:
             current = combo.currentText()
@@ -163,8 +182,6 @@ class EventMixin:
             else:
                 combo.setCurrentIndex(0)
 
-        # 更新备忘录区域提示
-        arch_str = "SDXL" if is_sdxl else "SD1.5"
         self.text_lora_info.setReadOnly(False)
         self.text_lora_info.setPlainText(f"🔄 已切换至 {arch_str} 的 LoRA 列表")
         self.text_lora_info.setStyleSheet(
@@ -436,6 +453,24 @@ class EventMixin:
             edited_pil_img.save(ref_path)
             mask_pil_img.save(mask_path)
 
+            # 归档到 photo/ 画廊,与 open_gallery_to_edit 保持一致
+            try:
+                photo_dir = os.path.abspath("photo")
+                os.makedirs(photo_dir, exist_ok=True)
+                timestamp = datetime.datetime.now().strftime("%H%M%S")
+                archive_path = os.path.join(photo_dir, f"pro_edited_{timestamp}.png")
+                n = 1
+                while os.path.exists(archive_path):
+                    archive_path = os.path.join(
+                        photo_dir, f"pro_edited_{timestamp}_{n}.png")
+                    n += 1
+                edited_pil_img.save(archive_path)
+                logger.info(f"[EDITOR] 修图结果已归档到画廊: {archive_path}")
+                if hasattr(self, "refresh_gallery"):
+                    QTimer.singleShot(300, self.refresh_gallery)
+            except Exception as e:
+                logger.warning(f"⚠ 修图结果归档失败(不影响重绘流程): {e}")
+
             # 诊断
             try:
                 mn, mx = mask_pil_img.getextrema()
@@ -603,8 +638,6 @@ class EventMixin:
             "padding:4px; font-family:Consolas; font-size:11px;"
         )
 
-
-
     def on_enhance_prompt(self):
         """智能改写：同时润色正面和负面提示词"""
         raw_pos = self.txt_prompt.toPlainText().strip()
@@ -620,8 +653,7 @@ class EventMixin:
         def task():
             try:
                 enhancer = get_enhancer()
-                if enhancer.model is None:
-                    enhancer.load(model_id="qwen/Qwen2-VL-2B-Instruct")
+                enhancer.ensure_loaded()
 
                 logger.info(f"[ENHANCE] 正面输入: {raw_pos!r}")
                 logger.info(f"[ENHANCE] 负面输入: {raw_neg!r}")
@@ -692,8 +724,7 @@ class EventMixin:
         def task():
             try:
                 enhancer = get_enhancer()
-                if enhancer.model is None:
-                    enhancer.load()
+                enhancer.ensure_loaded()
                 result_pos = enhancer.enhance(raw_pos, mode="positive") if raw_pos else ""
                 result_neg = enhancer.enhance(raw_neg, mode="negative") if raw_neg else ""
                 QMetaObject.invokeMethod(
@@ -724,6 +755,8 @@ class EventMixin:
             self.btn_enhance_video_prompt.setEnabled(True)
             self.btn_enhance_video_prompt.setText("✨ 智能改写")
 
+    
+
     def on_vision_video_prompt(self):
         """动画 Tab 识图生成：选图 → AI 识别 → 填入视频正向提示词"""
         user_hint = self.txt_video_prompt.toPlainText().strip()
@@ -744,8 +777,7 @@ class EventMixin:
         def task():
             try:
                 enhancer = get_enhancer()
-                if enhancer.model is None:
-                    enhancer.load()
+                enhancer.ensure_loaded()
                 result = enhancer.describe_image(img_path, user_hint)
                 self._bridge.video_enhance_done_signal.emit(result)
             except Exception as e:
@@ -795,8 +827,7 @@ class EventMixin:
         def task():
             try:
                 enhancer = get_enhancer()
-                if enhancer.model is None:
-                    enhancer.load()
+                enhancer.ensure_loaded()
                 for seg, orig in segments_to_enhance:
                     try:
                         enhanced = enhancer.enhance(orig, mode="positive")
@@ -926,8 +957,7 @@ class EventMixin:
                 except Exception:
                     pass
 
-                if enhancer.model is None:
-                    enhancer.load()
+                enhancer.ensure_loaded()
 
                 img = Image.open(img_path).convert("RGB")
                 result = enhancer.describe_image(img)

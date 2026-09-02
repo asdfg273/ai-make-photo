@@ -203,17 +203,9 @@ class FiltersMixin:
         out   = cv2.bitwise_and(color, color, mask=edges)
         return Image.fromarray(out)
 
-    def apply_selected_filter(self):
+    def _compute_filter(self, filter_name: str):
+        """计算滤镜结果(不动状态),失败/未知返回 None"""
         try:
-            filter_name = self.filter_combo.currentText()
-            if filter_name == "无":
-                self._revert_filters()
-                return
-
-            logger.info(f"[滤镜] 应用: {filter_name}")
-            # 第一次叠加滤镜前,锚定基图(供「无」还原)
-            if getattr(self, "_filter_anchor", None) is None:
-                self._filter_anchor = self.base_img.copy()
             img       = self.base_img.copy()
             has_alpha = img.mode == "RGBA"
             if has_alpha:
@@ -259,19 +251,64 @@ class FiltersMixin:
                 img = self._f_cartoon(img)
             else:
                 logger.warning(f"[滤镜] 未知滤镜: {filter_name}")
-                return
+                return None
 
             if has_alpha:
                 img = img.convert("RGBA")
                 img.putalpha(alpha)
-
-            self.push_history()
-            self.current_img = img
-            self.base_img    = img.copy()
-            self.update_canvas(self.current_img, force=True)
-            self.lbl_status.setText(f"✅ 已应用滤镜: {filter_name}")
-            self.lbl_status.setStyleSheet("color:#a6e3a1; font-size:13px;")
-
+            return img
         except Exception as e:
             logger.warning(f"[滤镜错误] {e}")
             logger.debug("滤镜堆栈", exc_info=True)
+            return None
+
+    def preview_filter(self):
+        """预览滤镜:只看效果,不入历史,Esc 取消"""
+        name = self.filter_combo.currentText()
+        if name == "无":
+            self._cancel_filter_preview()
+            return
+        img = self._compute_filter(name)
+        if img is None:
+            return
+        self._filter_preview = (name, img)
+        self.update_canvas(img, force=True)
+        self.lbl_status.setText(f"👁 预览中: {name}（▶应用生效 / Esc 取消）")
+        self.lbl_status.setStyleSheet("color:#89dceb; font-size:13px;")
+
+    def _cancel_filter_preview(self):
+        if getattr(self, "_filter_preview", None) is not None:
+            self._filter_preview = None
+            self.update_canvas(self.current_img, force=True)
+            self.lbl_status.setText("✨ 已取消滤镜预览")
+            self.lbl_status.setStyleSheet("color:#cdd6f4; font-size:13px;")
+
+    def apply_selected_filter(self):
+        filter_name = self.filter_combo.currentText()
+        if filter_name == "无":
+            self._cancel_filter_preview()
+            self._revert_filters()
+            return
+
+        logger.info(f"[滤镜] 应用: {filter_name}")
+        # 优先提交预览结果;没有预览则现场计算
+        preview = getattr(self, "_filter_preview", None)
+        if preview is not None and preview[0] == filter_name:
+            img = preview[1]
+            self._filter_preview = None
+        else:
+            img = self._compute_filter(filter_name)
+            if img is None:
+                return
+            self._filter_preview = None
+
+        # 第一次叠加滤镜前,锚定基图(供「无」还原)
+        if getattr(self, "_filter_anchor", None) is None:
+            self._filter_anchor = self.base_img.copy()
+
+        self.push_history()
+        self.current_img = img
+        self.base_img    = img.copy()
+        self.update_canvas(self.current_img, force=True)
+        self.lbl_status.setText(f"✅ 已应用滤镜: {filter_name}")
+        self.lbl_status.setStyleSheet("color:#a6e3a1; font-size:13px;")

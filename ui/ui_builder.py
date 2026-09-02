@@ -27,7 +27,7 @@ from ui.splash import SplashScreen, create_splash
 from ui.design_tokens import DARK_STYLE,VIDEO_TAB_QSS
 from utils.paths import PROJECT_ROOT
 import logging
-
+from core.arch import REGISTRY
 logger = logging.getLogger(__name__)
 
 # ============================================================
@@ -185,10 +185,19 @@ class UIBuilderMixin:
 
         # === 模型类型选择 ===
         self.combo_model_type = QComboBox()
-        self.combo_model_type.addItem("SD 1.5  (轻量,4GB)", "sd15")
-        self.combo_model_type.addItem("SDXL  (高质量,8GB)", "sdxl")
-        self.combo_model_type.addItem("SD3/SD3.5  (新一代,12GB+)", "sd3")
-        self.combo_model_type.addItem("Flux  (强,需GGUF量化)", "flux")
+        _seen_subdirs = set()
+        for _arch_id, _info in REGISTRY.items():
+            if not _info.caps.is_base_model:
+                continue
+            # 共用同一目录的架构只列一次（如 sd21 与 sd15 同为 models/sd15/）
+            if _info.model_subdir in _seen_subdirs:
+                continue
+            _seen_subdirs.add(_info.model_subdir)
+            _label = _info.display_name
+            if not _info.supported:
+                _label += "  ⚠ 暂不支持"
+            self.combo_model_type.addItem(_label, _arch_id)
+            _label = _info.display_name
         self.combo_model_type.currentIndexChanged.connect(self._on_model_type_changed)
         gm.addRow("模型类型:", self.combo_model_type)
 
@@ -305,7 +314,7 @@ class UIBuilderMixin:
         self.btn_enhance_prompt = QPushButton("✨ 智能改写")
         self.btn_enhance_prompt.setToolTip(
             "把自然语言描述自动转换为 AI 画图标准提示词\n"
-            "首次使用会下载约 1.5GB 模型")
+            "模型档位可在下方选择，首次使用会自动下载")
         self.btn_enhance_prompt.setStyleSheet("""
             QPushButton {
                 background:#0a0a0a; color:#dadbdf;
@@ -337,6 +346,13 @@ class UIBuilderMixin:
         prompt_btn_row.addWidget(self.chk_auto_enhance)
         prompt_btn_row.addStretch()
         gp.addLayout(prompt_btn_row)
+        from utils.prompt_enhancer import PromptEnhancer
+        self.combo_ai_model = QComboBox()
+        for _k, _c in PromptEnhancer.MODEL_REGISTRY.items():
+            self.combo_ai_model.addItem(_c["label"], _k)
+        self.combo_ai_model.setToolTip("改写/识图模型档位，切换后下次调用生效")
+        self.combo_ai_model.currentIndexChanged.connect(self._on_ai_model_changed)
+        prompt_btn_row.addWidget(self.combo_ai_model)
 
         # ─── 翻译模式选择 ───
         row_trans = QHBoxLayout()
@@ -2368,6 +2384,19 @@ class UIBuilderMixin:
         self.txt_prompt.setPlainText(new_text)
 
         self._set_status(f"✅ 已插入 {len(triggers_list)} 组触发词", "#dadbdf")
+
+    def _on_ai_model_changed(self, index: int = 0):
+        """AI 模型档位切换 - 立即生效，无需重启"""
+        if not getattr(self, "_ui_ready", False):
+            return
+        key = self.combo_ai_model.currentData()
+        if not key:
+            return
+        from utils.prompt_enhancer import PromptEnhancer
+        PromptEnhancer().set_model_key(key)
+        self.config.qwen_model_key = key
+        self.config.save()
+        logger.info(f"🎚️ AI 模型档位 → {self.combo_ai_model.currentText()}")
 
     def _open_output_folder(self):
         import subprocess

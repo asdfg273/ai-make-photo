@@ -9,7 +9,6 @@ import torch
 
 from PIL import Image, ImageDraw, ImageFont
 from PIL.PngImagePlugin import PngInfo
-
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from utils.app_utils       import OUTPUT_DIR, parse_dynamic_prompt
@@ -223,7 +222,18 @@ class GenerationMixin:
             if ctx is None:
                 return
 
+            # 提词/翻译已完成，卸载 Qwen 释放显存
+            try:
+                from utils.prompt_enhancer import get_enhancer
+                get_enhancer().unload()
+                from utils.vram_manager import VRAMManager
+                VRAMManager.cleanup()
+                logger.info("🧹 Qwen 已卸载，准备加载底模")
+                VRAMManager.print_status()
+            except Exception as e:
+                logger.warning(f"Qwen 卸载失败（不影响生成）: {e}")
             # 2. 加载底模
+
             self._gt_load_model(ctx)
             try:
                 from utils.vram_manager import VRAMManager
@@ -261,6 +271,12 @@ class GenerationMixin:
 
         except InterruptedError:
             logger.info("⏸ [generation_task] 用户中断")
+            try:
+                from utils.vram_manager import VRAMManager
+                VRAMManager.cleanup()
+                VRAMManager.print_status()    
+            except Exception:
+                pass
             try: self._bridge.cancel_signal.emit()
             except Exception: pass
 
@@ -273,6 +289,10 @@ class GenerationMixin:
 
         finally:
             self._gt_cleanup()
+            self.is_generating = False
+            from utils.vram_manager import VRAMManager
+            VRAMManager.cleanup()
+            VRAMManager.print_status()
 
     def _gt_prepare_context(self):
         """收集所有参数到一个 ctx 字典,贯穿整个流程。"""
@@ -457,8 +477,8 @@ class GenerationMixin:
         if not self._chk(getattr(self, 'chk_auto_enhance', None)):
             return raw_prompt
         try:
-            from utils.prompt_enhancer import PromptEnhancer
-            enhancer = PromptEnhancer()
+            from utils.prompt_enhancer import get_enhancer
+            enhancer = get_enhancer()
             enhancer.load()
             try:
                 new_prompt = enhancer.enhance(raw_prompt)
@@ -562,9 +582,8 @@ class GenerationMixin:
                     lora_config_list.append((lname, float(lweight)))
                     lora_meta_info.append(f"{lname}:{lweight:.2f}")
 
-        sub_dir = "sdxl" if getattr(self.ai, 'is_sdxl', False) else "sd1.5"
         if lora_config_list:
-            self.ai.apply_multiple_loras(lora_config_list, sub_dir=sub_dir)
+            self.ai.apply_multiple_loras(lora_config_list, sub_dir=None)
             logger.debug(f"🟢 LoRA 已应用: {lora_config_list}")
         ctx['lora_meta_info'] = lora_meta_info
 
@@ -711,14 +730,15 @@ class GenerationMixin:
         self._bridge.status_signal.emit(
             "🎨 [3/3] 准备最终生成...", "#ffd700")
 
-
-
     def _gt_safe_pipe_call(self, pipe, ctx, **call_kwargs):
         """
         统一 pipeline 调用入口:
         1. 自动处理 IPA 占位图 (UNet 被污染时)
         2. 支持 Compel 长提示词 (>77 tokens)
         """
+        call_kwargs = self._adapt_call(pipe, ctx, call_kwargs)
+        if "state" in call_kwargs:         
+            return pipe(**call_kwargs) 
         unet_has_ipa = (
             pipe is not None
             and getattr(pipe, 'unet', None) is not None
@@ -747,13 +767,14 @@ class GenerationMixin:
                 embeds = self.ai.encode_prompt(
                     call_kwargs['prompt'],
                     call_kwargs.get('negative_prompt') or "",
+                    pipe=pipe, 
                 )
                 if embeds and embeds.get('prompt_embeds') is not None:
                     call_kwargs.pop('prompt', None)
                     call_kwargs.pop('negative_prompt', None)
                     call_kwargs.update(embeds)
                     logger.info(
-                        f"✅ Compel 生效（{'SDXL' if self.ai.is_sdxl else 'SD1.5'}），"
+                        f"✅ Compel 生效（{getattr(self.ai, 'current_arch_id', 'unknown')}），"
                         f"embeds {tuple(embeds['prompt_embeds'].shape)}"
                     )
                 else:
@@ -793,6 +814,10 @@ class GenerationMixin:
                            "negative_prompt": ctx['en_neg']}
         else:
             base_kwargs = self.ai.encode_prompt(ctx['en_prompts'][0], ctx['en_neg'])
+            if not base_kwargs or base_kwargs.get('prompt_embeds') is None:
+                logger.warning("⚠️ Compel 未生效，回退原始提示词（会截断到 77 token）")
+                base_kwargs = {"prompt": ctx['en_prompts'][0],
+                               "negative_prompt": ctx['en_neg']}
 
         base_kwargs.update({
             "num_inference_steps": ctx['steps'],
@@ -879,8 +904,16 @@ class GenerationMixin:
             if pe is not None:
                 logger.info(f"✅ Compel 生效，embeds {tuple(pe.shape)}")
             else:
-                logger.warning("⚠️ Compel 未生效，回退原始提示词（会截断到 77 token）")
-                embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
+                pe = embed_kwargs.get('prompt_embeds') if embed_kwargs else None
+                if pe is not None:
+                    logger.info(f"✅ Compel 生效，embeds {tuple(pe.shape)}")
+                elif getattr(self.ai, 'arch_profile', None) is not None \
+                     and getattr(self.ai.arch_profile, 'prompt_mode', None) != "compel":
+                    # 非 Compel 架构，正常回退原始提示词，不告警
+                    embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
+                else:
+                    logger.warning("⚠️ Compel 未生效，回退原始提示词（会截断到 77 token）")
+                    embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
 
         # ETA 回调
         cur_prompt = ctx['en_prompts'][i] if i < len(ctx['en_prompts']) else ""
@@ -919,6 +952,9 @@ class GenerationMixin:
         kwargs.update(embed_kwargs)
         if ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
             kwargs["ip_adapter_image"] = ctx['ipa_pil_image']
+
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
 
         with torch.inference_mode():
             # ── 阶段 1: 基础图像生成 ──
@@ -995,6 +1031,8 @@ class GenerationMixin:
         import numpy as np
         _arr = np.asarray(image)
         logger.info(f"🔬 图像 max={_arr.max()} mean={_arr.mean():.2f}")
+        if torch.cuda.is_available():
+            logger.info(f"🔬 本次峰值 {torch.cuda.max_memory_allocated()/1024**3:.2f}GB")
 
         return image
 
@@ -1087,6 +1125,46 @@ class GenerationMixin:
         if isinstance(output, (list, tuple)):
             return output[0]
         return output
+
+    def _adapt_call(self, pipe, ctx, kwargs):
+        arch_id = getattr(self.ai, 'current_arch_id', '')
+        prof = getattr(self.ai, 'arch_profile', None)
+
+        is_modular = arch_id in ("anima",) or (
+            prof is not None and (
+                getattr(prof, 'guidance_kwarg', '') == "guidance"
+                or getattr(prof, 'modular', False)
+            )
+        )
+        if is_modular:
+            from diffusers.modular_pipelines import PipelineState
+            values = {}
+            # 把标准 call kwargs 里已有的值搬进 state，其余从 ctx 兜底
+            for k in ("prompt", "negative_prompt", "prompt_embeds",
+                      "negative_prompt_embeds", "generator",
+                      "num_inference_steps", "guidance_scale",
+                      "width", "height", "num_images_per_prompt"):
+                if k in kwargs:
+                    values[k] = kwargs.pop(k)
+            if "prompt" not in values:
+                values["prompt"] = kwargs.get("prompt") or (ctx.get('en_prompts') or [""])[0]
+            if "negative_prompt" not in values:
+                values["negative_prompt"] = ctx.get('en_neg') or ""
+            if "guidance_scale" not in values:
+                values["guidance_scale"] = ctx.get('cfg') or 7.0
+            if "num_inference_steps" not in values:
+                values["num_inference_steps"] = ctx.get('steps') or 30
+            kwargs.clear()
+            kwargs["state"] = PipelineState(values=values)
+            return kwargs
+
+        # 非 modular：走 Compel / 原始字符串逻辑
+        if prof is not None and getattr(prof, 'prompt_mode', 'compel') != "compel":
+            kwargs.pop("prompt_embeds", None)
+            kwargs.pop("negative_prompt_embeds", None)
+            kwargs["prompt"] = kwargs.get("prompt") or ctx['en_prompts'][0]
+        return kwargs
+
 
     def _gt_save_image(self, image, ctx, i, current_seed):
         """成功返回 save_path,失败返回 None。"""
@@ -1694,6 +1772,16 @@ class GenerationMixin:
                           if raw_neg else "")
 
             embed_kwargs = self.ai.encode_prompt(en_prompt, en_neg)
+            pe = embed_kwargs.get('prompt_embeds') if embed_kwargs else None
+            if pe is not None:
+                logger.info(f"✅ Compel 生效，embeds {tuple(pe.shape)}")
+            elif (getattr(self.ai, 'arch_profile', None) is not None
+                  and getattr(self.ai.arch_profile, 'prompt_mode', None) != "compel"):
+                # 非 Compel 架构（raw/flux/anima），正常回退原始提示词，不告警
+                embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
+            else:
+                logger.warning("⚠️ Compel 未生效，回退原始提示词（会截断到 77 token）")
+                embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
 
             up_steps = 25
             up_cfg   = 6.5

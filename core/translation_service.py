@@ -5,6 +5,7 @@
 import os
 import json
 import re
+import socket 
 import threading
 import logging
 from functools import lru_cache
@@ -190,13 +191,13 @@ class TranslationService:
             else:
                 dict_result = self._translate_by_dict(text)
                 hit_rate = self._calc_hit_rate(text, dict_result)
-
                 if hit_rate >= 0.8:
                     result = dict_result
                 elif self.qwen_enhancer:
                     try:
                         result = self.qwen_enhancer.translate_zh_to_en(text)
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"Qwen 翻译失败({e})，用词典结果")
                         result = dict_result
                 else:
                     result = dict_result
@@ -250,6 +251,9 @@ class TranslationService:
                 words = list(seg)   # 降级：单字切分
 
             trans_words = []
+            google_ok = self.google_translator is not None and not getattr(
+                self, '_google_disabled', False)
+            fail_count = 0
             for w in words:
                 w = w.strip()
                 if not w:
@@ -260,18 +264,28 @@ class TranslationService:
                 elif w in self._dictionary:
                     trans_words.append(self._dictionary[w])
                 else:
-                    # 单词级 Google 翻译（一次性写入字典）
-                    if self.google_translator:
+                    if google_ok:
+                        old_to = socket.getdefaulttimeout()
+                        socket.setdefaulttimeout(3)
                         try:
                             tr = self.google_translator.translate(w)
                             if tr:
                                 self._dictionary[w] = tr
                                 trans_words.append(tr)
                                 has_new_word = True
+                                fail_count = 0
                                 continue
-                        except Exception:
-                            pass
-                    # 翻译失败：保留原文
+                        except Exception as e:
+                            fail_count += 1
+                            if fail_count >= 2:
+                                # 连续失败：本次会话不再尝试 Google
+                                self._google_disabled = True
+                                google_ok = False
+                                logger.warning(
+                                    f"⚠️ Google 翻译连续失败({e})，本次会话禁用，"
+                                    f"改用词典+原文")
+                        finally:
+                            socket.setdefaulttimeout(old_to)
                     trans_words.append(w)
 
             translated_segments.append(" ".join(trans_words))

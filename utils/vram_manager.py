@@ -5,6 +5,20 @@ logger = logging.getLogger(__name__)
 
 class VRAMManager:
     """智能显存管理 —— 根据可用显存自动选择最优策略"""
+
+    @staticmethod
+    def _safe_enable(pipe, name: str) -> bool:
+        """兼容 diffusers <0.40 的 pipe.enable_vae_xxx() 与 >=0.40 的 pipe.vae.enable_xxx()"""
+        vae = getattr(pipe, "vae", None)
+        short = name.replace("enable_vae_", "enable_")   # enable_vae_slicing -> enable_slicing
+        if vae is not None and hasattr(vae, short):
+            getattr(vae, short)()
+            return True
+        if hasattr(pipe, name):
+            getattr(pipe, name)()
+            return True
+        logger.debug(f"⏭️ {name} 不可用，跳过")
+        return False
     
     @staticmethod
     def get_vram_info():
@@ -50,13 +64,13 @@ class VRAMManager:
         elif total >= gpu_sliced:
             pipe.to("cuda")
             pipe.disable_attention_slicing()            
-            pipe.enable_vae_slicing()          # VAE 切片对两种模型都有效且无副作用
+            VRAMManager._safe_enable(pipe, "enable_vae_slicing") 
             strategy = "⚡ 标准模式 (全GPU+VAE切片)"
         elif total >= offload_min:
             pipe.enable_model_cpu_offload()
             pipe.enable_attention_slicing()
             if is_sdxl:
-                pipe.enable_vae_slicing()
+                VRAMManager._safe_enable(pipe, "enable_vae_slicing")
             strategy = "💾 节能模式 (CPU Offload)"
         else:
             pipe.enable_sequential_cpu_offload()
@@ -85,6 +99,9 @@ class VRAMManager:
                 f"📊 显存: {info['used']:.2f}/{info['total']:.2f}GB "
                 f"(剩 {info['free']:.2f}GB)"
             )
+            alloc    = torch.cuda.memory_allocated()  / 1024**3
+            reserved = torch.cuda.memory_reserved()   / 1024**3
+            logger.info(f"🔬 allocated {alloc:.2f}GB / reserved {reserved:.2f}GB")
 
     @staticmethod
     def tune_for_resolution(pipe, width, height, is_sdxl=False):
@@ -110,7 +127,7 @@ class VRAMManager:
         except Exception:
             pass
         try:
-            pipe.enable_vae_slicing()   # 按 batch 逐张，无副作用
+            VRAMManager._safe_enable(pipe, "enable_vae_slicing")      # 按 batch 逐张，无副作用
         except Exception:
             pass
         if heavy and total < 12.0:
@@ -120,12 +137,19 @@ class VRAMManager:
             except Exception:
                 pass
             try:
-                pipe.disable_vae_tiling()
-                pipe.enable_vae_slicing()      # slicing 按 batch 切，不产生空间 tile 边界
-                notes.append("VAE 切片(非分块)")
+                vae = getattr(pipe, "vae", None)
+                pixels = width * height          # 用 tune_for_resolution already 拿到的宽高
+                if pixels >= 1024 * 1024:
+                    VRAMManager._safe_enable(pipe, "enable_vae_tiling")
+                else:
+                    try:
+                        pipe.disable_vae_tiling()
+                    except Exception:
+                        pass
+                VRAMManager._safe_enable(pipe, "enable_vae_slicing")       # slicing 按 batch 切，不产生空间 tile 边界
+                notes.append("VAE 分块+切片")
             except Exception:
                 pass
-
             # 实时检查剩余显存；1024 的 UNet 激活约需 3-4 GB
             # 不够就切 CPU offload，避免换页
             free_gb = torch.cuda.mem_get_info()[0] / (1024 ** 3)
@@ -141,4 +165,7 @@ class VRAMManager:
         tag = "大图节省" if heavy else "小图全速"
         msg = f"{tag} ({width}x{height})" + (f" → {' + '.join(notes)}" if notes else "")
         print(f"🎯 分辨率策略: {msg}")
+        vae = getattr(pipe, "vae", None)
+        logger.info(f"🔬 VAE tiling={getattr(vae, 'use_tiling', '?')} "
+                    f"slicing={getattr(vae, 'use_slicing', '?')} ")
         return msg

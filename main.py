@@ -662,18 +662,22 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
     # ==========================================================
     def _on_model_type_changed(self, idx=None):
         from utils.model_scanner import scan_models
+        from core.arch import get_arch
         if not hasattr(self, 'combo_model_type'):
             return
-        mtype = self.combo_model_type.currentData()
-        if not mtype:
+        arch_id = self.combo_model_type.currentData()
+        if not arch_id:
             return
 
-        models = scan_models(mtype)
+        info = get_arch(arch_id)
+        subdir = info.model_subdir or arch_id
+        models = scan_models(subdir)
+
         self.combo_model.blockSignals(True)
         self.combo_model.clear()
 
         if not models:
-            self.combo_model.addItem(f"(此目录无模型,请放入 models/{mtype}/)")
+            self.combo_model.addItem(f"(此目录无模型,请放入 models/{subdir}/)")
             self.combo_model.setEnabled(False)
         else:
             self.combo_model.setEnabled(True)
@@ -682,7 +686,16 @@ class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
                 self.combo_model.addItem(label, m)
 
         self.combo_model.blockSignals(False)
+
+        # 架构未实现时先在信息栏说明，不必等到点生成才报错
+        if not info.supported:
+            lbl = getattr(self, 'lbl_model_info', None)
+            if lbl is not None:
+                reason = info.unsupported_reason or "该架构尚未实现。"
+                lbl.setText(f"⚠ {info.display_name}：{reason}")
+
         self._on_model_changed()
+
 
     def _on_model_changed(self, idx=None):
         data = self.combo_model.currentData()

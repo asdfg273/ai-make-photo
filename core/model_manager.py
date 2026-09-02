@@ -32,9 +32,20 @@ from PIL import Image
 from utils.system_utils import SingletonMeta
 from utils import paths 
 import logging
-
+from core import arch as arch_mod
 logger = logging.getLogger(__name__)
 
+SDXL_KEYWORDS = (
+    "xl", "sdxl", "pony", "turbo", "lightning", "illustrious", "noobai",
+)
+
+
+ARCH_LABELS = {
+    "flux": "FLUX",
+    "sd3":  "SD3",
+    "sdxl": "SDXL",
+    "sd15": "SD 1.5",
+}
 
 
 # ============================================================
@@ -55,7 +66,8 @@ class ModelManager(metaclass=SingletonMeta):
         self.img2img_pipe       = None
         self.inpaint_pipe       = None
         self.controlnet_pipe    = None
-
+        self.detected_arch      = None
+        self.current_arch_id    = None
         self.pose_detector      = None
         self.depth_estimator    = None
         self.loaded_controlnets = {}
@@ -77,13 +89,17 @@ class ModelManager(metaclass=SingletonMeta):
         from utils.model_scanner import scan_models
         return [m["name"] for m in scan_models(model_type)]
 
-    def get_available_loras(self, model_type="sd1.5"):
+    def get_available_loras(self, model_type=None):
         from utils import paths
-        base_dir = os.path.join(paths.LORA_DIR, model_type)
-        if not os.path.exists(base_dir):
+        sub_dir = self._normalize_lora_dir(model_type or self.current_lora_subdir())
+        base_dir = os.path.join(paths.LORA_DIR, sub_dir)
+        if not os.path.isdir(base_dir):
+            logger.warning(f"⚠️ LoRA 目录不存在: {base_dir}")
             return ["无"]
-        return ["无"] + [f for f in os.listdir(base_dir)
-                         if f.endswith((".safetensors", ".ckpt", ".pt"))]
+        return ["无"] + sorted(
+            f for f in os.listdir(base_dir)
+            if f.endswith((".safetensors", ".ckpt", ".pt"))
+        )
 
 
     # ------------------------------------------------------------
@@ -175,150 +191,214 @@ class ModelManager(metaclass=SingletonMeta):
     # ------------------------------------------------------------
     #  加载底模
     # ------------------------------------------------------------
+    def _detect_vpred(self, model_path, model_name):
+        """检测是否 v-prediction 模型：优先读 safetensors 元数据，回退文件名。"""
+        try:
+            from safetensors import safe_open
+            with safe_open(model_path, framework="pt") as f:
+                meta = f.metadata() or {}
+            for k, v in meta.items():
+                kl, vl = k.lower(), str(v).lower()
+                if "predict" in kl and vl in ("v", "v_prediction", "vpred"):
+                    logger.info(f"🔍 元数据标记 v-prediction: {k}={v}")
+                    return True
+                if kl == "modelspec.architecture" and "-v" in vl:
+                    logger.info(f"🔍 元数据标记 v-prediction: {k}={v}")
+                    return True
+        except Exception as e:
+            logger.warning(f"⚠️ 读取 v-pred 元数据失败: {e}")
+
+        n = (model_name or "").lower()
+        hit = any(t in n for t in ("vpred", "v-pred", "v_pred"))
+        if hit:
+            logger.info("🔍 文件名命中 v-pred 关键字")
+        return hit
+
+    def detect_arch_from_checkpoint(model_path):
+        """
+        读 safetensors 头部的键名判断架构，返回 'sdxl'/'sd15'/'sd3'/'flux'/None。
+        只读元数据不载权重，失败返回 None 交给调用方回退启发式。
+        """
+        if not model_path.lower().endswith(".safetensors"):
+            return None
+        try:
+            from safetensors import safe_open
+            with safe_open(model_path, framework="pt") as f:
+                keys = list(f.keys())
+        except Exception as e:
+            logger.warning(f"⚠️ 读取 checkpoint 头部失败: {e}")
+            return None
+
+        joined = "\n".join(keys)
+        if "double_blocks." in joined or "model.diffusion_model.double_blocks." in joined:
+            return "flux"
+        if "joint_blocks." in joined:
+            return "sd3"
+        # SDXL 的第二个文本编码器 (OpenCLIP-G)
+        if "conditioner.embedders.1." in joined or "text_encoder_2." in joined:
+            return "sdxl"
+        if "cond_stage_model.transformer." in joined or "text_encoder." in joined:
+            return "sd15"
+        return None
+
+    def _is_flow_matching_pipe(self) -> bool:
+        """当前底模是否为 flow-matching 架构（自带原生 scheduler，不可换 SD 系采样器）。"""
+        pipe = getattr(self, "txt2img_pipe", None)
+        sched = getattr(pipe, "scheduler", None)
+        if sched is None:
+            return False
+        cls_name = type(sched).__name__
+        return "FlowMatch" in cls_name or "RectifiedFlow" in cls_name
+
     def load_model(self, model_name):
         # 同模型跳过
         if (self.current_model_name == model_name
                 and self.txt2img_pipe is not None):
             logger.info("⚡ 模型未改变，跳过加载。")
             return
-    
-        # === 智能查找:支持 models/ 根目录 + 子文件夹 ===
+
+        # === 智能查找: 支持 models/ 根目录 + 所有架构子目录 ===
         MODELS_ROOT = paths.MODEL_DIR
-        candidates = [
-            os.path.join(MODELS_ROOT, model_name),                 # 根目录
-            os.path.join(MODELS_ROOT, "sd15", model_name),         # 子目录
-            os.path.join(MODELS_ROOT, "sdxl", model_name),
-            os.path.join(MODELS_ROOT, "pony", model_name),
-            os.path.join(MODELS_ROOT, "flux", model_name),
+        _SUBDIRS = [
+            "sd15", "sdxl", "sd3", "pony", "flux",
+            "anima",       
+            # 以后新架构目录也加到这
         ]
-    
-        # 优先取存在的路径
-        model_path = None
+
+        candidates = [os.path.join(MODELS_ROOT, model_name)] + [
+            os.path.join(MODELS_ROOT, sub, model_name) for sub in _SUBDIRS
+        ]
+
+        # 若 model_name 不带扩展名，尝试自动补全
+        _exts = [".safetensors", ".ckpt", ".pt"]
+        _got = None
         for c in candidates:
             if os.path.isfile(c):
-                model_path = c
+                _got = c
                 break
-    
-        # 还找不到 → 递归扫描兜底
-        if model_path is None:
-            for root, _, files in os.walk(MODELS_ROOT):
-                if model_name in files:
-                    model_path = os.path.join(root, model_name)
+        if _got is None:
+            for c in candidates:
+                for ext in _exts:
+                    p = c + ext
+                    if os.path.isfile(p):
+                        _got = p
+                        break
+                if _got:
                     break
-    
-        if model_path is None:
-            raise FileNotFoundError(f"找不到模型文件: {model_name}")
-    
-        logger.info(f"📂 模型路径: {model_path}")
+        model_path = _got
 
-        # ========== 模型类型自动识别 ==========
-        file_size_gb = os.path.getsize(model_path) / (1024 ** 3)
-        name_lower = model_name.lower()
-    
-        # SDXL 识别
-        self.is_sdxl = any(k in name_lower for k in [
-            "xl", "sdxl", "pony", "turbo", "lightning", "illustrious", "noobai"
-        ])
-        if not self.is_sdxl:
-            self.is_sdxl = 4.2 < file_size_gb < 8.0
-    
-        # SD3 / Flux 识别（更大的现代模型）
-        self.is_sd3 = "sd3" in name_lower or "stable-diffusion-3" in name_lower
-        self.is_flux = "flux" in name_lower
-    
-        # 模型类型标签
-        if self.is_flux:
-            model_type = "Flux"
-        elif self.is_sd3:
-            model_type = "SD3"
-        elif self.is_sdxl:
-            model_type = "SDXL"
-        else:
-            model_type = "SD 1.5"
-    
-        logger.info(f"📦 检测模型类型: {model_type} ({file_size_gb:.2f}GB)")
+        if model_path is None:
+            # 最后的 os.walk 兜底
+            for root, _, files in os.walk(MODELS_ROOT):
+                for f in files:
+                    if f == model_name or f == model_name + ".safetensors":
+                        model_path = os.path.join(root, f)
+                        break
+                if model_path:
+                    break
+
+        # ========== 架构检测（唯一来源）==========
+        det = arch_mod.detect(model_path)
+        self.detected_arch = det                 # 供 UI / LoRA 目录推断读取
+        self.current_arch_id = det.arch_id
+        from core.arch.base import build_arch_profile
+        self.arch_profile = build_arch_profile(det.arch_id)
+        logger.info(f"🔬 架构检测: {det.info.display_name} "
+                    f"[{det.arch_id}] | 依据: {det.evidence} "
+                    f"| {det.key_count} keys / {det.size_gb:.2f}GB")
+
+        if not det.info.caps.is_base_model:
+            raise ValueError(f"无法加载「{model_name}」："
+                             f"[{det.info.display_name}] "
+                             f"{det.info.unsupported_reason}")
+
+        if not det.info.supported:
+            extra = ""
+            if det.info.extra_components:
+                extra = (f"\n需额外下载: {', '.join(det.info.extra_components)}"
+                         f" ({det.info.extra_download_size or '大小未知'})")
+            raise ValueError(f"无法加载「{model_name}」："
+                             f"[{det.info.display_name}] "
+                             f"{det.info.unsupported_reason}{extra}")
+
+        arch           = det.arch_id
+        file_size_gb   = det.size_gb
+        self.is_flux   = (arch == "flux")
+        self.is_sd3    = (arch == "sd3")
+        self.is_sdxl   = (arch == "sdxl")
+        model_type     = det.info.display_name
+
+       
+        from core.loaders import get_loader
+        from core.loaders.base import LoadContext
+
+        ctx = LoadContext(
+            dtype=self.dtype, model_name=model_name,
+            arch_id=det.arch_id, info=det.info,
+            detection=det, manager=self,
+        )
 
         try:
-            # ========== 选择 Pipeline 类 ==========
-            if self.is_flux:
-                from diffusers import FluxPipeline, FluxImg2ImgPipeline, FluxInpaintPipeline
-                pipe_class    = FluxPipeline
-                img2img_class = FluxImg2ImgPipeline
-                inpaint_class = FluxInpaintPipeline
-            elif self.is_sd3:
-                from diffusers import StableDiffusion3Pipeline, StableDiffusion3Img2ImgPipeline
-                pipe_class    = StableDiffusion3Pipeline
-                img2img_class = StableDiffusion3Img2ImgPipeline
-                inpaint_class = StableDiffusion3Pipeline  # SD3 没有专门的 inpaint
-            elif self.is_sdxl:
-                pipe_class    = StableDiffusionXLPipeline
-                img2img_class = StableDiffusionXLImg2ImgPipeline
-                inpaint_class = StableDiffusionXLInpaintPipeline
-            else:
-                pipe_class    = StableDiffusionPipeline
-                img2img_class = StableDiffusionImg2ImgPipeline
-                inpaint_class = StableDiffusionInpaintPipeline
+            result = get_loader(det.arch_id).load(model_path, ctx)
 
-            logger.info(f"⏳ 正在加载 {model_type} 模型...")
-
-            # ========== 加载主 Pipeline ==========
-            self.txt2img_pipe = pipe_class.from_single_file(
-                model_path,
-                torch_dtype=self.dtype,
-                use_safetensors=True,
-                safety_checker=None,
-                low_cpu_mem_usage=True,
-            )
-        
-            # ========== 智能显存优化 ==========
-            from utils.vram_manager import VRAMManager
-            VRAMManager.apply_optimal_strategy(
-                self.txt2img_pipe, 
-                is_sdxl=(self.is_sdxl or self.is_sd3 or self.is_flux)
-            )
-            VRAMManager.print_status()
-
-            # ========== 衍生 Pipeline（共享底层组件）==========
-            try:
-                self.img2img_pipe = img2img_class(**self.txt2img_pipe.components)
-                self._apply_light_optimizations(self.img2img_pipe, name="img2img")
-            except Exception as e:
-                logger.warning(f"⚠️ img2img pipe 创建失败: {e}")
-                self.img2img_pipe = None
-        
-            try:
-                self.inpaint_pipe = inpaint_class(**self.txt2img_pipe.components)
-                self._apply_light_optimizations(self.inpaint_pipe, name="inpaint")
-            except Exception as e:
-                logger.warning(f"⚠️ inpaint pipe 创建失败: {e}")
-                self.inpaint_pipe = None
-
+            self.txt2img_pipe = result.txt2img
+            self.img2img_pipe = result.img2img
+            self.inpaint_pipe = result.inpaint
+            self.controlnet_pipe = None
+            self.current_cn_type  = None
             self.current_model_name = model_name
             self.current_lora_name  = None
             self._compel_cache.clear()
-            self._force_fp32_vae(self.txt2img_pipe)
-            logger.info(f"✅ {model_type} 模型加载与显存优化完成！")
-
-            # ========== Compel 长提示词（仅 SD1.5/SDXL）==========
-            self.compel_txt2img    = None
-            self.compel_img2img    = None
-            self.compel_controlnet = None
-            
+            self.compel_txt2img = self.compel_img2img = self.compel_controlnet = None
+            logger.info(f"✅ {det.info.display_name} 加载与显存优化完成！")
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            import traceback; traceback.print_exc()
             raise Exception(f"模型加载失败: {str(e)}")
 
     # ------------------------------------------------------------
     #  多 LoRA 挂载
     # ------------------------------------------------------------
-    def apply_multiple_loras(self, lora_list, sub_dir="sd1.5"):
+    # LoRA 子目录名归一化：容忍 sd15 / sd1.5 / SD1.5 等写法
+    _LORA_DIR_ALIASES = {
+        "sd15": "sd1.5",
+        "sd1.5": "sd1.5",
+        "sd-1.5": "sd1.5",
+        "sdxl": "sdxl",
+        "xl": "sdxl",
+        "pony": "pony",
+        "flux": "flux",
+        "sd3": "sd3",
+    }
+
+    def _normalize_lora_dir(self, name):
+        """把各种模型类写法映射到实际的 loras/ 子目录名"""
+        key = (name or "").strip().lower()
+        resolved = self._LORA_DIR_ALIASES.get(key)
+        if resolved is None:
+            logger.warning(f"⚠️ 未知的 LoRA 子目录 '{name}'，按原样使用")
+            return name
+        return resolved
+
+    def current_lora_subdir(self):
+        """根据当前已加载底模推断该用哪个 LoRA 目录"""
+        det = getattr(self, "detected_arch", None)
+        if det is not None and det.info.lora_subdir:
+            return det.info.lora_subdir
+        # 兜底：detected_arch 尚未设置（模型还没加载过）
+        if getattr(self, "is_flux", False):
+            return "flux"
+        if getattr(self, "is_sd3", False):
+            return "sd3"
+        if getattr(self, "is_sdxl", False):
+            return "sdxl"
+        return "sd1.5"
+
+    def apply_multiple_loras(self, lora_list, sub_dir=None):
         """
         现代版多 LoRA 加载机制 (极速秒切 + 独立权重)
-        lora_list 格式: [("lora1.safetensors", 0.8),
-                        ("lora2.safetensors", 0.5)]
+        lora_list 格式: [("lora1.safetensors", 0.8), ("lora2.safetensors", 0.5)]
+        sub_dir=None 时按当前底模架构自动推断，避免调用方传错命名。
         """
-        # 1. 卸载之前所有的 LoRA 插件，保持底模纯净
         try:
             self.txt2img_pipe.unload_lora_weights()
             logger.info("🧹 已清空旧的 LoRA 缓存。")
@@ -328,36 +408,53 @@ class ModelManager(metaclass=SingletonMeta):
         if not lora_list:
             return
 
+        from core.arch import get_arch
+        from utils import paths
+
+        if sub_dir is None:
+            info = get_arch(getattr(self, 'current_arch_id', None) or "unknown")
+            sub_dir = info.lora_subdir
+            if not sub_dir:
+                logger.warning(f"⚠️ 当前架构 {self.current_arch_id} 无对应 LoRA 目录，跳过挂载")
+                return
+
+        logger.info(f"🎨 LoRA 目录: loras/{sub_dir}/")
+
+        lora_root = os.path.join(paths.LORA_DIR, sub_dir)
+        if not os.path.isdir(lora_root):
+            logger.warning(f"⚠️ LoRA 目录不存在: {lora_root}")
+            return
+
         adapter_names   = []
         adapter_weights = []
 
-        # 2. 逐个挂载
         for i, (lora_name, weight) in enumerate(lora_list):
-            lora_path = os.path.join(paths.LORA_DIR, sub_dir, lora_name)
-            if os.path.exists(lora_path):
-                adapter_name = f"lora_slot_{i}"
-                try:
-                    self.txt2img_pipe.load_lora_weights(
-                        os.path.dirname(lora_path),
-                        weight_name=os.path.basename(lora_path),
-                        adapter_name=adapter_name,
-                    )
-                    adapter_names.append(adapter_name)
-                    adapter_weights.append(weight)
-                    logger.info(f"✅ 挂载插件: {lora_name} "
-                          f"(独立权重: {weight})")
-                except Exception as e:
-                    logger.error(f"❌ [跳过] 插件 {lora_name} 不兼容或损坏: {e}")
+            lora_path = os.path.join(lora_root, lora_name)
+            if not os.path.isfile(lora_path):
+                logger.error(f"❌ [跳过] LoRA 文件不存在: {lora_path}")
+                continue
 
-        # 3. 一次性激活全部 LoRA，并分配精确权重
+            adapter_name = f"lora_slot_{i}"
+            try:
+                self.txt2img_pipe.load_lora_weights(
+                    lora_root,
+                    weight_name=lora_name,
+                    adapter_name=adapter_name,
+                )
+                adapter_names.append(adapter_name)
+                adapter_weights.append(weight)
+                logger.info(f"✅ 挂载插件: {lora_name} (独立权重: {weight})")
+            except Exception as e:
+                logger.error(f"❌ [跳过] 插件 {lora_name} 不兼容或损坏: {e}")
+
         if adapter_names:
             try:
-                self.txt2img_pipe.set_adapters(
-                    adapter_names, adapter_weights=adapter_weights)
-                logger.info(f"⚡ 已激活插件通道: {adapter_names}，"
-                      f"对应权重: {adapter_weights}")
+                self.txt2img_pipe.set_adapters(adapter_names, adapter_weights=adapter_weights)
+                logger.info(f"⚡ 已激活插件通道: {adapter_names}，对应权重: {adapter_weights}")
             except Exception as e:
                 logger.warning(f"⚠️ 激活多 LoRA 权重时异常: {e}")
+        else:
+            logger.warning("⚠️ 没有任何 LoRA 成功挂载")
 
     # ------------------------------------------------------------
     #  ControlNet
@@ -748,6 +845,11 @@ class ModelManager(metaclass=SingletonMeta):
     #  提示词编码 (Compel,支持 SD1.5 / SDXL)
     # ------------------------------------------------------------
     def encode_prompt(self, prompt, negative_prompt, pipe=None):
+        prof = getattr(self, 'arch_profile', None)
+        if getattr(prof, 'prompt_mode', None) != "compel":
+            # ModularPipeline 系（Anima/Cosmos）等非 Compel 架构：
+            # 不做 Compel，直接退原始 prompt，交给 _adapt_call 转 PipelineState
+            return {"prompt": prompt, "negative_prompt": negative_prompt}
         if not self.txt2img_pipe:
             return {}
 
@@ -761,9 +863,10 @@ class ModelManager(metaclass=SingletonMeta):
                 and pipe.text_encoder_2):
             pipe.text_encoder_2.to(self.device)
 
-        cache_key = (prompt, negative_prompt, self.is_sdxl)
+        cache_key = (prompt, negative_prompt, self.current_model_name,
+             getattr(self, 'current_arch_id', None))
         if cache_key in self._compel_cache:
-            return self._compel_cache[cache_key]
+            return dict(self._compel_cache[cache_key]) 
 
         if self.is_sdxl:
             compel = Compel(
@@ -804,9 +907,8 @@ class ModelManager(metaclass=SingletonMeta):
                 "negative_prompt_embeds": neg_embeds,
             }
 
-        self._compel_cache[cache_key] = result
-        # LRU 上限 100
-        if len(self._compel_cache) > 100:
+        self._compel_cache[cache_key] = dict(result)    
+        if len(self._compel_cache) > 16:
             oldest = next(iter(self._compel_cache))
             del self._compel_cache[oldest]
 
@@ -817,11 +919,20 @@ class ModelManager(metaclass=SingletonMeta):
     # ------------------------------------------------------------
     def switch_sampler(self, sampler_name):
         """根据 UI 传来的名称，切换底层的扩散调度器 (Sampler)"""
+        if self._is_flow_matching_pipe():
+            logger.info(
+                f"⏭️ 跳过采样器切换（flow-matching 底模保持原生调度器: "
+                f"{type(self.txt2img_pipe.scheduler).__name__}）"
+            )
+            return
         if (not hasattr(self, 'txt2img_pipe')
                 or self.txt2img_pipe is None):
             return
 
-        config = self.txt2img_pipe.scheduler.config
+        config = dict(self.txt2img_pipe.scheduler.config)
+        if getattr(self, 'is_vpred', False):
+            config["prediction_type"] = "v_prediction"
+            config["rescale_betas_zero_snr"] = True
 
         try:
             if "欧拉A" in sampler_name or "Euler a" in sampler_name:

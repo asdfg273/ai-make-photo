@@ -27,13 +27,29 @@ class ToolsEventsMixin:
         self.lbl_status.setText(text)
         self.lbl_status.setStyleSheet(f"color:{color}; font-size:13px;")
 
+    def _refresh_brush_cursor(self):
+        """根据当前工具状态刷新画布上的画笔光标圈"""
+        show = self.draw_mode or self.is_mask_brush
+        if not show:
+            self.canvas.set_brush_cursor(0, "#ffffff")
+            return
+        if self.is_mask_brush:
+            color = "#ff3232"
+        elif self.is_eraser:
+            color = "#ffffff"
+        else:
+            color = self.brush_color
+        self.canvas.set_brush_cursor(
+            max(1, self.sld_brush_size.value()), color)
+
     def toggle_brush(self):
         was = self.draw_mode and not self.is_eraser and not self.is_mask_brush
         self._exit_modes()
         self.draw_mode = not was
         color = "#89b4fa" if self.draw_mode else "#cdd6f4"
         state = "开启 ✅" if self.draw_mode else "关闭"
-        self._set_status(f"🖌 画笔模式 {state}", color)
+        self._set_status(f"🖌 画笔模式 {state}（Shift+单击画直线）", color)
+        self._refresh_brush_cursor()
 
     def toggle_eraser(self):
         was = self.is_eraser
@@ -43,6 +59,7 @@ class ToolsEventsMixin:
         color = "#f38ba8" if self.is_eraser else "#cdd6f4"
         state = "开启 ✅" if self.is_eraser else "关闭"
         self._set_status(f"🧽 橡皮模式 {state}", color)
+        self._refresh_brush_cursor()
 
     def toggle_mask_brush(self):
         was = self.is_mask_brush
@@ -52,6 +69,7 @@ class ToolsEventsMixin:
         color = "#f38ba8" if self.is_mask_brush else "#cdd6f4"
         state = "开启 ✅" if self.is_mask_brush else "关闭"
         self._set_status(f"🔴 遮罩画笔 {state}", color)
+        self._refresh_brush_cursor()
 
     def toggle_crop(self):
         was = self.crop_mode
@@ -59,6 +77,7 @@ class ToolsEventsMixin:
         self.crop_mode = not was
         state = "请拖拽选择裁剪区域 ✅" if self.crop_mode else "已取消"
         self._set_status(f"✂ {state}", "#89b4fa")
+        self._refresh_brush_cursor()
 
     def toggle_text(self):
         if not self.text_mode:
@@ -72,21 +91,26 @@ class ToolsEventsMixin:
         else:
             self.text_mode = False
             self._set_status("📝 文字模式已关闭")
+        self._refresh_brush_cursor()
 
     def toggle_eyedropper(self):
         """吸管:单击画布取样画笔颜色后自动退出"""
         self._exit_modes()
         self.pick_mode = True
         self._set_status("💧 点击画布任意位置取色", "#94e2d5")
+        self._refresh_brush_cursor()
 
     def _cancel_any_mode(self):
         self._exit_modes()
+        if hasattr(self, "_cancel_filter_preview"):
+            self._cancel_filter_preview()
         if self.crop_overlay:
             self.crop_overlay.hide()
             self.crop_overlay = None
         # 退出裁剪时清掉预览框
         self.update_canvas(self.current_img, force=True)
         self._set_status("⎋ 已退出所有模式")
+        self._refresh_brush_cursor()
 
     # ----------------------------------------------------------
     #  颜色选择
@@ -97,6 +121,7 @@ class ToolsEventsMixin:
             self.brush_color = color.name()
             self.color_preview.setStyleSheet(
                 f"background:{self.brush_color}; border-radius:4px;")
+            self._refresh_brush_cursor()
 
     def pick_text_color(self):
         color = QColorDialog.getColor(parent=self, title="选择文字颜色")
@@ -121,6 +146,16 @@ class ToolsEventsMixin:
     # ----------------------------------------------------------
     #  遮罩操作
     # ----------------------------------------------------------
+    def toggle_mask_preview(self):
+        """遮罩红色叠加预览开关"""
+        self._mask_preview_on = not getattr(self, "_mask_preview_on", True)
+        if self.is_mask_brush:
+            self._overlay_mask()
+        else:
+            self.update_canvas(self.current_img, force=True)
+        state = "显示" if self._mask_preview_on else "隐藏"
+        self._set_status(f"🙈 遮罩预览已{state}", "#89dceb")
+
     def clear_mask(self):
         if self.mask_img.getextrema() == (0, 0):
             self._set_status("🧹 遮罩已经是空的", "#f9e2af")
@@ -189,7 +224,15 @@ class ToolsEventsMixin:
         elif self.draw_mode:
             self._filter_anchor = None   # 手绘改动后,滤镜锚点失效
             self.push_history()
-            self._draw_at(x, y)
+            # Shift+单击:从上一笔末端拉直线(PS 同款)
+            from PyQt6.QtWidgets import QApplication
+            shift = bool(QApplication.keyboardModifiers()
+                         & Qt.KeyboardModifier.ShiftModifier)
+            prev  = getattr(self, "_stroke_end", None)
+            if shift and prev is not None:
+                self._draw_line(prev, (x, y))
+            else:
+                self._draw_at(x, y)
             self._last_draw_pos = (x, y)
         elif self.text_mode:
             self.text_element = (x, y)
@@ -210,6 +253,7 @@ class ToolsEventsMixin:
     def on_mouse_release(self, x: int, y: int):
         if self.draw_mode:
             self._last_draw_pos = None
+            self._stroke_end    = (x, y)   # 供 Shift+单击直线使用
         elif self.crop_mode and getattr(self, "_crop_start", None):
             x0, y0 = self._crop_start
             self._do_crop(x0, y0, x, y)
@@ -291,7 +335,10 @@ class ToolsEventsMixin:
         self._apply_stroke([p0, p1], size)
 
     def _overlay_mask(self):
-        """遮罩半透明叠加（红色预览）"""
+        """遮罩半透明叠加（红色预览）,可用开关临时隐藏"""
+        if not getattr(self, "_mask_preview_on", True):
+            self.update_canvas(self.current_img, force=True)
+            return
         import numpy as np
         base    = self.current_img.convert("RGBA")
         overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
@@ -325,12 +372,24 @@ class ToolsEventsMixin:
         except TypeError:
             return ImageFont.load_default()
 
+    def _text_stroke_kwargs(self) -> dict:
+        """文字描边参数:按文字亮度自动选黑/白描边色"""
+        sw = self.spin_text_stroke.value() \
+            if hasattr(self, "spin_text_stroke") else 0
+        if sw <= 0:
+            return {}
+        r, g, b = self._hex_to_rgb(self.text_color)
+        lum = 0.299 * r + 0.587 * g + 0.114 * b
+        return {"stroke_width": sw,
+                "stroke_fill": "#000000" if lum > 140 else "#ffffff"}
+
     def _render_text_preview(self, x: int, y: int):
         preview = self.current_img.copy()
         draw    = ImageDraw.Draw(preview)
         font    = self._get_pil_font(self.spin_text_size.value())
         draw.text((x, y), self.current_text_string,
-                  fill=self.text_color, font=font)
+                  fill=self.text_color, font=font,
+                  **self._text_stroke_kwargs())
         self.update_canvas(preview, force=True)
 
     def _commit_text_to_image(self):
@@ -342,7 +401,8 @@ class ToolsEventsMixin:
         draw = ImageDraw.Draw(self.current_img)
         font = self._get_pil_font(self.spin_text_size.value())
         draw.text((x, y), self.current_text_string,
-                  fill=self.text_color, font=font)
+                  fill=self.text_color, font=font,
+                  **self._text_stroke_kwargs())
         self.text_element = None
         self.text_mode    = False
         self.update_canvas(self.current_img, force=True)
@@ -351,10 +411,26 @@ class ToolsEventsMixin:
     # ----------------------------------------------------------
     #  裁剪工具
     # ----------------------------------------------------------
+    def _apply_crop_aspect(self, x0, y0, x1, y1):
+        """按选中的宽高比约束裁剪终点(以宽为主导,保持拖拽方向)"""
+        combo = getattr(self, "combo_crop_aspect", None)
+        a = combo.currentText() if combo else "自由"
+        if ":" not in a:
+            return x1, y1
+        ar_w, ar_h = map(int, a.split(":"))
+        dx, dy = x1 - x0, y1 - y0
+        if dx == 0 and dy == 0:
+            return x1, y1
+        tw = abs(dx)
+        th = round(tw * ar_h / ar_w)
+        nx = x0 + (tw if dx >= 0 else -tw)
+        ny = y0 + (th if dy >= 0 else -dy)
+        return int(nx), int(ny)
+
     def _crop_preview(self, start, end):
         """拖拽时实时显示选区框"""
         x0, y0 = start
-        x1, y1 = end
+        x1, y1 = self._apply_crop_aspect(x0, y0, *end)
         preview = self.current_img.copy()
         d = ImageDraw.Draw(preview)
         box = [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
@@ -362,6 +438,7 @@ class ToolsEventsMixin:
         self.update_canvas(preview, force=True)
 
     def _do_crop(self, x0, y0, x1, y1):
+        x1, y1 = self._apply_crop_aspect(x0, y0, x1, y1)
         if abs(x1 - x0) < 10 or abs(y1 - y0) < 10:
             # 选区过小视为取消,清掉预览框
             self.update_canvas(self.current_img, force=True)

@@ -145,6 +145,7 @@ class SovitsTTS:
             os.chdir(saved_cwd)
 
     def unload(self):
+
         if not self._loaded:
             return
         try:

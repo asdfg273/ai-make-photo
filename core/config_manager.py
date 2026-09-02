@@ -26,7 +26,7 @@ class AppConfig:
     default_batch: int = 1
     default_cfg: float = 7.0
     default_sampler: str = "DPM++ 2M Karras"
-
+    qwen_model_key: str = "qwen2vl_2b"
     last_prompt: str = ""
     last_neg: str = ""
 

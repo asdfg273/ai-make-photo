@@ -353,20 +353,22 @@ class VideoPanelMixin:
 
         try:
             audio_path = None
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                audio_path = f.name
+            temp = None
 
             if engine == "sovits":
                 from utils.sovits_tts import synth_once
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    temp = f.name
                 ref = voice_params.get("ref_audio")
                 synth_once(
                     text=text,
-                    output_path=audio_path,
+                    output_path=temp,
                     ref_audio=ref if ref else None,
                     ref_text=voice_params.get("ref_text", ""),
                     language=voice_params.get("language", "ja"),
                     speed=voice_params.get("speed", 1.0),
                 )
+                audio_path = temp
                 logger.info(f"🎙️ SoVITS 合成完成: {audio_path}")
             else:
                 audio_path = self.tts_engine.generate_chattts(
@@ -376,6 +378,11 @@ class VideoPanelMixin:
         except Exception as e:
             logger.error(f"❌ TTS 合成失败: {e}")
             traceback.print_exc()
+            if temp and os.path.exists(temp):
+                try:
+                    os.remove(temp)
+                except OSError:
+                    pass
             return video_path
 
         ffmpeg = shutil.which("ffmpeg")

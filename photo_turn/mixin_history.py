@@ -8,6 +8,8 @@ class HistoryMixin:
 
         self.history.append((img.copy(), mask.copy()))
         self.future.clear()
+        if len(self.history) > 1:
+            self._dirty = True   # 有未保存修改(供退出确认)
 
         # 最多保留 15 步（与原版一致）
         if len(self.history) > 15:
