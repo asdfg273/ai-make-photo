@@ -57,6 +57,7 @@ class ShellMixin:
 
         # ── 页面注册与切换 ──
         self._pages: dict = {}
+        self._ws_added: set = set()
         self.nav.set_pages(PAGES)
         for cls in PAGES:
             page = cls()
@@ -67,7 +68,10 @@ class ShellMixin:
                 self.center_stack.addWidget(QLabel(f"页面 {cls.title} 加载失败"))
                 continue
             self._pages[cls.page_id] = page
-            self.center_stack.addWidget(page.workspace())
+            ws = page.workspace()
+            if ws not in self._ws_added:      # 多页可共享同一中央工作区实例
+                self._ws_added.add(ws)
+                self.center_stack.addWidget(ws)
             pw = page.params_widget()
             if pw is not None:
                 self.params_stack.addWidget(pw)

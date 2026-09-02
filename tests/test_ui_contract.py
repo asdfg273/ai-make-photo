@@ -102,12 +102,32 @@ def test_txt2img_page():
     print("PASS test_txt2img_page")
 
 
+def test_img2img_page():
+    from ui.shell import ShellMixin
+    from PyQt6.QtWidgets import QMainWindow
+
+    class MiniApp(QMainWindow, ShellMixin):
+        pass
+
+    win = MiniApp()
+    win.setup_ui()
+    assert "img2img" in win._pages
+    assert win.btn_load_img is not None
+    assert win.scale_strength is not None
+    assert win.scale_str is win.scale_strength   # 别名指向真控件
+    win.nav.select("img2img")
+    assert win.params_stack.currentWidget() is win._pages["img2img"].params_widget()
+    win.close()
+    print("PASS test_img2img_page")
+
+
 if __name__ == "__main__":
     test_contract_lists()
     test_check_and_degrade()
     test_shell_skeleton()
     test_core_widgets()
     test_txt2img_page()
+    test_img2img_page()
     # Qt offscreen 退出时销毁控件可能段错误，直接 os._exit 跳过 teardown
     sys.stdout.flush()
     os._exit(0)
