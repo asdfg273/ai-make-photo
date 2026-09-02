@@ -394,8 +394,8 @@ git commit -m "feat(ui): 控件/方法契约 contracts.py——分级自检 + �
 ### Task 3: 可折叠分组组件 CollapsibleSection
 
 **Files:**
-- Create: `ui/widgets/__init__.py`（空文件）
-- Create: `ui/widgets/collapsible.py`
+- Create: `ui/components/__init__.py`（空文件）
+- Create: `ui/components/collapsible.py`
 - Test: `tests/test_collapsible.py`
 
 **Interfaces:**
@@ -434,7 +434,7 @@ Expected: FAIL — `ModuleNotFoundError`
 - [ ] **Step 3: 实现 collapsible.py**
 
 ```python
-# ui/widgets/collapsible.py
+# ui/components/collapsible.py
 # 可折叠分组：标题行(点击展开/收起) + 内容区。LoRA/ControlNet/高级/X-Y 用
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QToolButton
 from PyQt6.QtCore import Qt
@@ -487,7 +487,7 @@ Expected: `PASS test_collapsible`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add ui/widgets/__init__.py ui/widgets/collapsible.py tests/test_collapsible.py
+git add ui/components/__init__.py ui/components/collapsible.py tests/test_collapsible.py
 git commit -m "feat(ui): CollapsibleSection 可折叠分组组件"
 ```
 
@@ -1222,7 +1222,7 @@ git commit -m "feat(ui): 动画页——参数组+视频预览迁移，选页即
 **Files:**
 - Modify: `ui/gallery_panel.py`（媒体类型维度 + 防抖，契约签名不变）
 - Create: `ui/pages/gallery_page.py`
-- Create: `ui/widgets/filmstrip.py`
+- Create: `ui/components/filmstrip.py`
 - Modify: `ui/pages/__init__.py`（追加注册）
 - Modify: `ui/shell.py`（胶片条占位换成真组件）
 - Create: `scripts/smoke_ui.py`
@@ -1329,7 +1329,7 @@ Expected: FAIL — `AttributeError: 'GalleryPanel' object has no attribute 'set_
 # 选中动画 → 双击用 host.play_video(path) 播放
 ```
 
-`ui/widgets/filmstrip.py`：
+`ui/components/filmstrip.py`：
 
 ```python
 # FilmStrip(QWidget)：横向 QListWidget(IconMode)，高 110px
@@ -1374,7 +1374,7 @@ Run: `venv/Scripts/python.exe scripts/smoke_ui.py`
 - [ ] **Step 6: Commit**
 
 ```bash
-git add ui/gallery_panel.py ui/pages/gallery_page.py ui/widgets/filmstrip.py ui/pages/__init__.py ui/shell.py scripts/smoke_ui.py tests/test_gallery_unified.py
+git add ui/gallery_panel.py ui/pages/gallery_page.py ui/components/filmstrip.py ui/pages/__init__.py ui/shell.py scripts/smoke_ui.py tests/test_gallery_unified.py
 git commit -m "feat(ui): 统一画廊（图片/动画三态过滤）+ 胶片条 + 200ms 防抖防洪"
 ```
 
