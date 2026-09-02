@@ -59,6 +59,7 @@ from ui.design_tokens   import DARK_STYLE
 from utils.app_events     import EventMixin
 from utils.app_generation import GenerationMixin
 from ui.preset_manager import PresetManagerMixin, TooltipMixin
+from ui.param_snapshot import ParamSnapshotMixin
 from ui.video_panel_mixin import VideoPanelMixin
 from core.presets import PROMPT_PRESETS
 from utils.prompt_enhancer import get_enhancer
@@ -78,8 +79,9 @@ class _AppBridge(QObject):
 # ============================================================
 #  主窗口
 # ============================================================
-class AIDesktopApp(QMainWindow, _UIMixin, EventMixin, GenerationMixin,
-                   PresetManagerMixin, TooltipMixin, VideoPanelMixin):
+class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
+                   GenerationMixin, PresetManagerMixin, TooltipMixin,
+                   VideoPanelMixin):
 
     def __init__(self):
         super().__init__()

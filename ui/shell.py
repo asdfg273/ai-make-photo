@@ -87,6 +87,8 @@ class ShellMixin:
         apply_degradation(self, crit)
 
         self._build_statusbar_v6()
+        self._build_menu_v6()
+        self._init_defaults()
 
     # ---------- 页面切换 ----------
     def _on_page_selected(self, page_id: str):
@@ -115,7 +117,9 @@ class ShellMixin:
         self.params_scroll.setWidgetResizable(True)
         self.params_scroll.setWidget(self.params_stack)
         lay.addWidget(self.params_scroll, 1)
-        self.shared_groups = QVBoxLayout()   # Task 9 填充共享折叠分组
+        self.shared_groups = QVBoxLayout()   # 共享折叠分组（LoRA/CN/高级/X-Y）
+        from ui.shared_groups import build_shared_groups
+        self._group_sections = build_shared_groups(self, self.shared_groups)
         lay.addLayout(self.shared_groups)
         self.gen_area = QVBoxLayout()        # 生成/停止按钮
         build_gen_area(self, self.gen_area)
@@ -161,3 +165,273 @@ class ShellMixin:
 
     def play_video(self, video_path: str):
         logger.info(f"play_video 占位: {video_path}")  # Task 10 实现
+
+    # ============================================================
+    #  以下方法从旧 UIBuilderMixin 迁入（业务层/菜单依赖）
+    # ============================================================
+
+    # ---------- 默认值 + 控件联动 ----------
+    def _init_defaults(self):
+        if hasattr(self, 'refresh_models'):
+            try:
+                self.refresh_models()
+            except Exception as e:
+                logger.warning(f"refresh_models 失败: {e}")
+        self._toggle_adetailer()
+        self._toggle_ad_hand()
+        self._toggle_hires()
+        self._toggle_xy()
+        self._toggle_cn()
+
+    def _toggle_adetailer(self):
+        if not hasattr(self, 'chk_use_adetailer'):
+            return
+        on = self.chk_use_adetailer.isChecked()
+        for c in (self.combo_ad_target, self.combo_adetailer_model,
+                  self.scale_adetailer_strength):
+            c.setEnabled(on)
+
+    def _toggle_ad_hand(self):
+        if not hasattr(self, 'chk_use_ad_hand'):
+            return
+        on = self.chk_use_ad_hand.isChecked()
+        for c in (self.combo_ad_hand, self.scale_ad_hand,
+                  self.scale_ad_hand_blend):
+            c.setEnabled(on)
+
+    def _toggle_hires(self):
+        if not hasattr(self, 'chk_hires'):
+            return
+        on = self.chk_hires.isChecked()
+        for c in (self.combo_hires_scale, self.scale_hires_denoise,
+                  self.combo_hires_upscaler):
+            c.setEnabled(on)
+
+    def _toggle_xy(self):
+        if not hasattr(self, 'chk_enable_xy'):
+            return
+        on = self.chk_enable_xy.isChecked()
+        for w in (self.combo_x_type, self.entry_x_vals,
+                  self.combo_y_type, self.entry_y_vals):
+            w.setEnabled(on)
+
+    def _toggle_cn(self):
+        if not hasattr(self, 'chk_use_pose'):
+            return
+        on = self.chk_use_pose.isChecked()
+        for c in (self.combo_cn_type, self.scale_cn_strength,
+                  self.btn_load_cn_img):
+            c.setEnabled(on)
+
+    def _on_pose_transfer_toggled(self, checked: bool):
+        """Pose Transfer 开关切换 → 自动联动其他控件"""
+        if checked:
+            if hasattr(self, 'combo_cn_type'):
+                idx = self.combo_cn_type.findText("OpenPose")
+                if idx >= 0:
+                    self.combo_cn_type.setCurrentIndex(idx)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self, "Pose Transfer 已启用",
+                "✅ 工作流程:\n\n"
+                "1️⃣ AI 用提示词生成动作参考图\n"
+                "2️⃣ 自动提取 OpenPose 骨架\n"
+                "3️⃣ 骨架 + IP-Adapter 角色图 → 最终图\n\n"
+                "⚠️ 请确保已上传【IP-Adapter 角色参考图】\n"
+                "💡 推荐: 影响力 0.6~0.8")
+
+    def _on_ai_model_changed(self, index: int = 0):
+        """AI 模型档位切换 - 立即生效，无需重启"""
+        if not getattr(self, "_ui_ready", False):
+            return
+        key = self.combo_ai_model.currentData()
+        if not key:
+            return
+        from utils.prompt_enhancer import PromptEnhancer
+        PromptEnhancer().set_model_key(key)
+        self.config.qwen_model_key = key
+        self.config.save()
+        logger.info(f"🎚️ AI 模型档位 → {self.combo_ai_model.currentText()}")
+
+    # ---------- 画廊回调 ----------
+    def _on_gallery_picked(self, path: str):
+        from PyQt6.QtGui import QPixmap
+        if hasattr(self, 'show_preview'):
+            self.show_preview(path)
+        else:
+            try:
+                pix = QPixmap(path)
+                if not pix.isNull():
+                    self.lbl_preview.set_pixmap(pix)
+            except Exception:
+                pass
+        self.last_generated_path = path
+        if hasattr(self, 'btn_edit'):
+            self.btn_edit.setEnabled(True)
+        if hasattr(self, 'btn_upscale'):
+            self.btn_upscale.setEnabled(True)
+
+    # ---------- LoRA 触发词 ----------
+    def _insert_lora_triggers(self, slot_idx=None):
+        """插入 LoRA 触发词到提示词框。slot_idx=None 插入全部槽。"""
+        import os
+        triggers_list = []
+
+        for i, combo in enumerate(self.combo_loras):
+            if slot_idx is not None and i != slot_idx:
+                continue
+            lora_name = combo.currentText().strip()
+            if not lora_name or lora_name in ("无", "None", ""):
+                continue
+            if "[" in lora_name:
+                lora_name = lora_name.split("[")[0].strip()
+            base = os.path.splitext(lora_name)[0]
+            for sub in ["sdxl", "sd1.5", "sd15", ""]:
+                txt_path = os.path.join("loras", sub, base + ".txt") if sub \
+                    else os.path.join("loras", base + ".txt")
+                if os.path.exists(txt_path):
+                    try:
+                        with open(txt_path, "r", encoding="utf-8") as f:
+                            content = f.read().strip()
+                            if content:
+                                triggers_list.append(content)
+                                break
+                    except Exception as e:
+                        logger.warning(f"⚠️ 读取 {txt_path} 失败: {e}")
+
+        if not triggers_list:
+            self._set_status("⚠️ 没有可插入的触发词", "#ff7a17")
+            return
+
+        all_triggers = ", ".join(triggers_list)
+        cur = self.txt_prompt.toPlainText().strip()
+        new_text = f"{all_triggers}, {cur}" if cur else all_triggers
+        self.txt_prompt.setPlainText(new_text)
+        self._set_status(f"✅ 已插入 {len(triggers_list)} 组触发词", "#dadbdf")
+
+    # ---------- 菜单 ----------
+    def _build_menu_v6(self):
+        from PyQt6.QtGui import QAction
+        mb = self.menuBar()
+
+        m_file = mb.addMenu("📁 文件")
+        a_open = QAction("加载图片", self)
+        if hasattr(self, "select_image"):
+            a_open.triggered.connect(self.select_image)
+        m_file.addAction(a_open)
+        a_out = QAction("打开输出目录", self)
+        a_out.triggered.connect(self._open_output_folder)
+        m_file.addAction(a_out)
+        m_file.addSeparator()
+        a_quit = QAction("退出", self)
+        a_quit.triggered.connect(self.close)
+        m_file.addAction(a_quit)
+
+        m_tool = mb.addMenu("🔧 工具")
+        a_clear_log = QAction("清空日志", self)
+        a_clear_log.triggered.connect(lambda: (
+            getattr(self, 'txt_log_image', None) and self.txt_log_image.clear(),
+            getattr(self, 'txt_log_video', None) and self.txt_log_video.clear()))
+        m_tool.addAction(a_clear_log)
+        m_tool.addSeparator()
+        act_market = QAction("🛒 扩展市场...", self)
+        act_market.setShortcut("Ctrl+E")
+        act_market.triggered.connect(self._open_extension_market)
+        m_tool.addAction(act_market)
+        act_refresh = QAction("🔄 刷新扩展状态", self)
+        act_refresh.triggered.connect(self._refresh_extension_count)
+        m_tool.addAction(act_refresh)
+
+        m_memory = mb.addMenu("🧹 内存")
+        a_release = QAction("释放内存", self)
+        a_release.triggered.connect(self.on_unload_models)
+        m_memory.addAction(a_release)
+        a_show = QAction("查看当前内存", self)
+        a_show.triggered.connect(self._show_memory)
+        m_memory.addAction(a_show)
+
+        m_about = mb.addMenu("❓ 关于")
+        a_about = QAction("关于本软件", self)
+        a_about.triggered.connect(self._show_about)
+        m_about.addAction(a_about)
+
+        # 状态栏扩展计数
+        self.lbl_ext_count = QLabel()
+        self.statusBar().addPermanentWidget(self.lbl_ext_count)
+        self._refresh_extension_count()
+
+    def _refresh_extension_count(self):
+        try:
+            from utils.extension_manager import get_status_summary
+            s = get_status_summary()
+            self.lbl_ext_count.setText(f"🧩 扩展: {s['installed']}/{s['total']}")
+        except Exception as e:
+            self.lbl_ext_count.setText("🧩 扩展: --")
+            logger.warning(f"[EXT-COUNT] 刷新失败: {e}")
+
+    def _open_extension_market(self):
+        try:
+            from ui.extension_market import ExtensionMarketDialog
+            dlg = ExtensionMarketDialog(self)
+            dlg.exec()
+            self._refresh_extension_count()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "错误", f"打开扩展市场失败:\n{e}")
+
+    def _open_output_folder(self):
+        import subprocess, sys, os
+        from utils.app_utils import OUTPUT_DIR
+        if not os.path.exists(OUTPUT_DIR):
+            os.makedirs(OUTPUT_DIR, exist_ok=True)
+        try:
+            if sys.platform.startswith('win'):
+                os.startfile(os.path.abspath(OUTPUT_DIR))
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', OUTPUT_DIR])
+            else:
+                subprocess.Popen(['xdg-open', OUTPUT_DIR])
+        except Exception as e:
+            logger.warning(f"打开目录失败: {e}")
+
+    def _show_about(self):
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.about(
+            self, "关于",
+            "<b>AI 绘画工作站 v6.0</b><br>"
+            "PyQt6 重构版 — GPU 加速<br><br>"
+            "基于 Stable Diffusion + ADetailer<br>"
+            "支持 LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer")
+
+    def on_unload_models(self):
+        from PyQt6.QtWidgets import QMessageBox
+        if getattr(self, 'is_generating', False):
+            QMessageBox.warning(self, "提示", "请先停止当前生成任务")
+            return
+        try:
+            self._set_status("🧹 正在释放模型...", "#ff7a17")
+            if hasattr(self, 'ai'):
+                self.ai.unload_all()
+            try:
+                import psutil
+                mem = psutil.Process().memory_info().rss / 1024 / 1024
+                self._set_status(
+                    f"✅ 模型已释放 (当前内存 {mem:.0f} MB)", "#dadbdf")
+            except ImportError:
+                self._set_status("✅ 模型已释放", "#dadbdf")
+        except Exception as e:
+            QMessageBox.critical(self, "释放失败", str(e))
+
+    def _show_memory(self):
+        from PyQt6.QtWidgets import QMessageBox
+        try:
+            import psutil
+            mem = psutil.Process().memory_info().rss / 1024 / 1024
+            QMessageBox.information(
+                self, "内存使用情况",
+                f"当前进程内存: {mem:.1f} MB\n\n如果数值过大,可以点'释放内存'清理。")
+        except ImportError:
+            QMessageBox.information(
+                self, "提示", "请安装 psutil: pip install psutil")

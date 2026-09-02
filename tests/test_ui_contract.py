@@ -121,6 +121,26 @@ def test_img2img_page():
     print("PASS test_img2img_page")
 
 
+def test_shared_groups():
+    from ui.shell import ShellMixin
+    from PyQt6.QtWidgets import QMainWindow
+    from ui.contracts import check_contract
+
+    class MiniApp(QMainWindow, ShellMixin):
+        pass
+
+    win = MiniApp()
+    win.setup_ui()
+    crit, minor = check_contract(win)
+    assert crit == [], f"关键契约缺失: {crit}"
+    for name in ("combo_lora_0", "scale_lora_0", "combo_cn_type",
+                 "chk_enable_hires", "chk_enable_xy", "entry_x_vals"):
+        assert getattr(win, name) is not None, name
+    assert len(win.combo_loras) == 3        # 列表别名
+    win.close()
+    print("PASS test_shared_groups")
+
+
 if __name__ == "__main__":
     test_contract_lists()
     test_check_and_degrade()
@@ -128,6 +148,7 @@ if __name__ == "__main__":
     test_core_widgets()
     test_txt2img_page()
     test_img2img_page()
+    test_shared_groups()
     # Qt offscreen 退出时销毁控件可能段错误，直接 os._exit 跳过 teardown
     sys.stdout.flush()
     os._exit(0)
