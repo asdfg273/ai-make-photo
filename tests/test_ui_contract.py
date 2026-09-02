@@ -5,6 +5,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt6.QtWidgets import QApplication, QLineEdit, QPushButton
 
+# 进程级唯一 QApplication，驻留全局防止被 GC（GC 后 Qt 状态损坏会崩）
+_APP = QApplication.instance() or QApplication([])
+
 
 def test_contract_lists():
     from ui.contracts import (GLOBAL_WIDGETS, PAGE_WIDGETS, METHOD_CONTRACT,
@@ -20,7 +23,6 @@ def test_contract_lists():
 
 def test_check_and_degrade():
     from ui.contracts import install_aliases, check_contract, apply_degradation
-    app = QApplication.instance() or QApplication([])
 
     class FakeHost:  # 最小假宿主：只有部分控件
         pass
@@ -38,6 +40,27 @@ def test_check_and_degrade():
     print("PASS test_contract_lists / test_check_and_degrade")
 
 
+def test_shell_skeleton():
+    """外壳骨架：无模型加载，最小宿主验证 setup_ui 可跑通。"""
+    from ui.shell import ShellMixin
+    from PyQt6.QtWidgets import QMainWindow
+
+    class MiniApp(QMainWindow, ShellMixin):
+        pass
+
+    win = MiniApp()
+    win.setup_ui()
+    assert win.nav is not None and win.center_stack is not None
+    assert callable(win.append_log) and callable(win.set_status)
+    assert callable(win.set_progress) and callable(win.play_video)
+    win.close()
+    print("PASS test_shell_skeleton")
+
+
 if __name__ == "__main__":
     test_contract_lists()
     test_check_and_degrade()
+    test_shell_skeleton()
+    # Qt offscreen 退出时销毁控件可能段错误，直接 os._exit 跳过 teardown
+    sys.stdout.flush()
+    os._exit(0)

@@ -49,6 +49,11 @@ from PIL import Image
 from core.translation_service  import TranslationService
 from core.config_manager       import AppConfig
 from ui.ui_builder     import UIBuilderMixin
+import os as _os
+if _os.environ.get("AI_STUDIO_UI") == "v2":
+    from ui.shell import ShellMixin as _UIMixin
+else:
+    _UIMixin = UIBuilderMixin
 from ui.splash          import create_splash
 from ui.design_tokens   import DARK_STYLE
 from utils.app_events     import EventMixin
@@ -73,7 +78,7 @@ class _AppBridge(QObject):
 # ============================================================
 #  主窗口
 # ============================================================
-class AIDesktopApp(QMainWindow, UIBuilderMixin, EventMixin, GenerationMixin,
+class AIDesktopApp(QMainWindow, _UIMixin, EventMixin, GenerationMixin,
                    PresetManagerMixin, TooltipMixin, VideoPanelMixin):
 
     def __init__(self):
@@ -721,7 +726,11 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("AI 绘画工作站")
     app.setApplicationVersion("5.0")
-    app.setStyleSheet(DARK_STYLE)
+    if os.environ.get("AI_STUDIO_UI") == "v2":
+        from ui.theme import apply_theme
+        logger.info(f"🎨 主题: {apply_theme(app)}")
+    else:
+        app.setStyleSheet(DARK_STYLE)
 
     ico_path = os.path.join(BASE_DIR, "logo", "dzbut-9fc5g-001.ico")
     if os.path.exists(ico_path):
