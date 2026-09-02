@@ -48,14 +48,12 @@ from PIL import Image
 
 from core.translation_service  import TranslationService
 from core.config_manager       import AppConfig
-from ui.ui_builder     import UIBuilderMixin
 import os as _os
-if _os.environ.get("AI_STUDIO_UI") == "v2":
-    from ui.shell import ShellMixin as _UIMixin
+if _os.environ.get("AI_STUDIO_UI") == "old":
+    from ui.ui_builder import UIBuilderMixin as _UIMixin   # 旧界面回退（对比测试用）
 else:
-    _UIMixin = UIBuilderMixin
+    from ui.shell import ShellMixin as _UIMixin            # v6.0 默认新界面
 from ui.splash          import create_splash
-from ui.design_tokens   import DARK_STYLE
 from utils.app_events     import EventMixin
 from utils.app_generation import GenerationMixin
 from ui.preset_manager import PresetManagerMixin, TooltipMixin
@@ -131,7 +129,9 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         self.gallery.send_to_i2i_signal.connect(self.send_path_to_img2img)
         self.gallery.send_to_face_signal.connect(self.send_path_to_face_fix)
         self.gallery.send_to_editor_signal.connect(self.send_path_to_editor)
-        self._setup_menu_and_statusbar()
+        # 旧 UI 专属菜单构建；v6 shell 的 setup_ui 已内建菜单
+        if hasattr(self, '_setup_menu_and_statusbar'):
+            self._setup_menu_and_statusbar()
 
         # ── 生成信号桥 ──
         self._init_gen_bridge()
@@ -588,6 +588,8 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
                     if "图生图" in self.tabs.tabText(i) or "img2img" in self.tabs.tabText(i).lower():
                         self.tabs.setCurrentIndex(i)
                         break
+            elif hasattr(self, 'nav'):
+                self.nav.select("img2img")   # v6 界面：切到图生图页
             if hasattr(self, 'refresh_ref_image_preview'):
                 self.refresh_ref_image_preview()
             self._set_status("✅ 已发送到图生图", "#a6e3a1")
@@ -728,11 +730,12 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setApplicationName("AI 绘画工作站")
     app.setApplicationVersion("6.0")
-    if os.environ.get("AI_STUDIO_UI") == "v2":
+    if os.environ.get("AI_STUDIO_UI") == "old":
+        from ui.design_tokens import DARK_STYLE   # 旧界面回退（对比测试用）
+        app.setStyleSheet(DARK_STYLE)
+    else:
         from ui.theme import apply_theme
         logger.info(f"🎨 主题: {apply_theme(app)}")
-    else:
-        app.setStyleSheet(DARK_STYLE)
 
     ico_path = os.path.join(BASE_DIR, "logo", "dzbut-9fc5g-001.ico")
     if os.path.exists(ico_path):

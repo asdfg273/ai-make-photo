@@ -58,7 +58,7 @@ PAGE_WIDGETS = {
         "chk_video_upscale", "chk_video_voice", "combo_tts_engine",
         "cmb_motion_lora_pick", "motion_lora_container",
         "travel_container", "wrap_travel_segments", "wrap_travel_text",
-        "txt_neg_prompt_travel", "combo_travel_mode",
+        "combo_travel_mode",
         "wrap_chattts", "wrap_sovits", "combo_sovits_ref",
         "txt_sovits_reftext", "chk_sovits_auto_translate",
         "txt_video_voice", "audio_output", "lbl_video_status",
