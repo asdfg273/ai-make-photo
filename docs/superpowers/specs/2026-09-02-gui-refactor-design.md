@@ -36,6 +36,7 @@
 - 所有控件属性名原样保留，一个不改
 - **生成核心控件全局单例（关键约束）**：模型选择、主/负面 Prompt、尺寸/步数/CFG、采样器、生成/停止按钮、进度条、预览画布等被多页共用的控件，只在 shell 层创建一次并挂到主窗口，契约属性全生命周期指向这唯一实例。页面**禁止**各自重建同名控件——否则后构建的页面会覆盖 `self.txt_prompt` 等属性，业务层将读错实例
 - 页面文件只创建**页面专属控件**：图生图的参考图/蒙版/强度，动画的时长/帧率/运动 LoRA/TTS 等
+- **方法契约（MRO 约束）**：`main.py` 的 mixin 列表将把 `UIBuilderMixin` 替换为新 shell 基类。业务 mixin 调用了定义在 `UIBuilderMixin` 上的方法（已核实：`append_log`、`set_status`、`set_progress`、`play_video`），新 shell 必须同名提供，否则 MRO 断链。方法名清单纳入 `contracts.py` 启动自检（`callable(getattr(...))` 检查）
 - 兼容别名（`btn_gen`、`btn_stop`、`scale_str`、`scale_hires`、`progress_total`、`progress`、`preview_canvas`、`pose_canvas`、`combo_loras`、`scale_loras` 等）集中到一处安装
 - 新增 `ui/contracts.py` 列出全部必需控件名，并区分「全局单例」与「页面专属」两类，启动时自检
 - `self.gallery` 及其信号（`image_selected`、`image_deleted`、`apply_params_signal`、`reuse_params_signal`、`send_to_i2i_signal`、`send_to_face_signal`、`send_to_editor_signal`）与方法（`add_image`、`reload_from_dir`）签名不变
@@ -144,13 +145,16 @@ ui/
 ## 7. 错误处理
 
 1. **启动自检**：shell 构建完成后对照 `contracts.py` 逐项 `hasattr` 检查，缺失弹警告对话框 + 日志记录具体缺失项。
-2. **页面构建隔离**：每页构建包在 try/except 中，单页失败不影响其他页，失败页显示错误占位 + 日志堆栈。
+2. **页面构建隔离 + 契约分级联动**：每页构建包在 try/except 中，单页失败不影响其他页，失败页显示错误占位 + 日志堆栈。契约自检在 shell 构建完成后运行，**按关键级分级处理**，避免"隔离"与"自检"互相掩盖成半残运行状态：
+   - **关键控件缺失**（`btn_generate`、`btn_interrupt`、`txt_prompt`、`txt_neg_prompt`、`combo_model`、预览画布、进度条，及方法契约 `append_log`/`set_status`/`set_progress`/`play_video`）：直接禁用生成入口——生成/停止按钮置灰、tooltip 说明原因、对应页面显示错误占位，让用户明确知道"此处不可用"而不是点了静默失败
+   - **非关键控件缺失**：仅日志告警 + 警告对话框，界面继续可用
 3. **主题兜底**：qdarkstyle 加载失败回退 Qt Fusion 深色，界面永远可用。
 4. **画廊扫描兜底**：目录不存在/无权限/缩略图解码失败显示占位图，不中断扫描。
+5. **胶片条/画廊刷新防洪**：`add_image` 触发胶片条与画廊刷新时做 200ms 防抖合并——X/Y 矩阵一次生成几十张的场景下，批量结果合并为一次刷新，避免 UI 卡死。
 
 ## 8. 验证方案
 
-1. **契约测试**：`tests/` 新增 UI 契约测试——`QApplication` offscreen 模式启动 shell，断言必需控件存在、别名齐全、页面可切换。
+1. **契约测试**：`tests/` 新增 UI 契约测试——`QApplication` offscreen 模式启动 shell，断言必需控件存在（区分全局单例/页面专属）、兼容别名齐全、方法契约（`append_log`/`set_status`/`set_progress`/`play_video`）可调用、页面可切换。
 2. **冒烟脚本**：`scripts/smoke_ui.py` 一键启动 GUI（跳过模型加载），人工走查四页 + 胶片条 + 画廊切换。
 3. **逐页迁移验证**：顺序 生成核心区（全局单例）→ 文生图 → 图生图 → 动画 → 画廊；每步迁移后跑契约测试 + 冒烟；旧 `ui_builder.py` 全程保留作对照，全绿再删。
 4. **git 分阶段提交**：主题层 → 外壳骨架 → 生成核心区 → 逐页迁移 → 统一画廊 → 删除旧文件 → 版本号 6.0，每阶段一个 commit。
