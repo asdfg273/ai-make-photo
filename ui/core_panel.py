@@ -39,9 +39,10 @@ def build_core(host, layout: QVBoxLayout) -> None:
     for _arch_id, _info in REGISTRY.items():
         if not _info.caps.is_base_model:
             continue
-        if _info.model_subdir in _seen_subdirs:
+        _key = _info.model_subdir or _arch_id   # model_subdir 可能为 None，回退到架构 id
+        if _key in _seen_subdirs:
             continue
-        _seen_subdirs.add(_info.model_subdir)
+        _seen_subdirs.add(_key)
         _label = _info.display_name
         if not _info.supported:
             _label += "  ⚠ 暂不支持"

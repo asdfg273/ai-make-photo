@@ -380,6 +380,10 @@ class ShellMixin:
     # ---------- 画廊回调 ----------
     def _on_gallery_picked(self, path: str):
         from PyQt6.QtGui import QPixmap
+        # 视频条目跳过图片预览（Image.open 会抛异常被吞，白读一次文件）
+        from ui.gallery_panel import GalleryPanel
+        if GalleryPanel.media_kind(path) == "video":
+            return
         if hasattr(self, 'show_preview'):
             self.show_preview(path)
         else:
