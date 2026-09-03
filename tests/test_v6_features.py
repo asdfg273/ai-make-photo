@@ -240,6 +240,28 @@ def test_trans_compare():
     _run_and_get_dlg(enh2)
     assert enh2.load_calls == 0, "已加载不应重复载入"
     assert enh2.unload_calls == 0, "原本已加载的 AI 不应被卸掉"
+
+    # 场景 3：提示词已是英文（中→英原样返回）→ 仍必须调 AI 回译
+    class _EchoTr:
+        qwen_enhancer = None
+
+        def translate(self, text, mode="auto", target_lang="en"):
+            return text   # 已是英文，原样返回
+
+    enh3 = _FakeEnh(loaded=False)
+    pe.get_enhancer = lambda: enh3
+    win.translator = _EchoTr()
+    win.txt_prompt.setPlainText("cat, girl, masterpiece")
+    win.btn_trans_compare.setEnabled(True)
+    win._on_trans_compare()
+    deadline = _t.time() + 5
+    while not win.btn_trans_compare.isEnabled() and _t.time() < deadline:
+        _APP.processEvents()
+        _t.sleep(0.05)
+    assert enh3.load_calls >= 1, "英文提示词也必须载入 AI 回译"
+    dlg3 = win._trans_compare_dlg
+    texts3 = [te.toPlainText() for te in dlg3.findChildren(QTextEdit)]
+    assert texts3[2] == "猫, 女孩", texts3
     print("PASS test_trans_compare")
 
 

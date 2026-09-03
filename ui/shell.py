@@ -519,9 +519,12 @@ class ShellMixin:
                     holder["phase"] = "zh2en"
                     en = translator.translate(raw, mode=mode)
                     holder["en"] = en
+                    holder["already_en"] = (en.strip() == raw.strip())
                     # 回译必须走 AI：模型已卸载则现载（点对比才载入），
-                    # 完成后若原本是卸载状态则再次卸下，不占生图显存
-                    if en and en.strip() and en.strip() != raw:
+                    # 完成后若原本是卸载状态则再次卸下，不占生图显存。
+                    # 注意：即使提示词已是英文（en==raw）也要回译——
+                    # ③展示的是 AI 对这段英文的"理解"，同样是幻觉检查
+                    if en and en.strip():
                         holder["phase"] = "en2zh"
                         back = enh.translate(en, target_lang="zh")
                         holder["back"] = back \
@@ -592,8 +595,11 @@ class ShellMixin:
                 h.setWordWrap(True)
                 v.addWidget(h)
 
-        _block("① 原文（中文）", raw)
-        _block(f"② AI 英文（实际送入模型 · 模式 {mode}）", en)
+        _block("① 原文", raw)
+        if holder.get("already_en"):
+            _block(f"② 英文（提示词已是英文，未做中→英 · 模式 {mode}）", en)
+        else:
+            _block(f"② AI 英文（实际送入模型 · 模式 {mode}）", en)
         if back and back.strip() and back.strip() != en.strip():
             _block("③ 回译（英→中，对照①检查是否词不达意）", back,
                    "💡 若③与①语义偏差大，说明②有幻觉/漏词，"
