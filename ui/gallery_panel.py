@@ -358,6 +358,17 @@ class GalleryPanel(QWidget):
         self.list_widget.itemDoubleClicked.connect(self._on_double_clicked)
         root.addWidget(self.list_widget, 1)
 
+        # ── 悬浮大图预览（hover 500ms 触发，跟随鼠标的浮层）──
+        self.list_widget.setMouseTracking(True)
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(500)
+        self._hover_timer.timeout.connect(self._show_hover_preview)
+        self._hover_path = None
+        self._hover_label = None
+        self.list_widget.itemEntered.connect(self._on_item_entered)
+        self.list_widget.viewport().installEventFilter(self)
+
         # ── 元数据浮窗 ──
         self.meta_panel = MetadataPanel()
         self.meta_panel.setWindowFlags(Qt.WindowType.Tool)
@@ -669,8 +680,66 @@ class GalleryPanel(QWidget):
             self.meta_panel.show()
         self.meta_panel.raise_()
 
+    # ========== 悬浮大图预览 ==========
+    def _on_item_entered(self, item):
+        path = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not path or self.media_kind(path) == "video":
+            self._hover_timer.stop()
+            self._hide_hover_preview()
+            return
+        self._hover_path = path
+        self._hover_timer.start()
+
+    def _show_hover_preview(self):
+        path = self._hover_path
+        if not path or not os.path.exists(path):
+            return
+        pix = QPixmap(path)
+        if pix.isNull():
+            return
+        if self._hover_label is None:
+            self._hover_label = QLabel(None, Qt.WindowType.ToolTip)
+        # 限制浮层最大边长 512
+        scaled = pix.scaled(512, 512,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation)
+        self._hover_label.setPixmap(scaled)
+        self._hover_label.resize(scaled.size())
+        from PyQt6.QtGui import QCursor, QGuiApplication
+        pos = QCursor.pos()
+        screen = QGuiApplication.screenAt(pos) or QGuiApplication.primaryScreen()
+        geo = screen.availableGeometry()
+        x = pos.x() + 24
+        y = pos.y() + 24
+        if x + scaled.width() > geo.right():
+            x = pos.x() - scaled.width() - 16
+        if y + scaled.height() > geo.bottom():
+            y = geo.bottom() - scaled.height() - 8
+        self._hover_label.move(x, y)
+        self._hover_label.show()
+
+    def _hide_hover_preview(self):
+        if self._hover_label is not None:
+            self._hover_label.hide()
+
+    def leaveEvent(self, event):
+        self._hover_timer.stop()
+        self._hide_hover_preview()
+        super().leaveEvent(event)
+
+    def eventFilter(self, obj, event):
+        # 鼠标离开列表视口（如移到滚动条/空白间隙）时收起悬浮预览
+        from PyQt6.QtCore import QEvent
+        if (obj is self.list_widget.viewport()
+                and event.type() == QEvent.Type.Leave):
+            self._hover_timer.stop()
+            self._hide_hover_preview()
+        return super().eventFilter(obj, event)
+
     # ========== 事件处理 ==========
     def _on_clicked(self, item):
+        self._hover_timer.stop()
+        self._hide_hover_preview()
         path = item.data(Qt.ItemDataRole.UserRole)
         if not path:
             return
@@ -900,6 +969,8 @@ class GalleryPanel(QWidget):
             logger.warning(f"⚠️ 打开文件夹失败: {e}")
 
     def closeEvent(self, event):
+        self._hover_timer.stop()
+        self._hide_hover_preview()
         if hasattr(self, 'meta_panel'):
             self.meta_panel.close()
         super().closeEvent(event)

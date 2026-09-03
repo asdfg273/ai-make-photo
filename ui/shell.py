@@ -185,7 +185,7 @@ class ShellMixin:
         self.filmstrip.refresh(paths)
 
     def _on_filmstrip_clicked(self, path: str):
-        """点击胶片条 → 跳画廊页并选中对应项。"""
+        """点击胶片条 → 跳画廊页选中对应项，并直接复用该图参数。"""
         self.nav.select("gallery")
         gallery = getattr(self, "gallery", None)
         if gallery is None:
@@ -196,6 +196,14 @@ class ShellMixin:
                 gallery.list_widget.setCurrentItem(item)
                 gallery.list_widget.scrollToItem(item)
                 break
+        # 图片直接复用参数回填生成区；视频无参数可复用
+        from ui.gallery_panel import GalleryPanel
+        if GalleryPanel.media_kind(path) == "image" \
+                and hasattr(self, "reuse_params_from_path"):
+            try:
+                self.reuse_params_from_path(path)
+            except Exception as e:
+                logger.warning(f"胶片条复用参数失败: {e}")
 
     def _on_gallery_video_picked(self, path: str):
         """画廊双击视频 → 跳动画页播放。"""
@@ -256,6 +264,7 @@ class ShellMixin:
         self.progress_gen.setMaximumWidth(220)
         sb.addWidget(self.lbl_status, 1)
         sb.addPermanentWidget(self.progress_gen)
+        self._setup_resource_monitor()
 
     # ---------- 方法契约 ----------
     def append_log(self, text: str, color: str = "#dfe5ec"):
@@ -398,6 +407,67 @@ class ShellMixin:
         self.config.qwen_model_key = key
         self.config.save()
         logger.info(f"🎚️ AI 模型档位 → {self.combo_ai_model.currentText()}")
+
+    # ---------- 修前/修后对比 ----------
+    def _on_prefix_image(self, path: str):
+        """生成管线发来的修前快照（Hires/ADetailer 前的阶段 1 图）。"""
+        self._prefix_image_path = path
+        btn = getattr(self, "btn_compare", None)
+        if btn is not None:
+            btn.setEnabled(True)
+            btn.setToolTip(f"修前 / 修后 对比滑条\n修前: {path}")
+
+    def _on_compare_toggled(self, checked: bool):
+        stack = getattr(self, "preview_stack", None)
+        if stack is None:
+            return
+        if checked:
+            prefix = getattr(self, "_prefix_image_path", None)
+            result = getattr(self, "last_generated_path", None) \
+                or getattr(self, "current_generated_path", None)
+            from PyQt6.QtGui import QPixmap
+            import os as _os
+            if prefix and result and _os.path.exists(prefix) and _os.path.exists(result):
+                self.compare_canvas.set_images(QPixmap(prefix), QPixmap(result))
+                stack.setCurrentIndex(1)
+            else:
+                self.set_status("⚠️ 没有可对比的修前快照", "#ff7a17")
+                btn = getattr(self, "btn_compare", None)
+                if btn is not None:
+                    btn.blockSignals(True)
+                    btn.setChecked(False)
+                    btn.blockSignals(False)
+        else:
+            stack.setCurrentIndex(0)
+
+    # ---------- 显存/内存常驻监控 ----------
+    def _setup_resource_monitor(self):
+        from PyQt6.QtCore import QTimer
+        self.lbl_resource = QLabel("💾 --")
+        self.lbl_resource.setProperty("role", "hint")
+        self.statusBar().addPermanentWidget(self.lbl_resource)
+        self._resource_timer = QTimer(self)
+        self._resource_timer.setInterval(2000)
+        self._resource_timer.timeout.connect(self._update_resource_label)
+        self._resource_timer.start()
+        self._update_resource_label()
+
+    def _update_resource_label(self):
+        try:
+            import psutil
+            ram = psutil.Process().memory_info().rss / 1024**3
+            vram = ""
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    used = torch.cuda.memory_allocated() / 1024**3
+                    total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                    vram = f" | 显存 {used:.1f}/{total:.1f}GB"
+            except Exception:
+                pass
+            self.lbl_resource.setText(f"💾 内存 {ram:.1f}GB{vram}")
+        except Exception:
+            self.lbl_resource.setText("💾 --")
 
     # ---------- 画廊回调 ----------
     def _on_gallery_picked(self, path: str):

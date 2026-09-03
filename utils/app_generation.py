@@ -33,6 +33,7 @@ class _GenBridge(QObject):
     log_signal      = pyqtSignal(str)
     image_signal    = pyqtSignal(object)
     gallery_add_signal  = pyqtSignal(str)
+    prefix_signal       = pyqtSignal(str)   # 修前快照路径（Hires/ADetailer 前）
     enhance_done_signal  = pyqtSignal(str)
     video_enhance_done_signal = pyqtSignal(str)   # 视频 Tab 识图专用,避免拆断共享信号
 
@@ -76,6 +77,9 @@ class GenerationMixin:
         self._bridge.error_signal.connect(self._on_error_to_log)
         self._bridge.cancel_signal.connect(self._on_cancelled)
         self._bridge.video_enhance_done_signal.connect(self._on_video_vision_done)
+        # 修前快照（v6 对比滑条）；旧 UI 无此方法则跳过
+        if hasattr(self, '_on_prefix_image'):
+            self._bridge.prefix_signal.connect(self._on_prefix_image)
 
     # ----------------------- 槽 -----------------------
     def _on_status(self, text: str, color: str):
@@ -960,6 +964,18 @@ class GenerationMixin:
             # ── 阶段 1: 基础图像生成 ──
             with performance_timer("🎨 阶段 1: 基础图像生成"):
                 image = self._gt_run_base_pipe(ctx, kwargs)
+
+            # 修前快照：任一精修阶段开启时，保存阶段 1 结果供"修前/修后"对比
+            _will_fix = any(self._chk(getattr(self, n, None)) for n in
+                            ('chk_hires', 'chk_use_adetailer', 'chk_use_ad_hand'))
+            if _will_fix:
+                try:
+                    import tempfile as _tf
+                    _pfx = os.path.join(_tf.gettempdir(), "ai_studio_prefix.png")
+                    image.save(_pfx, "PNG")
+                    self._bridge.prefix_signal.emit(_pfx)
+                except Exception as _e:
+                    logger.warning(f"修前快照保存失败(忽略): {_e}")
 
             # ── 阶段 2: Hires.fix ──
             if self._chk(getattr(self, 'chk_hires', None)):
