@@ -503,18 +503,35 @@ class ShellMixin:
         self.set_status("🌐 正在 中→英→中 回译...", "#89dceb")
 
         import threading
-        holder = {}
+        holder = {"phase": "init"}
 
         def _work():
             try:
-                en = translator.translate(raw, mode=mode)
-                holder["en"] = en
-                # 回译依赖 Qwen；无实例或英文与原文相同（未真正翻译）时跳过
-                if en and en.strip() and en.strip() != raw \
-                        and getattr(translator, "qwen_enhancer", None):
-                    holder["back"] = translator.translate(en, target_lang="zh")
-                else:
-                    holder["back"] = ""
+                from utils.prompt_enhancer import get_enhancer
+                enh = get_enhancer()
+                was_loaded = getattr(enh, "model", None) is not None
+                prev_qwen = getattr(translator, "qwen_enhancer", None)
+                try:
+                    # AI 相关模式：确保翻译服务手里有 Qwen 实例，
+                    # 否则 zh→en 会悄悄降级成词典，对比结果不代表 AI 水平
+                    if mode != "dict" and prev_qwen is None:
+                        translator.qwen_enhancer = enh
+                    holder["phase"] = "zh2en"
+                    en = translator.translate(raw, mode=mode)
+                    holder["en"] = en
+                    # 回译必须走 AI：模型已卸载则现载（点对比才载入），
+                    # 完成后若原本是卸载状态则再次卸下，不占生图显存
+                    if en and en.strip() and en.strip() != raw:
+                        holder["phase"] = "en2zh"
+                        back = enh.translate(en, target_lang="zh")
+                        holder["back"] = back \
+                            if back and back.strip() != en.strip() else ""
+                    else:
+                        holder["back"] = ""
+                finally:
+                    translator.qwen_enhancer = prev_qwen
+                    if not was_loaded and getattr(enh, "model", None) is not None:
+                        enh.unload(reason="回译对比完成，释放显存")
             except Exception as e:
                 holder["err"] = str(e)
 
@@ -527,6 +544,12 @@ class ShellMixin:
 
         def _poll():
             if t.is_alive():
+                phase = holder.get("phase")
+                if phase == "zh2en":
+                    self.set_status("🌐 中→英 翻译中...", "#89dceb")
+                elif phase == "en2zh":
+                    self.set_status("🧠 载入 AI 回译 英→中（首次需加载模型，请稍候）...",
+                                    "#89dceb")
                 return
             timer.stop()
             if btn is not None:
@@ -577,7 +600,7 @@ class ShellMixin:
                    "建议换「AI 智能改写」模式或手动修改英文")
         else:
             _block("③ 回译（英→中）",
-                   "（Qwen 未加载或正忙，无法回译；②即实际送入模型的英文，"
+                   "（AI 正忙或回译失败；②即实际送入模型的英文，"
                    "可直接对照①检查）")
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         bb.rejected.connect(dlg.reject)

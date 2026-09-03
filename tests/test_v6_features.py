@@ -172,8 +172,9 @@ def test_filmstrip_full_backfill():
 
 
 def test_trans_compare():
-    """翻译回译对比：按钮存在；空提示词早退；stub 翻译三轮内容正确。"""
+    """翻译回译对比：点对比时按需载入 AI 做英→中回译，原本未加载则用完即卸。"""
     import time as _t
+    import utils.prompt_enhancer as pe
     from PyQt6.QtWidgets import QTextEdit
 
     win = _mini_app()
@@ -183,28 +184,62 @@ def test_trans_compare():
     win.txt_prompt.setPlainText("")
     win._on_trans_compare()
 
+    # ── stub：假翻译服务 + 假 Qwen 增强器（不加载真模型）──
+    class _FakeEnh:
+        def __init__(self, loaded=False):
+            self.model = object() if loaded else None
+            self.load_calls = 0
+            self.unload_calls = 0
+
+        def load(self, model_key=None):
+            self.load_calls += 1
+            self.model = object()
+
+        def unload(self, reason=""):
+            self.unload_calls += 1
+            self.model = None
+
+        def translate(self, text, target_lang="en"):
+            assert target_lang == "zh"
+            if self.model is None:
+                self.load()   # 模拟真实行为：推理前自动载入
+            return "猫, 女孩"
+
     class _FakeTr:
-        qwen_enhancer = object()   # 假装 Qwen 就绪
+        qwen_enhancer = None
 
         def translate(self, text, mode="auto", target_lang="en"):
             return "cat, girl" if target_lang == "en" else "猫, 女孩"
 
-    win.translator = _FakeTr()
-    win.txt_prompt.setPlainText("一个女孩和猫")
-    win._on_trans_compare()
+    def _run_and_get_dlg(fake_enh):
+        pe.get_enhancer = lambda: fake_enh     # 打桩单例
+        win.translator = _FakeTr()
+        win.txt_prompt.setPlainText("一个女孩和猫")
+        win.btn_trans_compare.setEnabled(True)
+        win._on_trans_compare()
+        deadline = _t.time() + 5
+        while not win.btn_trans_compare.isEnabled() and _t.time() < deadline:
+            _APP.processEvents()
+            _t.sleep(0.05)
+        assert win.btn_trans_compare.isEnabled(), "回译线程未收尾"
+        dlg = getattr(win, "_trans_compare_dlg", None)
+        assert dlg is not None, "对比弹窗未创建"
+        return dlg
 
-    deadline = _t.time() + 5
-    while not win.btn_trans_compare.isEnabled() and _t.time() < deadline:
-        _APP.processEvents()
-        _t.sleep(0.05)
-    assert win.btn_trans_compare.isEnabled(), "回译线程未收尾"
-
-    dlg = getattr(win, "_trans_compare_dlg", None)
-    assert dlg is not None, "对比弹窗未创建"
+    # 场景 1：AI 原本未加载 → 对比时载入，用完即卸
+    enh1 = _FakeEnh(loaded=False)
+    dlg = _run_and_get_dlg(enh1)
     texts = [te.toPlainText() for te in dlg.findChildren(QTextEdit)]
     assert texts[0] == "一个女孩和猫", texts
     assert texts[1] == "cat, girl", texts
     assert texts[2] == "猫, 女孩", texts
+    assert enh1.unload_calls >= 1, "原本未加载的 AI 用完应卸下释放显存"
+
+    # 场景 2：AI 原本已在显存 → 不再重复载入，也不应被卸掉
+    enh2 = _FakeEnh(loaded=True)
+    _run_and_get_dlg(enh2)
+    assert enh2.load_calls == 0, "已加载不应重复载入"
+    assert enh2.unload_calls == 0, "原本已加载的 AI 不应被卸掉"
     print("PASS test_trans_compare")
 
 
