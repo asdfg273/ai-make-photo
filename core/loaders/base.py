@@ -41,12 +41,27 @@ class BaseLoader:
     # ---- 可选钩子 ----
     def apply_vram(self, result, ctx):
         from utils.vram_manager import VRAMManager
-        VRAMManager.apply_optimal_strategy(
-            result.txt2img, is_sdxl=ctx.info.caps.heavy_vram)
+        heavy = ctx.arch_id in ("sdxl", "pony", "sd3")
+        VRAMManager.apply_optimal_strategy(result.txt2img, is_sdxl=heavy)
         VRAMManager.print_status()
 
     def derive_pipes(self, result, ctx):
         pass
+
+    def derive_from_components(self, result, ctx, i2i_cls, inp_cls):
+        """从 txt2img 的组件派生 img2img / inpaint 管线（SD 系通用）。
+
+        派生管线共享 unet/vae/text_encoder 等组件，只做轻量优化，
+        不重复 cpu_offload。子类在 derive_pipes 里调用本方法即可。
+        """
+        comps = result.txt2img.components
+        for attr, cls in (("img2img", i2i_cls), ("inpaint", inp_cls)):
+            try:
+                p = cls(**comps)
+                ctx.manager._apply_light_optimizations(p, name=attr)
+                setattr(result, attr, p)
+            except Exception as e:
+                logger.warning(f"⚠️ {attr} pipe 创建失败: {e}")
 
     def post_load(self, result, ctx, model_path):
         """caps 驱动的通用收尾，各架构共用"""

@@ -5,12 +5,16 @@ logger = logging.getLogger(__name__)
 
 
 class SingleFileLoader(BaseLoader):
-    arch_ids = ("sd15", "sdxl", "sd3", "flux")
+    """通用单文件加载器：sd3 / flux。
+
+    sd15/sd21 与 sdxl 已拆分为独立加载器（sd15.py / sdxl.py），
+    本类只保留尚未拆分架构的兜底逻辑。
+    """
+    arch_ids = ("sd3", "flux")
 
     CONFIG_REPO = {
         "flux": "black-forest-labs/FLUX.1-schnell",
         "sd3":  "stabilityai/stable-diffusion-3-medium-diffusers",
-        "sdxl": "stabilityai/stable-diffusion-xl-base-1.0",
     }
 
     def _pipe_classes(self, arch_id):
@@ -19,10 +23,6 @@ class SingleFileLoader(BaseLoader):
             "flux": (D.FluxPipeline, D.FluxImg2ImgPipeline, D.FluxInpaintPipeline),
             "sd3":  (D.StableDiffusion3Pipeline, D.StableDiffusion3Img2ImgPipeline,
                      D.StableDiffusion3Pipeline),
-            "sdxl": (D.StableDiffusionXLPipeline, D.StableDiffusionXLImg2ImgPipeline,
-                     D.StableDiffusionXLInpaintPipeline),
-            "sd15": (D.StableDiffusionPipeline, D.StableDiffusionImg2ImgPipeline,
-                     D.StableDiffusionInpaintPipeline),
         }[arch_id]
 
     def build(self, model_path, ctx):
@@ -33,8 +33,6 @@ class SingleFileLoader(BaseLoader):
             "use_safetensors": True,
             "low_cpu_mem_usage": True,
         }
-        if ctx.arch_id == "sd15":
-            kwargs["safety_checker"] = None
         if ctx.arch_id in self.CONFIG_REPO:
             kwargs["config"] = self.CONFIG_REPO[ctx.arch_id]
             logger.info(f"📋 使用标准 config: {kwargs['config']}")
@@ -48,12 +46,4 @@ class SingleFileLoader(BaseLoader):
 
     def derive_pipes(self, result, ctx):
         i2i_cls, inp_cls = result.extras["classes"]
-        comps = result.txt2img.components
-        for attr, cls, name in ((("img2img"), i2i_cls, "img2img"),
-                                (("inpaint"), inp_cls, "inpaint")):
-            try:
-                p = cls(**comps)
-                ctx.manager._apply_light_optimizations(p, name=name)
-                setattr(result, attr, p)
-            except Exception as e:
-                logger.warning(f"⚠️ {name} pipe 创建失败: {e}")
+        self.derive_from_components(result, ctx, i2i_cls, inp_cls)
