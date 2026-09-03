@@ -208,6 +208,21 @@ def test_trans_compare():
     print("PASS test_trans_compare")
 
 
+def test_filmstrip_context_reuse():
+    """胶片条右键「套用参数」→ reuse_requested → 回填（不跳页）；视频跳过。"""
+    win = _mini_app()
+    tmp = tempfile.mkdtemp()
+    png = os.path.join(tmp, "c.png"); _make_png(png)
+    calls = []
+    win.reuse_params_from_path = lambda p: calls.append(p)
+    # 信号已接线
+    win.filmstrip.reuse_requested.emit(png)
+    assert calls == [png], f"右键套用未触发: {calls}"
+    win.filmstrip.reuse_requested.emit("v.mp4")
+    assert calls == [png], "视频不应触发套用"
+    print("PASS test_filmstrip_context_reuse")
+
+
 def test_img2img_compare_snapshot():
     """图生图对比：生成管线含参考图快照逻辑（静态检查 + 信号流）。"""
     import inspect
@@ -233,7 +248,7 @@ if __name__ == "__main__":
                test_compare_toggle_without_snapshot, test_resource_monitor,
                test_hover_preview, test_filmstrip_reuse_params,
                test_filmstrip_full_backfill, test_trans_compare,
-               test_img2img_compare_snapshot):
+               test_filmstrip_context_reuse, test_img2img_compare_snapshot):
         fn()
     for w in _WINDOWS:
         w.close()

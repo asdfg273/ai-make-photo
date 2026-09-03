@@ -85,6 +85,7 @@ class ShellMixin:
             self.gallery.items_changed.connect(self._refresh_filmstrip)
             self.gallery.video_selected.connect(self._on_gallery_video_picked)
             self.filmstrip.media_clicked.connect(self._on_filmstrip_clicked)
+            self.filmstrip.reuse_requested.connect(self._on_filmstrip_reuse)
             self._refresh_filmstrip()
 
         # ── 契约自检 + 分级降级 ──
@@ -204,6 +205,17 @@ class ShellMixin:
                 self.reuse_params_from_path(path)
             except Exception as e:
                 logger.warning(f"胶片条复用参数失败: {e}")
+
+    def _on_filmstrip_reuse(self, path: str):
+        """胶片条右键「套用参数」→ 直接全量回填，不跳页。"""
+        from ui.gallery_panel import GalleryPanel
+        if GalleryPanel.media_kind(path) == "video":
+            return
+        if hasattr(self, "reuse_params_from_path"):
+            try:
+                self.reuse_params_from_path(path)
+            except Exception as e:
+                logger.warning(f"胶片条套用参数失败: {e}")
 
     def _on_gallery_video_picked(self, path: str):
         """画廊双击视频 → 跳动画页播放。"""

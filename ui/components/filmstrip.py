@@ -11,6 +11,7 @@ class FilmStrip(QListWidget):
     """横向缩略图条：展示最近生成的图片/动画，点击发出 media_clicked(path)。"""
 
     media_clicked = pyqtSignal(str)
+    reuse_requested = pyqtSignal(str)   # 右键「套用参数」
 
     def __init__(self, parent=None, gallery=None):
         super().__init__(parent)
@@ -48,7 +49,7 @@ class FilmStrip(QListWidget):
                     96, 96,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation)))
-        item.setToolTip(os.path.basename(path))
+        item.setToolTip(f"{os.path.basename(path)}\n单击: 选中并回填参数\n右键: 更多操作")
         item.setData(Qt.ItemDataRole.UserRole, path)
         self.addItem(item)
 
@@ -67,6 +68,11 @@ class FilmStrip(QListWidget):
             return
         g = self._gallery
         menu = QMenu(self)
+        is_video = GalleryPanel.media_kind(path) == "video"
+        act_reuse = None
+        if not is_video:
+            act_reuse = menu.addAction("🔁 套用参数到生成区")
+            menu.addSeparator()
         is_fav = os.path.abspath(path) in g._favs
         act_fav = menu.addAction("💔 取消收藏" if is_fav else "⭐ 加入收藏")
         act_folder = menu.addAction("📁 打开所在文件夹")
@@ -75,7 +81,9 @@ class FilmStrip(QListWidget):
         act_del = menu.addAction("❌ 删除文件")
 
         chosen = menu.exec(self.viewport().mapToGlobal(pos))
-        if chosen == act_fav:
+        if act_reuse is not None and chosen == act_reuse:
+            self.reuse_requested.emit(path)
+        elif chosen == act_fav:
             g._toggle_fav([path])
         elif chosen == act_folder:
             g._open_folder(path)
