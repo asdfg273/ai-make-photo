@@ -6,7 +6,7 @@
 import logging
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
                              QStackedWidget, QProgressBar, QLabel, QStatusBar,
-                             QScrollArea)
+                             QScrollArea, QSizePolicy)
 from PyQt6.QtCore import Qt
 
 from ui.theme import PALETTE
@@ -74,6 +74,11 @@ class ShellMixin:
                 self.center_stack.addWidget(ws)
             pw = page.params_widget()
             if pw is not None:
+                # 关键：水平策略 Ignored —— 页面内长文本控件（复选框/下拉框）
+                # 不会把滚动区撑爆，否则 400px 面板右侧控件被整体裁掉
+                sp = pw.sizePolicy()
+                sp.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+                pw.setSizePolicy(sp)
                 self.params_stack.addWidget(pw)
         self.nav.page_selected.connect(self._on_page_selected)
         if PAGES:
@@ -186,21 +191,31 @@ class ShellMixin:
         self.filmstrip.refresh(paths)
 
     def _on_filmstrip_clicked(self, path: str):
-        """点击胶片条 → 跳画廊页选中对应项，并直接复用该图参数。"""
-        self.nav.select("gallery")
+        """单击胶片条 → 原地全量回填参数 + 更新预览，不跳页。
+
+        之前会跳到画廊页，但画廊页没有参数面板，用户看不到回填结果，
+        体验等同"没回填"。现在停在当前页（通常在文生图页），
+        回填后可直接点生成。"""
         gallery = getattr(self, "gallery", None)
-        if gallery is None:
-            return
-        for i in range(gallery.list_widget.count()):
-            item = gallery.list_widget.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == path:
-                gallery.list_widget.setCurrentItem(item)
-                gallery.list_widget.scrollToItem(item)
-                break
-        # 图片直接复用参数回填生成区；视频无参数可复用
+        if gallery is not None:
+            for i in range(gallery.list_widget.count()):
+                item = gallery.list_widget.item(i)
+                if item.data(Qt.ItemDataRole.UserRole) == path:
+                    gallery.list_widget.setCurrentItem(item)
+                    break
         from ui.gallery_panel import GalleryPanel
-        if GalleryPanel.media_kind(path) == "image" \
-                and hasattr(self, "reuse_params_from_path"):
+        if GalleryPanel.media_kind(path) != "image":
+            return
+        # 预览区同步显示该图
+        try:
+            from PyQt6.QtGui import QPixmap
+            if hasattr(self, "lbl_preview"):
+                self.lbl_preview.set_pixmap(QPixmap(path))
+            self.last_generated_path = path
+            self.current_generated_path = path
+        except Exception:
+            pass
+        if hasattr(self, "reuse_params_from_path"):
             try:
                 self.reuse_params_from_path(path)
             except Exception as e:
@@ -246,15 +261,27 @@ class ShellMixin:
         self.core_area.setContentsMargins(0, 0, 0, 0)
         from ui.core_panel import build_core, build_gen_area
         build_core(self, self.core_area)
+        # 水平 Ignored：长文本控件不再撑爆 400px 面板（否则右侧控件被裁掉）
+        _sp = self.core_wrap.sizePolicy()
+        _sp.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        self.core_wrap.setSizePolicy(_sp)
         clay.addWidget(self.core_wrap)
 
         self.params_stack = QStackedWidget() # 页面专属区
+        _sp = self.params_stack.sizePolicy()
+        _sp.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        self.params_stack.setSizePolicy(_sp)
         clay.addWidget(self.params_stack)
 
         self.shared_groups = QVBoxLayout()   # 共享折叠分组（LoRA/CN/高级/X-Y）
         from ui.shared_groups import build_shared_groups
         self._group_sections = build_shared_groups(self, self.shared_groups)
-        clay.addLayout(self.shared_groups)
+        shared_wrap = QWidget()
+        shared_wrap.setLayout(self.shared_groups)
+        _sp = shared_wrap.sizePolicy()
+        _sp.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        shared_wrap.setSizePolicy(_sp)
+        clay.addWidget(shared_wrap)
         clay.addStretch()
 
         self.params_scroll.setWidget(content)

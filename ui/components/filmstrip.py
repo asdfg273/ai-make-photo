@@ -73,6 +73,7 @@ class FilmStrip(QListWidget):
         if not is_video:
             act_reuse = menu.addAction("🔁 套用参数到生成区")
             menu.addSeparator()
+        act_meta = menu.addAction("📋 查看元数据")
         is_fav = os.path.abspath(path) in g._favs
         act_fav = menu.addAction("💔 取消收藏" if is_fav else "⭐ 加入收藏")
         act_folder = menu.addAction("📁 打开所在文件夹")
@@ -83,6 +84,8 @@ class FilmStrip(QListWidget):
         chosen = menu.exec(self.viewport().mapToGlobal(pos))
         if act_reuse is not None and chosen == act_reuse:
             self.reuse_requested.emit(path)
+        elif chosen == act_meta:
+            g._show_meta_for(path)
         elif chosen == act_fav:
             g._toggle_fav([path])
         elif chosen == act_folder:

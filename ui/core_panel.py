@@ -35,6 +35,9 @@ def build_core(host, layout: QVBoxLayout) -> None:
     gm.setSpacing(8)
 
     host.combo_model_type = QComboBox()
+    host.combo_model_type.setMinimumContentsLength(8)
+    host.combo_model_type.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
     _seen_subdirs = set()
     for _arch_id, _info in REGISTRY.items():
         if not _info.caps.is_base_model:
@@ -53,6 +56,10 @@ def build_core(host, layout: QVBoxLayout) -> None:
     host.combo_model = QComboBox()
     host.combo_model.setSizePolicy(
         QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    # 模型文件名很长，最小宽度按 8 个字符算，防止撑爆面板
+    host.combo_model.setMinimumContentsLength(8)
+    host.combo_model.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
     _wire(host, host.combo_model.currentIndexChanged, "on_model_selected")
     gm.addRow("SD 模型:", host.combo_model)
 
@@ -161,8 +168,12 @@ def build_core(host, layout: QVBoxLayout) -> None:
     for _k, _c in PromptEnhancer.MODEL_REGISTRY.items():
         host.combo_ai_model.addItem(_c["label"], _k)
     host.combo_ai_model.setToolTip("改写/识图模型档位，切换后下次调用生效")
+    # 关键：最小宽度按 4 个字符算，否则长档位名会撑爆右侧面板（右侧控件被裁掉）
+    host.combo_ai_model.setMinimumContentsLength(4)
+    host.combo_ai_model.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
     _wire(host, host.combo_ai_model.currentIndexChanged, "_on_ai_model_changed")
-    prompt_btn_row.addWidget(host.combo_ai_model)
+    prompt_btn_row.addWidget(host.combo_ai_model, 1)
 
     # ─── 翻译模式选择 ───
     row_trans = QHBoxLayout()
@@ -177,6 +188,9 @@ def build_core(host, layout: QVBoxLayout) -> None:
         "AI 智能改写",
         " 词典优先 + AI 兜底 ",
     ])
+    host.combo_trans_mode.setMinimumContentsLength(6)
+    host.combo_trans_mode.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
     host.combo_trans_mode.setCurrentIndex(2)
     host.combo_trans_mode.setToolTip(
         " 纯词典: 只用 JSON 词典查词, 速度快但不通顺\n"
