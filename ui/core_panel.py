@@ -183,6 +183,15 @@ def build_core(host, layout: QVBoxLayout) -> None:
         " AI 改写: 每次都调 Qwen, 效果最好但慢\n"
         "混合模式: 词典命中直接用, 未命中才调 AI ")
     row_trans.addWidget(host.combo_trans_mode, 1)
+
+    host.btn_trans_compare = QPushButton("🔁 对比")
+    host.btn_trans_compare.setToolTip(
+        "中→英→中 回译对比\n"
+        "把当前提示词按所选模式翻成英文（即实际送入模型的文本），\n"
+        "再让 AI 把英文翻回中文，检查翻译是否有幻觉/漏词，\n"
+        "避免词不达意导致生图质量不佳")
+    _wire(host, host.btn_trans_compare.clicked, "_on_trans_compare")
+    row_trans.addWidget(host.btn_trans_compare)
     gp.addLayout(row_trans)
 
     layout.addWidget(grp_prompt)

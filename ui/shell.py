@@ -440,6 +440,114 @@ class ShellMixin:
         else:
             stack.setCurrentIndex(0)
 
+    # ---------- 翻译回译对比 ----------
+    def _on_trans_compare(self):
+        """中→英→中 回译对比：检查 AI 翻译是否有幻觉/漏词。"""
+        raw = self.txt_prompt.toPlainText().strip() \
+            if hasattr(self, "txt_prompt") else ""
+        if not raw:
+            self.set_status("⚠️ 提示词为空，无法回译对比", "#ff7a17")
+            return
+        translator = getattr(self, "translator", None)
+        if translator is None:
+            self.set_status("⚠️ 翻译服务未就绪", "#ff7a17")
+            return
+
+        mode_idx = self.combo_trans_mode.currentIndex() \
+            if hasattr(self, "combo_trans_mode") else 2
+        mode = ["dict", "ai", "auto"][mode_idx]
+
+        btn = getattr(self, "btn_trans_compare", None)
+        if btn is not None:
+            btn.setEnabled(False)
+            btn.setText("⏳ 翻译中")
+        self.set_status("🌐 正在 中→英→中 回译...", "#89dceb")
+
+        import threading
+        holder = {}
+
+        def _work():
+            try:
+                en = translator.translate(raw, mode=mode)
+                holder["en"] = en
+                # 回译依赖 Qwen；无实例或英文与原文相同（未真正翻译）时跳过
+                if en and en.strip() and en.strip() != raw \
+                        and getattr(translator, "qwen_enhancer", None):
+                    holder["back"] = translator.translate(en, target_lang="zh")
+                else:
+                    holder["back"] = ""
+            except Exception as e:
+                holder["err"] = str(e)
+
+        t = threading.Thread(target=_work, daemon=True)
+        t.start()
+
+        from PyQt6.QtCore import QTimer
+        timer = QTimer(self)
+        timer.setInterval(200)
+
+        def _poll():
+            if t.is_alive():
+                return
+            timer.stop()
+            if btn is not None:
+                btn.setEnabled(True)
+                btn.setText("🔁 对比")
+            self._show_trans_compare(raw, holder, mode)
+
+        timer.timeout.connect(_poll)
+        timer.start()
+        self._trans_poll_timer = timer  # 防 GC
+
+    def _show_trans_compare(self, raw: str, holder: dict, mode: str):
+        from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QTextEdit,
+                                     QLabel, QDialogButtonBox)
+        if "err" in holder:
+            self.set_status(f"❌ 回译失败: {holder['err']}", "#f38ba8")
+            return
+        en = holder.get("en", "")
+        back = holder.get("back", "")
+        if not en:
+            self.set_status("⚠️ 翻译结果为空", "#ff7a17")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🔁 翻译回译对比（检查幻觉）")
+        dlg.resize(560, 520)
+        v = QVBoxLayout(dlg)
+
+        def _block(title, text, hint=None):
+            lbl = QLabel(title)
+            lbl.setProperty("role", "title")
+            v.addWidget(lbl)
+            te = QTextEdit()
+            te.setReadOnly(True)
+            te.setPlainText(text)
+            v.addWidget(te, 1)
+            if hint:
+                h = QLabel(hint)
+                h.setProperty("role", "hint")
+                h.setWordWrap(True)
+                v.addWidget(h)
+
+        _block("① 原文（中文）", raw)
+        _block(f"② AI 英文（实际送入模型 · 模式 {mode}）", en)
+        if back and back.strip() and back.strip() != en.strip():
+            _block("③ 回译（英→中，对照①检查是否词不达意）", back,
+                   "💡 若③与①语义偏差大，说明②有幻觉/漏词，"
+                   "建议换「AI 智能改写」模式或手动修改英文")
+        else:
+            _block("③ 回译（英→中）",
+                   "（Qwen 未加载或正忙，无法回译；②即实际送入模型的英文，"
+                   "可直接对照①检查）")
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
+        v.addWidget(bb)
+        dlg.show()   # 非模态，方便对照主窗口
+        self._trans_compare_dlg = dlg  # 防 GC
+        self.set_status("✅ 回译完成，请对照 ①/③ 检查", "#a6e3a1")
+
     # ---------- 显存/内存常驻监控 ----------
     def _setup_resource_monitor(self):
         from PyQt6.QtCore import QTimer

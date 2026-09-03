@@ -621,14 +621,81 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             self._set_status(f"❌ 发送失败: {e}", "#f38ba8")
 
     def reuse_params_from_path(self, path: str):
+        """胶片条/画廊单击复用：解析 PNG 内嵌参数，全量回填生成区
+        （prompt/负面/steps/cfg/seed/采样器/分辨率/模型）。"""
         try:
-            if hasattr(self, 'read_png_info'):
-                self.read_png_info(path=path)
-                self._set_status("🔁 已套用 PNG 参数", "#a6e3a1")
-            else:
-                self._set_status("⚠️ 未找到 read_png_info", "#f9e2af")
+            img = Image.open(path)
+            params = (img.info or {}).get("parameters", "")
         except Exception as e:
             self._set_status(f"❌ 复用失败: {e}", "#f38ba8")
+            return
+        if not params:
+            self._set_status("⚠️ 该图无内嵌生成参数，无法回填", "#f9e2af")
+            return
+
+        # ── 拆 正/负 prompt 与参数行 ──
+        pos, neg, info_part = "", "", ""
+        if "Negative prompt:" in params:
+            pos_part, rest = params.split("Negative prompt:", 1)
+            pos = pos_part.strip()
+            rest_lines = rest.strip().split("\n", 1)
+            neg = rest_lines[0].strip()
+            info_part = rest_lines[1].strip() if len(rest_lines) > 1 else ""
+        else:
+            lines = params.split("\n", 1)
+            pos = lines[0].strip()
+            info_part = lines[1].strip() if len(lines) > 1 else ""
+
+        # ── 解析 "Steps: 30, Sampler: x, CFG scale: 7.0, Seed: n, Size: WxH, Model: m" ──
+        kv = {}
+        for seg in info_part.split(","):
+            if ":" in seg:
+                k, v = seg.split(":", 1)
+                kv[k.strip().lower()] = v.strip()
+
+        meta = {"prompt": pos, "negative_prompt": neg}
+        try:
+            if kv.get("steps"):
+                meta["steps"] = int(float(kv["steps"]))
+            if kv.get("cfg scale"):
+                meta["cfg_scale"] = float(kv["cfg scale"])
+            if kv.get("seed"):
+                meta["seed"] = int(float(kv["seed"]))
+            if kv.get("sampler"):
+                meta["sampler"] = kv["sampler"]
+            if kv.get("size") and "x" in kv["size"].lower():
+                _w, _h = kv["size"].lower().split("x", 1)
+                meta["width"], meta["height"] = int(_w), int(_h)
+        except (ValueError, TypeError) as e:
+            logger.debug(f"[reuse] 数值解析跳过: {e}")
+
+        # 统一走画廊参数套用（prompt/steps/cfg/seed/采样器/隐藏尺寸字段）
+        self._on_apply_gallery_params(meta)
+
+        # 尺寸回填到可见的 combo_res（列表没有则动态加入）
+        if meta.get("width") and meta.get("height") and hasattr(self, "combo_res"):
+            res_text = f'{meta["width"]}x{meta["height"]}'
+            if self.combo_res.findText(res_text) < 0:
+                self.combo_res.addItem(res_text)
+            self.combo_res.setCurrentText(res_text)
+
+        # 模型按文件名模糊匹配回填（列表里存在才切）
+        model_name = kv.get("model")
+        if model_name and hasattr(self, "combo_model"):
+            for i in range(self.combo_model.count()):
+                if model_name.lower() in self.combo_model.itemText(i).lower():
+                    self.combo_model.setCurrentIndex(i)
+                    break
+
+        if hasattr(self, "append_log"):
+            self.append_log(
+                f"🔁 复用参数: {os.path.basename(path)} → "
+                f"steps={meta.get('steps', '-')} cfg={meta.get('cfg_scale', '-')} "
+                f"seed={meta.get('seed', '-')} "
+                f"size={meta.get('width', '?')}x{meta.get('height', '?')} "
+                f"sampler={meta.get('sampler', '-')}",
+                "#a6e3a1")
+        self._set_status(f"🔁 已回填全部参数: {os.path.basename(path)}", "#a6e3a1")
 
     def send_path_to_img2img(self, path: str):
         self.last_generated_path = path

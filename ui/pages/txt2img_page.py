@@ -56,7 +56,10 @@ class Txt2ImgPage(PageBase):
         host.btn_compare = QPushButton("⚖️ 对比")
         host.btn_compare.setCheckable(True)
         host.btn_compare.setEnabled(False)   # 有修前快照后启用
-        host.btn_compare.setToolTip("修前 / 修后 对比滑条（需开启 Hires.fix 或 ADetailer）")
+        host.btn_compare.setToolTip(
+            "修前 / 修后 对比滑条\n"
+            "文生图: 需开启 Hires.fix 或 ADetailer（对比精修前后）\n"
+            "图生图: 加载参考图生成后可用（对比参考图与结果）")
         for b in (host.btn_open_editor, host.btn_save_as,
                   host.btn_send_img2img, host.btn_send_inpaint,
                   host.btn_compare):

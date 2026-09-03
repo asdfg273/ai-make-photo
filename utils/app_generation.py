@@ -977,6 +977,16 @@ class GenerationMixin:
                 except Exception as _e:
                     logger.warning(f"修前快照保存失败(忽略): {_e}")
 
+            # 图生图/参考图模式：修前 = 参考图本身（覆盖阶段 1 快照，语义更直观）
+            try:
+                _ref = getattr(self, 'ref_image_path', None)
+                _guided = (ctx.get('use_ipa') or ctx.get('use_reference_only')
+                           or ctx.get('pose_transfer_used') or ctx.get('use_img2img'))
+                if _ref and _guided and os.path.exists(_ref):
+                    self._bridge.prefix_signal.emit(_ref)
+            except Exception as _e:
+                logger.warning(f"参考图快照失败(忽略): {_e}")
+
             # ── 阶段 2: Hires.fix ──
             if self._chk(getattr(self, 'chk_hires', None)):
                 if ctx['use_ipa']:
