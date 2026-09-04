@@ -34,8 +34,23 @@ class AIToolsMixin:
             cv_img = cv2.cvtColor(np.array(self.current_img), cv2.COLOR_RGB2BGR)
             gray   = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
 
-            cascade_path  = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            face_cascade  = cv2.CascadeClassifier(cascade_path)
+            cascade_candidates = [
+                "weights/lbpcascade_animeface.xml",
+                cv2.data.haarcascades + "haarcascade_frontalface_default.xml",
+            ]
+            cascade_path = None
+            for p in cascade_candidates:
+                import os
+                if os.path.isfile(p):
+                    cascade_path = p
+                    break
+            
+            if cascade_path is None:
+                raise FileNotFoundError(
+                    "未找到人脸检测模型（animeface 或 haarcascade）"
+                )
+            
+            face_cascade = cv2.CascadeClassifier(cascade_path)
             faces = face_cascade.detectMultiScale(
                 gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
             )
@@ -51,6 +66,7 @@ class AIToolsMixin:
 
             result_img  = self.current_img.copy()
             result_mask = self.mask_img.copy()
+            success_count = 0
 
             for idx, (x, y, w, h) in enumerate(faces):
                 _status(f"🧑‍🎨 ADetailer: 正在修复第 {idx+1}/{len(faces)} 张脸...", "#f9e2af")
@@ -68,6 +84,12 @@ class AIToolsMixin:
                 try:
                     from core.model_manager import ModelManager
                     manager = ModelManager()
+                    
+                    if manager.img2img_pipe is None:
+                        raise RuntimeError(
+                            "img2img 管线未加载，请先加载底模"
+                        )
+                    
                     enhanced = manager.img2img_pipe(
                         prompt=(
                             "highly detailed face, perfect eyes, "
@@ -96,13 +118,43 @@ class AIToolsMixin:
 
                     draw_mask = ImageDraw.Draw(result_mask)
                     draw_mask.ellipse([x1, y1, x2, y2], fill=255)
+                    
+                    success_count += 1
 
-                except Exception:
-                    continue
+                except RuntimeError as e:
+                    # 管线未加载、显存不足等，记录后停止
+                    import logging
+                    logging.getLogger(__name__).error(
+                        f"ADetailer 人脸 {idx+1} 失败: {e}"
+                    )
+                    QTimer.singleShot(
+                        0,
+                        lambda err=str(e): QMessageBox.critical(
+                            self, "错误", f"修复中止: {err}"
+                        ),
+                    )
+                    return  # 不再处理剩余人脸
+                
+                except Exception as e:
+                    # 单张脸修复失败（裁剪越界、推理报错等），跳过继续
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"ADetailer 人脸 {idx+1} 跳过: {e}"
+                    )
 
-            _status("✅ ADetailer 处理完成", "#a6e3a1")
+            if success_count == 0:
+                _status("⚠️ ADetailer: 所有人脸均修复失败", "#f38ba8")
+                QTimer.singleShot(
+                    0,
+                    lambda: QMessageBox.warning(
+                        self, "提示", "未能成功修复任何人脸，请检查日志。"
+                    ),
+                )
+                return
+
+            _status(f"✅ ADetailer 完成 ({success_count}/{len(faces)} 张)", "#a6e3a1")
             QTimer.singleShot(
-                0, lambda: self._on_adetailer_complete(result_img, result_mask)
+                0, lambda: self._on_adetailer_complete(result_img, result_mask, success_count, len(faces))
             )
 
         except Exception as e:
@@ -116,11 +168,15 @@ class AIToolsMixin:
             self._adetailer_running = False
 
     def _on_adetailer_complete(
-        self, result_img: Image.Image, result_mask: Image.Image
+        self, result_img: Image.Image, result_mask: Image.Image,
+        success: int, total: int
     ):
         self.push_history(self.current_img, self.mask_img)
-        self._filter_anchor = None   # AI 修复后,滤镜锚点失效
+        self._filter_anchor = None
         self.current_img = result_img
         self.mask_img    = result_mask
         self.update_canvas(self.current_img)
-        QMessageBox.information(self, "成功", "ADetailer 人脸修复完成！")
+        QMessageBox.information(
+            self, "成功",
+            f"ADetailer 完成：{success}/{total} 张人脸修复成功。"
+        )

@@ -1,41 +1,75 @@
-photo_turn/  修图编辑器模块(自包含, PyQt6)
+photo_turn/  修图编辑器模块(自包含, PyQt6) —— 共 7 个 .py, 约 2070 行
 │
-├── pro_editor_qt.py        # 主窗口 ProImageEditor:布局/状态栏/快捷键/保存导出
-│                           #   状态栏:👁按住对比原图 / ▦构图网格 / ⛶全屏 / 🖼适配 / 📤另存为
+├── __init__.py             (5 行)  # 导出 ProImageEditor, 供 utils/app_events.py 调用
 │
-├── components.py           # ImageCanvas:OpenGL 画布
-│                           #   • 滚轮缩放(光标锚点) / 中键平移 / Ctrl+0 适配窗口
-│                           #   • 三分构图网格(可开关)
-│                           #   • drawPixmap(目标矩形) GPU 缩放,坐标映射共用视图几何
-│                           #   • 画笔光标圈(直径随缩放,白色外圈+笔刷色内圈)
-│                           #   • sig_hover(坐标+色值) / sig_view_changed 信号
-│                           # CropOverlay:框选预览控件(备用)
+├── pro_editor_qt.py       (740 行) # 主窗口 ProImageEditor(QDialog):
+│   │                              #   Mixin 组合: HistoryMixin + FiltersMixin +
+│   │                              #              AIToolsMixin + ToolsEventsMixin
+│   │                              #   • 默认最大化全屏 / 模态, 图像 2048 限幅载入
+│   │                              #   • 左侧 300px 可滚动工具面板 + GPU 画布分栏
+│   │                              #   • 底部状态栏: 👁按住对比原图 / ▦网格 / ⛶全屏(F11)
+│   │                              #     🖼适配(Ctrl+0) / 📤另存为 / 💾保存并返回 / ✖取消
+│   │                              #   • 状态栏实时显示: 光标坐标+hex色值 / 图像尺寸@缩放%
+│   │                              #   • 单键快捷键 B/E/M/G(输入框聚焦时自动跳过)
+│   │                              #     + Ctrl+Z/Y/S / Esc / [ ] 微调画笔
+│   │                              #   • 关闭确认: 有未保存改动时弹「放弃修改?」Yes/No
+│   │                              #   • 保存: 提交文字 → 回调 callback_on_save
+│   │                              #     (外部据此归档 photo/ 并转局部重绘)
+│   │
+│   ├── _pil_to_qpixmap()          # PIL→QPixmap: 原始 RGBA 字节直构 QImage, 免 PNG 编码
+│   ├── _make_btn / _make_slider   # 按钮/滑块工厂(统一深色主题)
+│   ├── _build_left_panel()        # 绘图工具/画笔大小/不透明度/硬度/文字大小描边/
+│   │                              # 颜色/变换/遮罩操作/历史/7项调色/18种滤镜/AI工具
+│   └── export_image_as()          # 另存为 PNG/JPG(不影响保存回调流程)
 │
-├── mixin_tools.py          # 工具与鼠标事件 ToolsEventsMixin
-│                           #   • 统一笔画管线:画笔/橡皮/遮罩共用,硬度(柔边)+不透明度
-│                           #   • Shift+单击:从上一笔末端拉直线(PS 同款)
-│                           #   • 遮罩精修:清除/反转/羽化(可调半径)/扩边/收缩
-│                           #   • 遮罩红色叠加预览可开关
-│                           #   • 吸管取色 / 文字(中文字体优先+自动黑白描边)
-│                           #   • 裁剪(实时选区预览+比例约束:自由/1:1/4:3/3:4/16:9/9:16)
-│                           #   • 翻转/±90°旋转/任意角度旋转/等比缩放到长边
-│                           #     (均同步原图与遮罩)
+├── components.py          (305 行) # ImageCanvas(QOpenGLWidget)  GPU 画布
+│                                   #   • 滚轮以光标为锚点缩放 / 中键平移 / 双击适配
+│                                   #   • Ctrl+0 适配窗口 / 三分构图网格(可开关)
+│                                   #   • drawPixmap(目标矩形) GPU 缩放, 视图几何
+│                                   #     _target_rect() 为坐标映射唯一出口
+│                                   #   • 画笔光标圈(直径随缩放, 白外圈+笔刷色内圈)
+│                                   #   • 信号: sig_press/drag/release/right_click/
+│                                   #          sig_hover(坐标+色值)/sig_view_changed
+│                                   # CropOverlay: 框选预览控件(当前未实例化, 备用)
 │
-├── mixin_filters.py        # 色彩调整与滤镜 FiltersMixin
-│                           #   • 调色 7 项:亮度/对比度/饱和度/曝光(gamma)/色相/锐度/色温
-│                           #   • 滤镜 18 种:黑白/复古/冷色调/暖色调/胶片颗粒(向量化)
-│                           #     模糊/浮雕/边缘检测/轮廓/锐化/油画
-│                           #     负片/像素化/晕影/色调分离/素描/卡通
-│                           #   • 滤镜锚点:选「无」还原到叠加前状态
-│                           #   • 👁滤镜预览(不入历史,▶应用提交 / Esc 取消)
+├── mixin_tools.py         (528 行) # 工具与鼠标事件 ToolsEventsMixin
+│                                   #   • 模式互斥: 画笔/橡皮/遮罩/裁剪/文字/吸管
+│                                   #   • 统一笔画管线: 画笔/橡皮/遮罩共用,
+│                                   #     硬度(柔边 GaussianBlur)+不透明度(0~255)
+│                                   #   • Shift+单击: 从上一笔末端(_stroke_end)拉直线
+│                                   #   • 遮罩: 清除/反转/羽化(滑块半径)/扩边/收缩
+│                                   #     + 红色半透明叠加预览(可开关)
+│                                   #   • 吸管取色 / 文字(中文字体优先+亮度自适应黑白描边)
+│                                   #   • 裁剪(实时选区预览+比例约束: 自由/1:1/4:3/
+│                                   #     3:4/16:9/9:16) / 翻转 / ±90° / 任意角度旋转 /
+│                                   #     等比缩放长边对话框 —— 均同步原图与遮罩
 │
-├── mixin_history.py        # 撤销/重做(15 步),状态栏显示可撤销/可重做步数
-│                           #   • 脏标记:有未保存改动时关闭前弹确认
+├── mixin_filters.py       (312 行) # 色彩调整与滤镜 FiltersMixin
+│                                   #   • 调色 7 项: 亮度/对比度/饱和度/曝光(gamma)/
+│                                   #     色相(HSV 环转)/锐度/色温, 150ms 防抖
+│                                   #   • 滤镜 18 种: 黑白/复古/冷色调/暖色调/胶片颗粒
+│                                   #     (numpy 向量化)/模糊/浮雕/边缘检测/轮廓/锐化/
+│                                   #     油画/负片/像素化/晕影/色调分离/素描/卡通(cv2)
+│                                   #   • 滤镜锚点 _filter_anchor: 选「无」还原叠加前
+│                                   #   • 👁预览滤镜(不入历史) / ▶应用提交 / Esc 取消
+│                                   #   • 滤镜强度滑块(模糊半径/像素化块大小)
 │
-└── mixin_ai.py             # ADetailer 人脸修复(后台线程,羽化贴回)
+├── mixin_history.py        (54 行) # 撤销/重做 HistoryMixin
+│                                   #   • 快照(图+遮罩)栈, 上限 15 步, 越界丢最旧
+│                                   #   • 脏标记 _dirty: 有未保存改动时关闭弹确认
+│                                   #   • 状态栏显示可撤销/可重做步数
+│
+└── mixin_ai.py            (126 行) # AI 人脸修复 AIToolsMixin
+                                    #   • run_adetailer: 后台线程, _adetailer_running 防重入
+                                    #   • 检测: OpenCV 内置 haarcascade_frontalface_default
+                                    #     (非 YOLO/非 weights/lbpcascade_animeface)
+                                    #   • 修复: ModelManager().img2img_pipe 图生图
+                                    #     strength=0.35 / 25 步, 512 块放大回贴
+                                    #   • 羽化边缘矩形遮罩贴回 + 结果写入 mask_img
+                                    #   • 完成/错误通过 QTimer.singleShot 回 UI 线程提示
 
-主窗口增强(pro_editor_qt.py):
-  • 状态栏:光标坐标+hex 色值 / 图像尺寸@缩放%
-  • 单键快捷键:B画笔 E橡皮 M遮罩 G网格(输入框聚焦时不触发)
-  • 关闭确认:有未保存改动时提示「保存并关闭/直接关闭/取消」
-  • 修图保存自动归档到 photo/ 画廊(pro_edited_HHMMSS.png)并刷新画廊
+外部集成(utils/app_events.py):
+  • open_editor: ProImageEditor(当前生成图, callback_on_save=on_editor_saved)
+    → 保存后归档 photo/pro_edited_HHMMSS.png + 写 inpaint_ref/mask 转局部重绘
+  • open_gallery_to_edit: 选图后同上(全黑遮罩退化为图生图)
+  • 「发送到修脸」: _editor_auto_adetailer 置位, 打开后 400ms 自动 run_adetailer

@@ -299,6 +299,8 @@ Output ONLY the translated text.
         },
     }
     DEFAULT_MODEL_KEY = "qwen2vl_2b"
+    MAX_TAGS_POSITIVE = 0      
+    MAX_TAGS_NEGATIVE = 40
 
     # ============================================================
     #  单例
@@ -316,6 +318,7 @@ Output ONLY the translated text.
         self.model = None
         self.processor = None
         self.tokenizer = None
+
         self.model_key = self.DEFAULT_MODEL_KEY
         self.model_cfg = self.MODEL_REGISTRY[self.model_key]
         self.is_vision_model = True
@@ -326,6 +329,8 @@ Output ONLY the translated text.
         self._idle_timer = None
         self._idle_seconds = 90        # 90 秒没人用就自动释放
         self._device_used = None
+        self._ever_cuda_ok = False
+        
 
     def _touch(self):
         """刷新空闲计时器"""
@@ -385,14 +390,20 @@ Output ONLY the translated text.
             # ── 用驱动真实数据判断剩余显存 ──
             device = "cpu"
             if torch.cuda.is_available():
-                free = torch.cuda.mem_get_info()[0] / 1024**3
-                need = cfg["vram_need"]
-                if free < need:
-                    logger.warning(
-                        f"⚠️ 剩余显存 {free:.2f}GB < {need}GB，{key} 改用 CPU 加载（会较慢）")
+                # 兜底：一旦 CUDA 成功过，之后不再看 unload 后不可靠的驱动空闲值
+                if not self._ever_cuda_ok:
+                    free = torch.cuda.mem_get_info()[0] / 1024**3
+                    need = cfg["vram_need"]
+                    if free < need:
+                        logger.warning(
+                            f"⚠️ 剩余显存 {free:.2f}GB < {need}GB，{key} 改用 CPU 加载（会较慢）")
+                    else:
+                        logger.info(f"🟢 剩余显存 {free:.2f}GB，{key} 使用 CUDA")
+                        device = "cuda"
                 else:
-                    logger.info(f"🟢 剩余显存 {free:.2f}GB，{key} 使用 CUDA")
+                    logger.info(f"🟢 已确认 CUDA 可用，{key} 直接使用 CUDA（跳过显存预检）")
                     device = "cuda"
+
             self._device_used = device
 
             logger.info(f"📥 加载模型: {model_id}")
@@ -474,41 +485,104 @@ Output ONLY the translated text.
     def enhance(self, raw_prompt: str, mode: str = "positive") -> str:
         if self.model is None:
             self.load()
-        # 根据模式选择 system prompt
+
         if mode == "negative":
             system_prompt = self.SYSTEM_PROMPT_NEGATIVE
             max_tokens = 400
         else:
             system_prompt = self.SYSTEM_PROMPT_TEXT
             max_tokens = 900
-        if self.MODEL_REGISTRY[self.model_key].get("has_thinking"):
-            max_tokens += 1024
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": raw_prompt},
-        ]
-        text = self._chat_text(messages)
-        inputs = self.processor(
-            text=[text], padding=True, return_tensors="pt"
-        ).to(self.model.device)
+        has_think = self.MODEL_REGISTRY[self.model_key].get("has_thinking")
 
-        t0 = time.time()
-        with torch.inference_mode():
-            output = self.model.generate(
-                **inputs,
-                max_new_tokens=max_tokens,
-                do_sample=False,          # 翻译类任务不需要采样
-                repetition_penalty=1.02,  # 1.2 会逼模型编造新词
-                pad_token_id=self.tokenizer.eos_token_id,
+        if mode == "positive":
+            import re
+            # 切原始中文，按长度合并成 ~80 字的段
+            parts = [p.strip() for p in re.split(r"[，,；;、]|\n", raw_prompt) if p.strip()]
+            segs, cur = [], ""
+            for p in parts:
+                if len(cur) + len(p) < 80:
+                    cur = (cur + "，" + p) if cur else p
+                else:
+                    if cur:
+                        segs.append(cur)
+                    cur = p
+            if cur:
+                segs.append(cur)
+
+            results, t_all = [], time.time()
+            for i, seg in enumerate(segs):
+                seg_msgs = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": seg},
+                ]
+                seg_inputs = self.processor(
+                    text=[self._chat_text(seg_msgs)], padding=True, return_tensors="pt"
+                ).to(self.model.device)
+                n_seg = seg_inputs.input_ids.shape[1]
+                dyn = 400 + (1024 if has_think else 0)
+
+                with torch.inference_mode():
+                    out = self.model.generate(
+                        **seg_inputs,
+                        max_new_tokens=dyn,
+                        do_sample=False,
+                        repetition_penalty=1.02,
+                        pad_token_id=self.tokenizer.eos_token_id,
+                    )
+                if out[0].shape[0] - n_seg >= dyn:
+                    logger.warning(f"⚠️ 段 {i+1}/{len(segs)} 达上限 {dyn}，疑似截断")
+                tmp = self._strip_thinking(
+                    self.tokenizer.decode(out[0][n_seg:], skip_special_tokens=True).strip()
+                )
+                results.append(tmp)
+                logger.info(f"[段 {i+1}/{len(segs)}] {seg[:18]}… → {tmp[:40]}…")
+
+            # 全局去重：每段都会自带 masterpiece/best_quality，保留首次出现顺序
+            seen, merged = set(), []
+            for chunk in results:
+                for tag in chunk.split(","):
+                    tag = tag.strip()
+                    if not tag:
+                        continue
+                    key = tag.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    merged.append(tag)
+            result = ", ".join(merged)
+            logger.info(
+                f"[TEXT-positive] {len(segs)} 段，{len(merged)} tag"
+                f"（去重前 {sum(len(c.split(',')) for c in results)}），"
+                f"总耗时 {time.time()-t_all:.1f}s"
             )
-        logger.info(f"[DIAG] decode 前 model={self.model is not None} tokenizer={self.tokenizer is not None} processor={self.processor is not None}")
-        result = self.tokenizer.decode(
-            output[0][inputs.input_ids.shape[1]:],
-            skip_special_tokens=True,
-        ).strip()
-        result = self._strip_thinking(result)
-        logger.info(f"[TEXT-{mode}] 耗时 {time.time()-t0:.1f}s")
+        else:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": raw_prompt},
+            ]
+            inputs = self.processor(
+                text=[self._chat_text(messages)], padding=True, return_tensors="pt"
+            ).to(self.model.device)
+            n_in = inputs.input_ids.shape[1]
+            dyn = max_tokens + (1024 if has_think else 0)
+
+            t0 = time.time()
+            with torch.inference_mode():
+                output = self.model.generate(
+                    **inputs,
+                    max_new_tokens=dyn,
+                    do_sample=False,
+                    repetition_penalty=1.02,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                )
+            if output[0].shape[0] - n_in >= dyn:
+                logger.warning(f"⚠️ negative 达上限 {dyn}，疑似截断")
+            result = self._strip_thinking(
+                self.tokenizer.decode(output[0][n_in:], skip_special_tokens=True).strip()
+            )
+            logger.info(f"[TEXT-negative] 耗时 {time.time()-t0:.1f}s")
+
         self._touch()
         return self._postprocess(result, mode)
 
@@ -778,6 +852,8 @@ Output ONLY the translated text.
 
         # 切分 + 去黑名单 + 去重
         tags = [t.strip() for t in text.replace("\n", ",").split(",") if t.strip()]
+        limit = self.MAX_TAGS_NEGATIVE if mode == "negative" else self.MAX_TAGS_POSITIVE
+
         seen = set()
         out = []
         for tag in tags:
@@ -790,10 +866,12 @@ Output ONLY the translated text.
                 continue
             seen.add(key)
             out.append(tag)
-            if len(out) >= 30:
+            if limit and len(out) >= limit:
+                logger.info(f"ℹ️ tag 数达上限 {limit}，截断（原 {len(tags)} 个）")
                 break
 
         result = ", ".join(out)
+
         if mode != "negative" and "masterpiece" not in result.lower():
             result = "(masterpiece:1.2), (best quality:1.3), " + result
         return result
@@ -930,10 +1008,12 @@ Output ONLY the translated text.
                    {"thinking_budget": 0},
                    {}):
             try:
-                return self.processor.apply_chat_template(
+                out = self.processor.apply_chat_template(
                     messages, tokenize=False,
                     add_generation_prompt=True, **kw
                 )
+                logger.info(f"[DIAG] chat_template kw={kw} 尾部={out[-80:]!r}")
+                return out
             except TypeError:
                 continue
 
@@ -945,21 +1025,25 @@ Output ONLY the translated text.
         if self._idle_timer is not None:
             self._idle_timer.cancel()
             self._idle_timer = None
+
         if self.model is None:
             return
-        try:
-            try:
-                from accelerate.hooks import remove_hook_from_module
-                remove_hook_from_module(self.model, recurse=True)
-            except Exception:
-                pass
-            self.model = None
-            self.processor = None
-            self.tokenizer = None
-        except Exception as e:
-            logger.warning(f"⚠️ unload 异常: {e}")
 
+        # 1. 释放 accelerate hook / offload 残留
+        try:
+            from accelerate.hooks import remove_hook_from_module
+            remove_hook_from_module(self.model, recurse=True)
+        except Exception:
+            pass
+
+        # 2. 置空引用
+        self.model = None
+        self.processor = None
+        self.tokenizer = None
+
+        # 3. 一次性的显存回收（合并原来三段重复）
         if torch.cuda.is_available():
+            gc.collect()
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
@@ -967,26 +1051,18 @@ Output ONLY the translated text.
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
-
-        gc.collect()
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
-            free_b, total_b = torch.cuda.mem_get_info()
-            logger.info(
-                f"🧹 Qwen 已卸载{f'({reason})' if reason else ''}，"
-                f"当前空闲显存 {free_b/1024**3:.2f}GB / {total_b/1024**3:.2f}GB")
-
-        if torch.cuda.is_available():
-            alloc = torch.cuda.memory_allocated() / 1024**3
-            reserved = torch.cuda.memory_reserved() / 1024**3
-            free_b, total_b = torch.cuda.mem_get_info()
-            logger.info(
-                f"[DIAG] unload 后 torch 已分配 {alloc:.2f}GB / "
-                f"缓存池 {reserved:.2f}GB / 设备空闲 {free_b/1024**3:.2f}GB"
-            )
+        # 4. 记录本次 CUDA 是否成功（兜底：驱动读数不可靠时不退 CPU）
+        alloc = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        free_b, total_b = torch.cuda.mem_get_info()
+        logger.info(
+            f"🧹 Qwen 已卸载{f'({reason})' if reason else ''}，"
+            f"空闲显存 {free_b/1024**3:.2f}GB / 总 {total_b/1024**3:.2f}GB"
+        )
+        logger.info(
+            f"[DIAG] unload 后 torch 已分配 {alloc:.2f}GB / "
+            f"缓存池 {reserved:.2f}GB / 设备空闲 {free_b/1024**3:.2f}GB"
+        )
 
 
     def unload(self, reason: str = ""):

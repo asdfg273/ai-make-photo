@@ -214,33 +214,6 @@ class ModelManager(metaclass=SingletonMeta):
             logger.info("🔍 文件名命中 v-pred 关键字")
         return hit
 
-    def detect_arch_from_checkpoint(model_path):
-        """
-        读 safetensors 头部的键名判断架构，返回 'sdxl'/'sd15'/'sd3'/'flux'/None。
-        只读元数据不载权重，失败返回 None 交给调用方回退启发式。
-        """
-        if not model_path.lower().endswith(".safetensors"):
-            return None
-        try:
-            from safetensors import safe_open
-            with safe_open(model_path, framework="pt") as f:
-                keys = list(f.keys())
-        except Exception as e:
-            logger.warning(f"⚠️ 读取 checkpoint 头部失败: {e}")
-            return None
-
-        joined = "\n".join(keys)
-        if "double_blocks." in joined or "model.diffusion_model.double_blocks." in joined:
-            return "flux"
-        if "joint_blocks." in joined:
-            return "sd3"
-        # SDXL 的第二个文本编码器 (OpenCLIP-G)
-        if "conditioner.embedders.1." in joined or "text_encoder_2." in joined:
-            return "sdxl"
-        if "cond_stage_model.transformer." in joined or "text_encoder." in joined:
-            return "sd15"
-        return None
-
     def _is_flow_matching_pipe(self) -> bool:
         """当前底模是否为 flow-matching 架构（自带原生 scheduler，不可换 SD 系采样器）。"""
         pipe = getattr(self, "txt2img_pipe", None)
@@ -1179,6 +1152,10 @@ class ModelManager(metaclass=SingletonMeta):
 
 
     def _force_fp32_vae(self, pipe):
+        if hasattr(pipe, "_all_hooks") and pipe._all_hooks:
+            logger.info("⏭️ 已启用 CPU offload，跳过 VAE fp32 patch")
+            return
+
         vae = pipe.vae
         if getattr(vae, '_fp32_patched', False):
             return

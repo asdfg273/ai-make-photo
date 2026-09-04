@@ -5,7 +5,11 @@ ai make photo/
 ├── 📄 requirements.txt           # 依赖清单（torch 按注释单独装 CUDA 版）
 ├── 📄 requirements-lock.txt      # 本机 pip freeze 冻结环境
 ├── 📄 app_config.json            # 应用配置（AppConfig 自动保存）
+├── 📄 app_config.json.bak        # 应用配置备份
+├── 📄 config.json
+├── 📄 weight.json
 ├── 📄 aiUsemono.md               # 使用说明
+├── 📄 操作方法.mp4               # 操作演示视频
 ├── 📄 结构.txt                   # 本文件
 │
 ├── 📁 core/                      # 核心模块
@@ -13,11 +17,31 @@ ai make photo/
 │   ├── config_manager.py         # 配置管理（AppConfig dataclass）
 │   ├── model_manager.py          # 模型加载管理（单例 ModelManager）
 │   ├── presets.py                # 提示词预设
-│   └── translation_service.py    # 翻译服务
+│   ├── translation_service.py    # 翻译服务
+│   ├── arch/                     # 架构层
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── registry.py           # 组件/管线注册表
+│   │   └── signatures.py
+│   └── loaders/                  # 各底模加载器
+│       ├── __init__.py
+│       ├── base.py
+│       ├── anima.py
+│       ├── flux.py
+│       ├── sd15.py
+│       ├── sdxl.py
+│       └── single_file.py
 │
 ├── 📁 ui/                        # 界面模块
 │   ├── __init__.py
+│   ├── theme.py                  # 主题调色板（theme.PALETTE）
 │   ├── design_tokens.py          # 样式令牌
+│   ├── shell.py                  # 界面外壳骨架
+│   ├── nav.py                    # NavRail 侧边导航
+│   ├── core_panel.py             # 生成核心区（全局单例）
+│   ├── contracts.py              # UI 契约定义
+│   ├── param_snapshot.py         # 参数快照
+│   ├── shared_groups.py          # 共享折叠分组（LoRA/CN/高级/X-Y）
 │   ├── disclaimer.py             # 免责声明
 │   ├── extension_market.py       # 扩展市场
 │   ├── gallery_panel.py          # 画廊面板
@@ -26,7 +50,18 @@ ai make photo/
 │   ├── tooltips.py               # 工具提示
 │   ├── ui_builder.py             # UI 构建（UIBuilderMixin）
 │   ├── video_panel_mixin.py      # 视频面板（VideoPanelMixin）
-│   └── widgets.py                # 自定义控件
+│   ├── widgets.py                # 自定义控件
+│   ├── components/               # 通用组件
+│   │   ├── __init__.py
+│   │   ├── collapsible.py        # 折叠分组控件
+│   │   └── filmstrip.py          # 胶片条组件
+│   └── pages/                    # 页面（PageBase 注册表）
+│       ├── __init__.py
+│       ├── base.py               # PageBase 页面基类
+│       ├── gallery_page.py       # 统一画廊页
+│       ├── img2img_page.py       # 图生图页
+│       ├── txt2img_page.py       # 文生图页
+│       └── video_page.py         # 动画/视频页
 │
 ├── 📁 utils/                     # 工具模块
 │   ├── __init__.py
@@ -49,7 +84,7 @@ ai make photo/
 │   ├── video_gen.py              # 视频生成服务（AnimateDiff）
 │   └── vram_manager.py           # 显存管理（分级策略）
 │
-├── 📁 photo_turn/                # 图像编辑模块（自包含）
+├── 📁 photo_turn/                # 图像编辑模块（自包含,详见其结构图.txt）
 │   ├── __init__.py
 │   ├── components.py
 │   ├── mixin_ai.py
@@ -63,30 +98,62 @@ ai make photo/
 │   ├── download_gemma.py
 │   ├── download_ref_voice.py
 │   ├── download_sovits.py
+│   ├── smoke_ui.py               # UI 冒烟测试脚本
 │   └── codemod_unify_logging.py  # 日志统一迁移脚本（一次性工具）
 │
 ├── 📁 tests/                     # 手动测试脚本（非 pytest）
+│   ├── smoke_photo_turn.py
+│   ├── test_collapsible.py
+│   ├── test_gallery_unified.py
+│   ├── test_loaders.py
+│   ├── test_nav.py
+│   ├── test_real_startup.py
+│   ├── test_sovits_import.py
+│   ├── test_sovits_infer.py
+│   ├── test_sovits_wrap.py
+│   ├── test_theme.py
+│   ├── test_translate.py
+│   ├── test_tts.py
+│   ├── test_ui_contract.py
+│   ├── test_v6_features.py
+│   ├── diag_real_click.py
+│   ├── _check_audio.py
+│   ├── _check_ffmpeg.py
+│   └── shots/                    # 测试截图输出
+│
+├── 📁 docs/                      # 文档
+│   └── superpowers/
+│       ├── plans/
+│       └── specs/
 │
 ├── 📁 models/                    # AI 模型存储
 │   ├── sd15/  sdxl/  sd3/  flux/ # 各系列底模
+│   ├── anima/                    # Anima 专用底模（novaAnimeAM 等）
 │   ├── adetailer/                # 面部/手部修复模型（YOLO）
 │   ├── ip_adapter/               # IP-Adapter 模型
 │   ├── motion_adapter/           # AnimateDiff 运动模块
 │   ├── motion_lora/              # Motion LoRA（pan-left/tilt-up/zoom-in/zoom-out）
-│   └── tts/                      # TTS 模型
+│   ├── tts/                      # TTS 模型
+│   └── _pending_dit/             # 待处理 DIT 模型暂存
 │
 ├── 📁 loras/                     # LoRA 权重
 │   ├── sd1.5/
-│   └── sdxl/
+│   ├── sdxl/
+│   └── _unknown_dit/
 │
 ├── 📁 controlnets/               # ControlNet 模型（本地缓存）
+│   └── noobaiXLControlnet_openposeModel.safetensors
 │
 ├── 📁 tools/                     # 外部可执行工具
-│   └── rife/                     # RIFE 帧插值工具
-│       ├── rife-ncnn-vulkan.exe
-│       └── rife-v4.6/
+│   ├── rife/                     # RIFE 帧插值工具
+│   │   ├── rife-ncnn-vulkan.exe
+│   │   └── rife-v4.6/
+│   └── realesrgan/               # 图像超分工具
+│       ├── realesrgan-ncnn-vulkan.exe
+│       └── models/
 │
 ├── 📁 third_party/               # 第三方源码（GPT-SoVITS 等）
+│   └── GPT-SoVITS/
 │
 ├── 📁 assets/voices/             # 参考音频
 │
@@ -99,15 +166,19 @@ ai make photo/
 ├── 📁 models_cache/              # HF/Torch 统一缓存（HF_HOME 等指向此处）
 │
 ├── 📁 photo/                     # 出图输出
-│   └── videos/                   # 生成视频输出
+│   ├── videos/                   # 生成视频输出
+│   └── audio/                    # TTS 音频输出
 │
 ├── 📁 output/                    # 其他输出（如 TTS 音频）
 │
 ├── 📁 logs/                      # 日志文件（app.log，滚动切割 5MB×3）
 │
 ├── 📁 weights/                   # 预训练权重
-│   └── lbpcascade_animeface.xml  # 人脸检测级联分类器
+│   ├── motion_adapter/           # 运动模块权重（v1-5-2 / v1-5-3）
+│   ├── haarcascade_frontalface_default.xml  # OpenCV 人脸检测级联
+│   └── lbpcascade_animeface.xml  # 动漫人脸检测级联分类器
 │
 ├── 📁 logo/                      # 应用图标和资源
 │
 └── 📁 venv/                      # Python 虚拟环境
+    （另有系统生成目录未列出：.git/ .vs/ .claude/ .config/ __pycache__/ NVIDIA Corporation/）

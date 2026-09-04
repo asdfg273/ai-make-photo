@@ -423,8 +423,10 @@ class ToolsEventsMixin:
             return x1, y1
         tw = abs(dx)
         th = round(tw * ar_h / ar_w)
-        nx = x0 + (tw if dx >= 0 else -tw)
-        ny = y0 + (th if dy >= 0 else -dy)
+        # (x0, y0) 是锚点，向右/下时新矩形右下角 = 锚点 + (tw, th)
+        # 向左/上时新矩形左上角 = 锚点 - (tw, th)
+        nx = x0 + tw if dx >= 0 else x0 - tw
+        ny = y0 + th if dy >= 0 else y0 - th
         return int(nx), int(ny)
 
     def _crop_preview(self, start, end):
@@ -440,13 +442,21 @@ class ToolsEventsMixin:
     def _do_crop(self, x0, y0, x1, y1):
         x1, y1 = self._apply_crop_aspect(x0, y0, x1, y1)
         if abs(x1 - x0) < 10 or abs(y1 - y0) < 10:
-            # 选区过小视为取消,清掉预览框
             self.update_canvas(self.current_img, force=True)
             self._set_status("✂ 选区过小,已取消裁剪", "#f9e2af")
             return
+        
         self._filter_anchor = None
         self.push_history()
-        box = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+        
+        # clamp 到图像边界，防止裁出黑边
+        w, h = self.current_img.size
+        left   = max(0, min(x0, x1))
+        top    = max(0, min(y0, y1))
+        right  = min(w, max(x0, x1))
+        bottom = min(h, max(y0, y1))
+        box = (left, top, right, bottom)
+        
         self.current_img   = self.current_img.crop(box)
         self.base_img      = self.current_img.copy()
         self.original_img  = self.original_img.crop(box)
