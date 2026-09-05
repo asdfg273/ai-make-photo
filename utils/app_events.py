@@ -134,6 +134,11 @@ class EventMixin:
                 PromptEnhancer().set_model_key(_key)
                 logger.info(f"🎚️ 启动档位同步 → {_key}")
 
+        # ── 翻译模式默认档位 ──────────────────────────────────
+        if hasattr(self, 'combo_trans_mode'):
+            self.combo_trans_mode.setCurrentIndex(
+                max(0, min(2, int(getattr(cfg, 'default_trans_mode', 2)))))
+
         # ── 输出目录 ─────────────────────────────────────────
         if hasattr(self, 'combo_output_dir'):
             self.combo_output_dir.setCurrentText(

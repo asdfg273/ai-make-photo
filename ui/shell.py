@@ -105,25 +105,50 @@ class ShellMixin:
         self._init_defaults()
         self._setup_shortcuts()
 
-    # ---------- 全局快捷键 ----------
+    # ---------- 全局快捷键（键位可在 设置→快捷键 改）----------
     def _setup_shortcuts(self):
+        self._rebuild_shortcuts()
+
+    def _shortcut_map(self) -> dict:
+        from core.config_manager import DEFAULT_SHORTCUTS
+        m = dict(DEFAULT_SHORTCUTS)
+        saved = getattr(getattr(self, "config", None), "shortcuts", None) or {}
+        m.update({k: v for k, v in saved.items() if k in m})
+        return m
+
+    def _rebuild_shortcuts(self):
+        """按当前配置重建全部全局快捷键（设置改键后立即生效）。"""
         from PyQt6.QtGui import QShortcut, QKeySequence
+        for sc in getattr(self, "_shortcuts", []):
+            try:
+                sc.setEnabled(False)
+                sc.setParent(None)
+                sc.deleteLater()
+            except Exception:
+                pass
         self._shortcuts = []   # 驻留防 GC
 
         def _add(seq, fn):
+            if not seq:          # 清空 = 禁用该快捷键
+                return
             sc = QShortcut(QKeySequence(seq), self)
             sc.setContext(Qt.ShortcutContext.WindowShortcut)
             sc.activated.connect(fn)
             self._shortcuts.append(sc)
 
-        _add("Ctrl+Return", lambda: getattr(self, "btn_generate", None)
+        m = self._shortcut_map()
+        _add(m.get("generate"), lambda: getattr(self, "btn_generate", None)
              and self.btn_generate.isEnabled() and self.btn_generate.click())
-        _add("Escape", lambda: getattr(self, "btn_interrupt", None)
+        _add(m.get("interrupt"), lambda: getattr(self, "btn_interrupt", None)
              and self.btn_interrupt.isEnabled() and self.btn_interrupt.click())
-        # Ctrl+1..4 切换页面
-        for i, cls in enumerate(PAGES, 1):
-            _add(f"Ctrl+{i}",
+        # 页面切换（顺序 = PAGES 注册顺序）
+        for cls in PAGES:
+            _add(m.get(f"page_{cls.page_id}", ""),
                  lambda pid=cls.page_id: self.nav.select(pid))
+        # 扩展市场菜单项的键位同步
+        act = getattr(self, "_act_market", None)
+        if act is not None:
+            act.setShortcut(QKeySequence(m.get("extension_market", "")))
 
     # ---------- 页面切换 ----------
     def _on_page_selected(self, page_id: str):
@@ -734,6 +759,7 @@ class ShellMixin:
         act_market.setShortcut("Ctrl+E")
         act_market.triggered.connect(self._open_extension_market)
         m_tool.addAction(act_market)
+        self._act_market = act_market   # 设置改键后同步
         act_refresh = QAction("🔄 刷新扩展状态", self)
         act_refresh.triggered.connect(self._refresh_extension_count)
         m_tool.addAction(act_refresh)
@@ -750,6 +776,45 @@ class ShellMixin:
         a_about = QAction("关于本软件", self)
         a_about.triggered.connect(self._show_about)
         m_about.addAction(a_about)
+
+        m_setting = mb.addMenu("⚙️ 设置")
+        a_pref = QAction("偏好设置...", self)
+        a_pref.setShortcut("Ctrl+,")
+        a_pref.triggered.connect(self._open_settings)
+        m_setting.addAction(a_pref)
+
+    def _open_settings(self):
+        """设置对话框：保存后立即应用默认值并重建快捷键。"""
+        from ui.settings_dialog import SettingsDialog
+        dlg = SettingsDialog(self)
+        if not dlg.exec():
+            return
+
+        cfg = self.config
+        # 立即应用默认值；保住当前 prompt 不被 last_prompt 覆盖
+        prompt_bak = self.txt_prompt.toPlainText() \
+            if hasattr(self, "txt_prompt") else ""
+        neg_bak = self.txt_neg.toPlainText() \
+            if hasattr(self, "txt_neg") else ""
+        try:
+            if hasattr(self, "apply_config_to_ui"):
+                self.apply_config_to_ui()
+        finally:
+            if hasattr(self, "txt_prompt"):
+                self.txt_prompt.setPlainText(prompt_bak)
+            if hasattr(self, "txt_neg"):
+                self.txt_neg.setPlainText(neg_bak)
+
+        # apply_config_to_ui 未覆盖的：设备偏好
+        if hasattr(self, "combo_device"):
+            idx = self.combo_device.findText(
+                str(getattr(cfg, "device_preference", "auto")).upper())
+            if idx >= 0:
+                self.combo_device.setCurrentIndex(idx)
+
+        self._rebuild_shortcuts()
+        self.set_status("✅ 设置已保存并应用", "#a6e3a1")
+
 
         # 状态栏扩展计数
         self.lbl_ext_count = QLabel()
