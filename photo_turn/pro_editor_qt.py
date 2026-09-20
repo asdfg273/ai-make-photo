@@ -82,7 +82,8 @@ class ProImageEditor(
     AIToolsMixin,
     ToolsEventsMixin,
 ):
-    def __init__(self, parent, image_path: str, callback_on_save=None):
+    def __init__(self, parent, image_path: str, callback_on_save=None,
+                 callback_on_inpaint=None):
         super().__init__(parent)
         self.setWindowTitle("✨ 专业修图 & AI 遮罩引擎")
         self.setMinimumSize(900, 600) 
@@ -92,7 +93,8 @@ class ProImageEditor(
         
         self.setModal(True)
 
-        self.callback_on_save = callback_on_save
+        self.callback_on_save    = callback_on_save
+        self.callback_on_inpaint = callback_on_inpaint
         self.image_path       = image_path
 
         # ── 图像初始化 ─────────────────────────────────────
@@ -497,6 +499,18 @@ class ProImageEditor(
         m3.addWidget(bmp)
         layout.addLayout(m3)
 
+        btn_send_inpaint = QPushButton("🎭 发送到局部重绘")
+        btn_send_inpaint.setToolTip(
+            "把当前图片 + 遮罩挂到主界面图生图页,\n"
+            "回去点【生成】即进入局部重绘模式")
+        btn_send_inpaint.setStyleSheet(
+            "QPushButton { background:#f38ba8; color:#1e1e2e; "
+            "font-weight:bold; padding:8px; border-radius:6px; }"
+            "QPushButton:hover { background:#eba0ac; }"
+        )
+        btn_send_inpaint.clicked.connect(self.send_to_inpaint)
+        layout.addWidget(btn_send_inpaint)
+
         # ── 历史 ───────────────────────────────────────────
         layout.addWidget(self._sec("⏪ 历史 (Ctrl+Z/Y)"))
         h1 = QHBoxLayout()
@@ -717,6 +731,35 @@ class ProImageEditor(
         except Exception as e:
             self.lbl_status.setText(f"❌ 导出失败: {e}")
             self.lbl_status.setStyleSheet("color:#f38ba8; font-size:13px;")
+
+    # ----------------------------------------------------------
+    #  发送遮罩到局部重绘(不归档画廊,直接挂到主界面)
+    # ----------------------------------------------------------
+    def send_to_inpaint(self):
+        if self.text_element:
+            self._commit_text_to_image()
+
+        mn, mx = self.mask_img.getextrema()
+        if mx == 0:
+            self.lbl_status.setText("⚠️ 遮罩为空,请先用 🔴 遮罩画笔涂抹要重绘的区域")
+            self.lbl_status.setStyleSheet("color:#f9e2af; font-size:13px;")
+            return
+
+        cb = self.callback_on_inpaint or self.callback_on_save
+        if cb is None:
+            self.lbl_status.setText("❌ 主程序未提供重绘回调")
+            self.lbl_status.setStyleSheet("color:#f38ba8; font-size:13px;")
+            return
+        try:
+            cb(self.current_img, self.mask_img)
+        except Exception as e:
+            logger.error(f"callback_on_inpaint 抛异常: {e}", exc_info=True)
+            self.lbl_status.setText(f"❌ 发送失败: {e}")
+            self.lbl_status.setStyleSheet("color:#f38ba8; font-size:13px;")
+            return
+
+        self._dirty = False
+        self.accept()
 
     # ----------------------------------------------------------
     #  保存

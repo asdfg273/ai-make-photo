@@ -301,11 +301,44 @@ class EventMixin:
             "已加载底图: " + os.path.basename(path)
         )
         _set_label_style(self.lbl_img_path, status, "#89dceb")
+        self._update_ref_thumb()
+
+    def _update_ref_thumb(self):
+        """参考图缩略图:显示已载入图片,有遮罩时叠加红色半透明预览"""
+        lbl = getattr(self, "lbl_ref_thumb", None)
+        if lbl is None:
+            return
+        path = getattr(self, "ref_image_path", None)
+        if not path or not os.path.exists(path):
+            lbl.clear()
+            lbl.setText("无参考图")
+            return
+        try:
+            img = Image.open(path).convert("RGBA")
+            mask_path = getattr(self, "mask_image_path", None)
+            if mask_path and os.path.exists(mask_path):
+                mask = Image.open(mask_path).convert("L").resize(img.size)
+                alpha = mask.point(lambda v: int(v * 0.45))
+                red = Image.new("RGBA", img.size, (243, 139, 168, 0))
+                red.putalpha(alpha)
+                img.alpha_composite(red)
+            pm = _pil_to_pixmap(img)
+            w = lbl.width() if lbl.width() > 40 else 220
+            h = lbl.height() if lbl.height() > 40 else 120
+            pm = pm.scaled(w, h,
+                           Qt.AspectRatioMode.KeepAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
+            lbl.setPixmap(pm)
+        except Exception as e:
+            logger.warning(f"⚠️ 参考图缩略图加载失败: {e}")
+            lbl.clear()
+            lbl.setText(os.path.basename(path))
 
     def clear_reference(self):
         self.ref_image_path  = None
         self.mask_image_path = None
         _set_label_style(self.lbl_img_path, "未选择参考图", "#585b70")
+        self._update_ref_thumb()
 
     def cleanup_temp_files(self, verbose=True):
         """清理 outputs/temp 下的 inpaint 中转文件,并清空内存引用"""
@@ -338,6 +371,7 @@ class EventMixin:
             # UI 同步(如果界面上仍挂着那张临时图)
             if hasattr(self, "lbl_img_path") and not self.ref_image_path:
                 _set_label_style(self.lbl_img_path, "未选择参考图", "#585b70")
+                self._update_ref_thumb()
 
             if verbose and removed:
                 logger.info(f"🧹 已清理 temp 文件: {', '.join(removed)}")
@@ -437,6 +471,41 @@ class EventMixin:
         except Exception as e:
             logger.warning(f"⚠️ show_pose_preview 失败: {e}")
 
+    def _send_editor_to_inpaint(self, edited_pil_img, mask_pil_img):
+        """编辑器「发送到局部重绘」回调:挂参考图+遮罩,不归档画廊"""
+        os.makedirs(os.path.join(OUTPUT_DIR, "temp"), exist_ok=True)
+        ref_path  = os.path.abspath(
+            os.path.join(OUTPUT_DIR, "temp", "inpaint_ref.png"))
+        mask_path = os.path.abspath(
+            os.path.join(OUTPUT_DIR, "temp", "inpaint_mask.png"))
+        edited_pil_img.save(ref_path)
+        mask_pil_img.save(mask_path)
+
+        try:
+            mn, mx = mask_pil_img.getextrema()
+            logger.info(f"[EDITOR→INPAINT] 遮罩 extrema=({mn},{mx})")
+            if mx == 0:
+                self._set_status(
+                    "⚠️ 遮罩为全黑(未涂抹),将退化为图生图模式", "#fab387")
+                self.set_reference_image(ref_path, None)
+            else:
+                self.set_reference_image(ref_path, mask_path)
+        except Exception as e:
+            logger.warning(f"[EDITOR→INPAINT] 遮罩检查失败: {e}")
+            self.set_reference_image(ref_path, mask_path)
+
+        # 关掉 ControlNet,避免抢走 inpaint 分支
+        try:
+            if hasattr(self, 'chk_use_pose') and self.chk_use_pose.isChecked():
+                self.chk_use_pose.setChecked(False)
+                logger.info("👉 [工作流] 已自动关闭 ControlNet,优先执行局部重绘")
+        except Exception as e:
+            logger.warning(f"⚠ 关闭 ControlNet 失败(可忽略): {e}")
+
+        self._set_status(
+            "✅ 遮罩已挂载！点击生成将自动进入【局部重绘】模式", "#a6e3a1")
+        self.show_preview(ref_path)
+
     def open_editor(self):
         logger.debug(f"[DEBUG] open_editor 来自文件: {__file__}")
         logger.debug(f"[DEBUG] 这是新版! 应该会传 callback_on_save")
@@ -520,6 +589,7 @@ class EventMixin:
                 self,
                 self.current_generated_path,
                 callback_on_save=on_editor_saved,   # ★ 关键:一定要传这个
+                callback_on_inpaint=self._send_editor_to_inpaint,
             )
             # 「发送到修脸」入口:编辑器显示后自动跑一次 ADetailer
             if getattr(self, "_editor_auto_adetailer", False):
@@ -615,7 +685,8 @@ class EventMixin:
         # ---- 打开修图器 ----
         self._set_status("正在打开专业级图片编辑器...", "#f9e2af")
         editor = ProImageEditor(
-            self, file_path, callback_on_save=on_editor_saved
+            self, file_path, callback_on_save=on_editor_saved,
+            callback_on_inpaint=self._send_editor_to_inpaint,
         )
         editor.exec()
 
