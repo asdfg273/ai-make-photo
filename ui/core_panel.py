@@ -61,7 +61,17 @@ def build_core(host, layout: QVBoxLayout) -> None:
     host.combo_model.setSizeAdjustPolicy(
         QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
     _wire(host, host.combo_model.currentIndexChanged, "on_model_selected")
-    gm.addRow("SD 模型:", host.combo_model)
+    # 模型诊断按钮（🔬）：查看已加载模型的架构/v-pred/调度器/显存
+    model_row = QHBoxLayout()
+    model_row.setSpacing(6)
+    model_row.addWidget(host.combo_model, 1)
+    host.btn_model_diag = QPushButton("🔬")
+    host.btn_model_diag.setFixedSize(32, 28)
+    host.btn_model_diag.setToolTip(
+        "诊断当前已加载模型的架构、v-pred、调度器、显存等信息")
+    _wire(host, host.btn_model_diag.clicked, "_show_model_diagnostics")
+    model_row.addWidget(host.btn_model_diag)
+    gm.addRow("SD 模型:", model_row)
 
     host.combo_device = QComboBox()
     host.combo_device.addItems(["AUTO", "CUDA", "MPS", "CPU"])

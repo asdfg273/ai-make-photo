@@ -265,6 +265,37 @@ def test_trans_compare():
     print("PASS test_trans_compare")
 
 
+def test_model_diag_button():
+    """模型诊断：core_panel 有 btn_model_diag；假管线 → 弹窗含报告内容。"""
+    import types
+    from PyQt6.QtWidgets import QTextEdit
+
+    win = _mini_app()
+    assert hasattr(win, "btn_model_diag"), "新 UI 缺少模型诊断按钮"
+
+    pipe = types.SimpleNamespace(
+        vae=types.SimpleNamespace(dtype="fp16", use_tiling=True,
+                                  use_slicing=True),
+        scheduler=types.SimpleNamespace(
+            config=types.SimpleNamespace(prediction_type="epsilon",
+                                         rescale_betas_zero_snr=False)),
+        unet=types.SimpleNamespace(dtype="fp16", device="cuda"),
+    )
+    win.ai = types.SimpleNamespace(
+        txt2img_pipe=pipe, current_model_name="test.safetensors",
+        current_arch_id="sd15", arch_profile=None, is_vpred=False)
+
+    # EventMixin 的共享入口（测试宿主没有 EventMixin，直接调共享函数）
+    from core.model_diagnostics import show_runtime_diagnostics
+    ok = show_runtime_diagnostics(win, win.ai)
+    assert ok
+    dlg = win._model_diag_dlg
+    text = dlg.findChild(QTextEdit).toPlainText()
+    assert "test.safetensors" in text and "sd15" in text, text[:200]
+    assert "V-Prediction" in text
+    print("PASS test_model_diag_button")
+
+
 def test_filmstrip_context_reuse():
     """胶片条右键「套用参数」→ reuse_requested → 回填（不跳页）；视频跳过。"""
     win = _mini_app()
@@ -305,6 +336,7 @@ if __name__ == "__main__":
                test_compare_toggle_without_snapshot, test_resource_monitor,
                test_hover_preview, test_filmstrip_reuse_params,
                test_filmstrip_full_backfill, test_trans_compare,
+               test_model_diag_button,
                test_filmstrip_context_reuse, test_img2img_compare_snapshot):
         fn()
     for w in _WINDOWS:

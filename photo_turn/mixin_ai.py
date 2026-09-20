@@ -180,3 +180,9 @@ class AIToolsMixin:
             self, "成功",
             f"ADetailer 完成：{success}/{total} 张人脸修复成功。"
         )
+
+    def _show_model_diagnostics(self):
+        """弹出当前已加载模型的诊断信息对话框（共享实现见 core.model_diagnostics）。"""
+        from core.model_diagnostics import show_runtime_diagnostics
+        mgr = getattr(self, 'model_manager', None) or getattr(self, 'ai_manager', None)
+        show_runtime_diagnostics(self, mgr)

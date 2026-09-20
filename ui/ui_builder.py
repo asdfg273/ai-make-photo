@@ -205,7 +205,27 @@ class UIBuilderMixin:
         self.combo_model.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.combo_model.currentIndexChanged.connect(self.on_model_selected)
-        gm.addRow("SD 模型:", self.combo_model)
+
+        _diag_btn_style = """
+            QPushButton {
+                background:#0a0a0a; color:#7d8187;
+                border:1px solid #212327; border-radius:9999px;
+                padding:2px; font-size:13px;
+            }
+            QPushButton:hover { border-color:#7d8187; color:#dadbdf; }
+            QPushButton:pressed { background:#1a1c20; }
+            QPushButton:disabled { color:#3a3d42; border-color:#1a1c20; }
+        """
+        model_row = QHBoxLayout()
+        model_row.setSpacing(6)
+        model_row.addWidget(self.combo_model, 1)
+        self.btn_model_diag = QPushButton("🔬")
+        self.btn_model_diag.setFixedSize(32, 28)
+        self.btn_model_diag.setToolTip("诊断当前已加载模型的架构、v-pred、调度器、显存等信息")
+        self.btn_model_diag.setStyleSheet(_diag_btn_style)
+        self.btn_model_diag.clicked.connect(self._show_model_diagnostics)
+        model_row.addWidget(self.btn_model_diag)
+        gm.addRow("SD 模型:", model_row)
 
         self.combo_device = QComboBox()
         self.combo_device.addItems(["AUTO", "CUDA", "MPS", "CPU"])

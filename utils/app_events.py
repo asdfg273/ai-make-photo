@@ -40,6 +40,11 @@ def _set_label_style(label, text: str, color: str = "#cdd6f4"):
 class EventMixin:
     """专门负责处理所有按钮点击、滑块拖动、下拉框刷新的逻辑"""
 
+    def _show_model_diagnostics(self):
+        """模型诊断弹窗（新/旧 UI 共用，走 core.model_diagnostics 共享实现）。"""
+        from core.model_diagnostics import show_runtime_diagnostics
+        show_runtime_diagnostics(self, getattr(self, 'ai', None))
+
     def apply_config_to_ui(self):
         """把 config 中保存的值还原到 UI 控件"""
 
