@@ -49,6 +49,7 @@
 - **Hires.fix**：高清修复放大
 - **图像管理**：自动保存、历史记录、图片预览
 - **视频管理**：视频预览、历史画廊、双击播放
+- **v6.0 工作台**：统一媒体画廊（图片/视频切换）、底部胶片条单击回填参数、修前/修后对比滑条（文生图+图生图）、显存/内存常驻监控、设置中心（可改快捷键与默认值）、AI 回译对比（翻译→回译校验防幻觉）
 
 ---
 
@@ -68,16 +69,17 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                    业务逻辑层                               │
 │  ┌─────────────┐  ┌─────────────┐  ┌───────────────────┐   │
-│  │ Generation  │  │   Events    │  │     UI Builder    │   │
-│  │   Mixin     │  │   Mixin     │  │    Mixin          │   │
+│  │ Generation  │  │   Events    │  │  Shell Mixin      │   │
+│  │   Mixin     │  │   Mixin     │  │ (v6 工作台骨架)    │   │
 │  └──────┬──────┘  └──────┬──────┘  └────────┬──────────┘   │
 └─────────┼────────────────┼───────────────────┼──────────────┘
           │                │                   │
           ▼                ▼                   ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    核心引擎层 (ModelManager)                │
+│              核心引擎层 (ModelManager + Loaders)            │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  StableDiffusion Pipeline + ControlNet + LoRA       │   │
+│  │  core/arch 指纹检测 arch_id → core/loaders 注册表    │   │
+│  │  路由到 SD15 / SDXL / Anima / SingleFile Loader      │   │
 │  │  - txt2img_pipe, img2img_pipe, inpaint_pipe         │   │
 │  │  - controlnet_pipe, pose_detector, ip_adapter       │   │
 │  │  - AnimateDiff Pipeline + Motion LoRA               │   │
@@ -98,6 +100,7 @@
 | 分类 | 技术 | 版本 | 用途 |
 |-----|------|------|------|
 | **UI 框架** | PyQt6 | ≥6.7 | 主界面、对话框 |
+| **界面主题** | QDarkStyleSheet | - | 深色主题（`ui/theme.py` 接入） |
 | **视频播放** | QtMultimedia | 6.x | 视频预览播放 |
 | **绘图引擎** | PyQt6 | 6.x | 修图编辑器 |
 | **图像处理** | PIL/Pillow | 10.x | 图像加载、处理、保存 |
@@ -144,22 +147,50 @@ ai  make photo/
 ├── 结构.txt                   # 项目结构图
 │
 ├── core/                      # 核心模块
-│   ├── config_manager.py      # 配置管理（AppConfig dataclass）
-│   ├── model_manager.py       # 模型加载管理（单例 ModelManager）
+│   ├── arch/                  # 架构识别（signatures 指纹 + registry 能力声明）
+│   │   ├── base.py            #   ArchInfo/Caps/build_arch_profile
+│   │   ├── registry.py        #   架构注册表（sd15/sd21/sdxl/sd3/flux/anima…）
+│   │   └── signatures.py      #   权重 key 指纹检测
+│   ├── loaders/               # 模型加载器（每架构一个类，统一 build/apply_vram/derive_pipes/post_load 分层）
+│   │   ├── base.py            #   BaseLoader + LoadContext/LoadResult + 共享 derive_from_components
+│   │   ├── sd15.py            #   SD15Loader（sd15 + sd21）
+│   │   ├── sdxl.py            #   SDXLLoader（含 Pony/NoobAI 等 XL 衍生）
+│   │   ├── anima.py           #   AnimaLoader（ModularPipeline + 权重前缀剥离）
+│   │   ├── flux.py            #   FluxLoader（未注册，半成品）
+│   │   └── single_file.py     #   SingleFileLoader（sd3/flux 兜底）
+│   ├── config_manager.py      # 配置管理（AppConfig dataclass + 快捷键表）
+│   ├── model_diagnostics.py   # 模型诊断（文件元数据 + 已加载管线运行时报告）
+│   ├── model_manager.py       # 模型加载管理（单例 ModelManager，经 loaders 路由）
 │   ├── presets.py             # 提示词预设
 │   └── translation_service.py # 翻译服务（词典/AI/自动）
 │
-├── ui/                        # 界面模块
-│   ├── design_tokens.py       # 样式令牌（DARK_STYLE 等）
-│   ├── disclaimer.py          # 免责声明
+├── ui/                        # 界面模块（v6.0 三栏工作台）
+│   ├── shell.py               # ShellMixin —— 默认界面骨架（导航栏/中央区/参数面板/胶片条/状态栏）
+│   ├── nav.py                 # 左侧导航轨（文生图/图生图/动画/画廊）
+│   ├── core_panel.py          # 生成核心区（全局单例：模型/prompt/参数/翻译模式/诊断按钮）
+│   ├── shared_groups.py       # 共享折叠分组（LoRA/ControlNet/高级/X-Y）
+│   ├── contracts.py           # 控件契约 + 自检降级（关键缺失禁用生成入口）
+│   ├── param_snapshot.py      # 参数快照/安全设值（_safe_set_*）
+│   ├── settings_dialog.py     # 设置对话框（快捷键改键 + 组件默认值）
+│   ├── pages/                 # 四个页面（PageBase 派生，单页失败不影响其他页）
+│   │   ├── txt2img_page.py    #   文生图（预览区 + 修前/修后对比滑条 + 日志）
+│   │   ├── img2img_page.py    #   图生图（参考图/IP-Adapter/Pose Transfer）
+│   │   ├── video_page.py      #   动画（AnimateDiff/运镜/配音）
+│   │   └── gallery_page.py    #   画廊页（统一图片+动画）
+│   ├── components/
+│   │   ├── filmstrip.py       # 底部胶片条（单击回填参数/右键菜单/悬浮预览）
+│   │   └── collapsible.py     # 可折叠分组容器
+│   ├── gallery_panel.py       # 画廊面板（排序过滤/收藏/元数据浮窗/悬浮大图）
+│   ├── theme.py               # QDarkStyleSheet 主题接入
+│   ├── widgets.py             # 自定义控件（FloatSlider/GpuCanvas/CompareCanvas 等）
+│   ├── ui_builder.py          # 旧版 UI（AI_STUDIO_UI=old 回退用，不再演进）
+│   ├── design_tokens.py       # 旧版样式令牌（回退用）
 │   ├── extension_market.py    # 扩展市场
-│   ├── gallery_panel.py       # 画廊面板
-│   ├── preset_manager.py      # 预设管理面板
+│   ├── preset_manager.py      # 预设管理（含工具提示 TooltipMixin）
+│   ├── disclaimer.py          # 免责声明
 │   ├── splash.py              # 启动画面
-│   ├── tooltips.py            # 工具提示
-│   ├── ui_builder.py          # UI 构建（UIBuilderMixin）
-│   ├── video_panel_mixin.py   # 视频面板（VideoPanelMixin）
-│   └── widgets.py             # 自定义控件（FloatSlider 等）
+│   ├── tooltips.py            # 工具提示文案
+│   └── video_panel_mixin.py   # 视频面板业务（VideoPanelMixin）
 │
 ├── utils/                     # 工具模块
 │   ├── app_events.py          # 事件处理（EventMixin）
@@ -195,7 +226,16 @@ ai  make photo/
 │   ├── download_sovits.py     # SoVITS 下载
 │   └── codemod_unify_logging.py # 日志统一迁移脚本（一次性工具）
 │
-├── tests/                     # 手动测试脚本（非 pytest）
+├── tests/                     # 手动测试脚本（纯脚本非 pytest，venv python 直接跑）
+│   ├── test_real_startup.py   #   真实启动路径（setup_ui + 配置还原 + 页面切换）
+│   ├── test_ui_contract.py    #   控件契约自检与分级降级
+│   ├── test_v6_features.py    #   v6 新功能（对比滑条/资源监控/悬浮预览/回填/回译/诊断）
+│   ├── test_settings.py       #   设置对话框（改键重建/默认值读写回环）
+│   ├── test_loaders.py        #   加载器注册表路由与派生管线
+│   ├── test_gallery_unified.py#   统一画廊（图片+动画/胶片条/过滤）
+│   ├── test_theme.py / test_nav.py / test_collapsible.py  # 主题/导航/折叠组
+│   ├── diag_real_click.py     #   真实窗口诊断（面板溢出/回填链路实测）
+│   └── test_translate.py / test_tts.py / smoke_photo_turn.py 等  # 翻译/TTS/修图冒烟
 │
 ├── models/                    # AI 模型存储
 │   ├── sd15/  sdxl/  sd3/  flux/   # 各系列底模
@@ -272,26 +312,34 @@ python main.py
 
 ## 六、使用说明
 
-### 6.1 主界面布局
+### 6.1 主界面布局（v6.0 三栏工作台）
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  [文件] [工具] [关于] [内存]  │  状态栏                        │
-├──────────────────────────────────────────────────────────────┤
-│ 左侧控制面板                    │          画布/视频预览区        │
-│ ┌─────────────────────────┐    │                              │
-│ │  🎨 基础                 │    │                              │
-│ │  🌀 动画                 │    │        图像/视频预览          │
-│ │  🖼 图生图               │    │                              │
-│ │  🧩 LoRA                │    │                              │
-│ │  🕹 ControlNet          │    │                              │
-│ │  ⚙️ 高级                 │    │                              │
-│ │  📊 X/Y 矩阵            │    │                              │
-│ └─────────────────────────┘    │                              │
-│                                │                              │
-│  生成按钮                      └─────────────────────────────┘
-└──────────────────────────────────────────────────────────────┘
+│  [文件] [工具] [内存] [关于] [设置]                            │
+├────┬──────────────────────────────────────────┬──────────────┤
+│ 导 │                                          │ 右侧参数面板  │
+│ 航 │           中央工作区                      │ (整体可滚动)  │
+│ 轨 │  ┌────────────────────────────────────┐  │ ┌──────────┐ │
+│ 🎨 │  │  预览画布（普通/修前修后对比二合一） │  │ │生成核心区 │ │
+│ 🖼 │  ├────────────────────────────────────┤  │ │(全局单例) │ │
+│ 🎬 │  │  编辑/另存/转图生图/转重绘/⚖️对比   │  │ ├──────────┤ │
+│ 🖻 │  ├────────────────────────────────────┤  │ │页面专属区 │ │
+│    │  │  生成日志                          │  │ ├──────────┤ │
+│    │  └────────────────────────────────────┘  │ │共享折叠组 │ │
+│    ├──────────────────────────────────────────┤ │(LoRA/CN/  │
+│    │  底部常驻胶片条（单击回填参数/右键菜单）   │ │高级/X-Y)  │ │
+├────┴──────────────────────────────────────────┤ ├──────────┤ │
+│ 状态栏：状态 | 显存/内存常驻监控 | 扩展计数      │ │生成/停止  │ │
+└───────────────────────────────────────────────┴─┴──────────┴─┘
 ```
+
+- **导航轨**：文生图 / 图生图 / 动画 / 画廊 四页，页面独立构建，单页失败不影响其他页（契约自检，关键控件缺失时禁用生成入口）
+- **生成核心区全局唯一**：模型/prompt/尺寸/步数/CFG/采样器/生成按钮只有一份，切页不重造，业务层零感知
+- **胶片条**：跟随画廊过滤，单击 = 全量回填该图参数 + 预览（prompt/steps/CFG/seed/尺寸/采样器/模型），右键 = 套用参数/查看元数据/收藏/删除
+- **⚖️ 对比滑条**：开 Hires.fix/ADetailer 生成后对比精修前后；图生图加载参考图生成后对比参考图与结果
+- **统一画廊**：图片与动画同墙展示（动画带首帧缩略图+时长角标），顶栏搜索/类型过滤/排序，悬浮 0.5s 显示大图
+- **🌐 翻译模式右侧「🔁 对比」**：中→英→中回译对照，检查 AI 翻译幻觉（点对比才载入 Qwen，用完即卸不占生图显存）
 
 ### 6.2 动画界面操作
 
@@ -301,14 +349,17 @@ python main.py
 4. **添加运镜特效**：选择 Motion LoRA 并调整强度
 5. **点击生成**：视频生成完成后自动播放并加入画廊
 
-### 6.3 快捷键
+### 6.3 快捷键（默认键位，均可在 设置→偏好设置→快捷键 中修改）
 
 | 快捷键 | 功能 |
 |-------|------|
-| `Ctrl+S` | 保存图像 |
-| `Ctrl+Z` | 撤销操作 |
-| `Ctrl+Y` | 重做操作 |
-| `ESC` | 取消当前模式 |
+| `Ctrl+Enter` | 触发生成 |
+| `Esc` | 中断生成 |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` / `Ctrl+4` | 切换 文生图 / 图生图 / 动画 / 画廊 |
+| `Ctrl+E` | 扩展市场 |
+| `Ctrl+,` | 偏好设置 |
+
+改键位：菜单「⚙️ 设置 → 偏好设置 → ⌨️ 快捷键」，点输入框按新键位，清空即禁用，确定后立即生效。修图编辑器内另有 `B` 画笔 / `E` 橡皮 / `M` 遮罩 / `G` 网格等（见 7.4）。
 
 ### 6.4 视频参数说明
 
@@ -341,6 +392,8 @@ python main.py
 
 **设计模式**：单例模式（SingletonMeta）
 
+**加载器路由**：`load_model()` 经 `core/loaders/registry.py` 注册表按 `core/arch/` 检测出的 arch_id 分发到专用 Loader——sd15/sd21 → `SD15Loader`，sdxl → `SDXLLoader`，anima → `AnimaLoader`，sd3/flux → `SingleFileLoader` 兜底。
+
 ### 7.2 AIDesktopApp（主窗口）
 
 **职责**：整合所有 UI 组件和业务逻辑
@@ -349,9 +402,13 @@ python main.py
 
 | Mixin | 功能 |
 |-------|------|
-| `UIBuilderMixin` | UI 构建和布局（含动画界面） |
+| `ShellMixin`（`ui/shell.py`） | v6.0 默认 UI：三栏工作台、页面路由、契约自检 |
+| `UIBuilderMixin`（`ui/ui_builder.py`） | 旧版 UI 回退（环境变量 `AI_STUDIO_UI=old` 启用） |
 | `EventMixin` | 事件处理和信号 |
 | `GenerationMixin` | 图像和视频生成逻辑 |
+| `ParamSnapshotMixin` | 参数快照（胶片条回填 / 元数据复用） |
+| `PresetManagerMixin` / `TooltipMixin` | 参数预设与提示 |
+| `VideoPanelMixin` | 视频面板扩展逻辑 |
 
 ### 7.3 VideoGenerator（视频生成器）
 
@@ -406,6 +463,8 @@ python main.py
 | `output_format` / `output_dir` | 输出格式与目录 |
 | `last_prompt` / `last_neg` | 上次使用的提示词 |
 | `recent_models` / `recent_prompts` | 历史记录 |
+| `shortcuts` | 快捷键键位表（设置界面→偏好设置→快捷键 中编辑） |
+| `default_trans_mode` | 默认翻译模式（0=关 / 1=词典 / 2=AI） |
 
 ### 8.2 扩展开发
 
@@ -413,7 +472,9 @@ python main.py
 
 **添加新工具**：在 `photo_turn/mixin_tools.py` 中添加新的工具类
 
-**添加新模型支持**：在 `core/model_manager.py` 中扩展模型加载逻辑
+**添加新模型支持**：在 `core/loaders/` 参考 `anima.py` / `sd15.py` 新建 Loader 类并在 `registry.py` 注册（arch 检测规则在 `core/arch/signatures.py` 补充）
+
+**添加新页面**：在 `ui/pages/` 新建页类并在 `ui/nav.py` 登记导航项；页面专属控件放页面内，生成核心控件（模型/prompt/尺寸等）保持全局唯一
 
 **添加新运镜特效**：在 `models/motion_lora/` 目录添加对应模型
 
@@ -456,4 +517,4 @@ python main.py
 ---
 
 **版本**：v6.0  
-**更新日期**：2026-08-24
+**更新日期**：2026-09-20
