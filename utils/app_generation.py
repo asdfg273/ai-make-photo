@@ -465,7 +465,7 @@ class GenerationMixin:
             'pose_image':        None,
             'pose_transfer_used': False,
             'skip_img2img':      False,
-            'init_image_path':   None,
+            'init_image_path': self.ref_image_path if getattr(self, 'ref_image_path', None) else None,
             'use_inpaint':       False,
 
             # === 角色一致性 ===
@@ -956,6 +956,33 @@ class GenerationMixin:
         kwargs.update(embed_kwargs)
         if ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
             kwargs["ip_adapter_image"] = ctx['ipa_pil_image']
+
+        # ── 图生图底图加载 ──
+        init_path = ctx.get('init_image_path')
+        if init_path and os.path.exists(init_path):
+            try:
+                from PIL import Image
+                init_img = Image.open(init_path).convert("RGB")
+                # 缩放到目标尺寸
+                if init_img.size != (ctx['width'], ctx['height']):
+                    init_img = init_img.resize(
+                        (ctx['width'], ctx['height']), 
+                        Image.Resampling.LANCZOS
+                    )
+                ctx['init_image'] = init_img
+                ctx['use_img2img'] = True
+                # strength 从 UI 读取（如果没有就用 0.75 默认值）
+                if 'strength' not in ctx:
+                    ctx['strength'] = 0.75
+                logger.info(
+                    f"✅ 图生图模式: {os.path.basename(init_path)} | "
+                    f"强度={ctx['strength']:.2f}"
+                )
+            except Exception as e:
+                logger.error(f"❌ 加载底图失败: {e}")
+                ctx['use_img2img'] = False
+        else:
+            ctx['use_img2img'] = False
 
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()

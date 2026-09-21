@@ -1933,6 +1933,12 @@ class UIBuilderMixin:
             "background:#0a0a0a; color:#7d8187; font-size:11px;")
         self.statusBar().showMessage("AI 绘画工作站 v5.0 已就绪")
 
+        # 扩展计数标签，初始化一次，后续只更新文字
+        self.lbl_ext_count = QLabel()
+        self.statusBar().addPermanentWidget(self.lbl_ext_count)
+        self._refresh_extension_count()
+
+
     # ============================================================
     #  默认值 + 控件联动
     # ============================================================
@@ -2623,13 +2629,15 @@ class UIBuilderMixin:
         self._refresh_extension_count()
 
     def _refresh_extension_count(self):
-        """刷新状态栏的扩展计数"""
+        lbl = getattr(self, 'lbl_ext_count', None)
+        if lbl is None:
+            return
         try:
             from utils.extension_manager import get_status_summary
             s = get_status_summary()
-            self.lbl_ext_count.setText(f"🧩 扩展: {s['installed']}/{s['total']}")
+            lbl.setText(f"🧩 扩展: {s['installed']}/{s['total']}")
         except Exception as e:
-            self.lbl_ext_count.setText("🧩 扩展: --")
+            lbl.setText("🧩 扩展: --")
             logger.warning(f"[EXT-COUNT] 刷新失败: {e}")
 
     def _open_extension_market(self):

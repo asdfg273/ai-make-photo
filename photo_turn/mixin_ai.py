@@ -8,21 +8,25 @@ import numpy as np
 import threading
 
 from PIL import Image, ImageDraw, ImageFilter
-
+import logging
 from PyQt6.QtWidgets import QMessageBox
 from PyQt6.QtCore    import QTimer
-
+logger = logging.getLogger(__name__)
 
 class AIToolsMixin:
 
     def run_adetailer(self):
         if self._adetailer_running:
-            QMessageBox.information(self, "提示", "ADetailer 正在运行中，请稍候...")
+            QMessageBox.information(self, "提示", "ADetailer 正在运行中，请稍候...") 
+            return
+        if self.current_img is None:
+            QMessageBox.information(self, "提示", "没有可处理的图像。")
             return
         self._adetailer_running = True
+        self._adetailer_snapshot = self.current_img.copy() 
         threading.Thread(target=self._adetailer_worker, daemon=True).start()
 
-    def _adetailer_worker(self):
+    def _adetailer_worker(self, snapshot):          # <-- 接收 snapshot
         def _status(text, color="#f9e2af"):
             QTimer.singleShot(0, lambda: (
                 self.lbl_status.setText(text),
@@ -31,7 +35,7 @@ class AIToolsMixin:
 
         try:
             _status("🔍 正在检测人脸...", "#f9e2af")
-            cv_img = cv2.cvtColor(np.array(self.current_img), cv2.COLOR_RGB2BGR)
+            cv_img = cv2.cvtColor(np.array(snapshot), cv2.COLOR_RGB2BGR)  # <-- 用 snapshot
             gray   = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
 
             cascade_candidates = [
@@ -44,12 +48,12 @@ class AIToolsMixin:
                 if os.path.isfile(p):
                     cascade_path = p
                     break
-            
+
             if cascade_path is None:
                 raise FileNotFoundError(
                     "未找到人脸检测模型（animeface 或 haarcascade）"
                 )
-            
+
             face_cascade = cv2.CascadeClassifier(cascade_path)
             faces = face_cascade.detectMultiScale(
                 gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
@@ -64,7 +68,7 @@ class AIToolsMixin:
                 )
                 return
 
-            result_img  = self.current_img.copy()
+            result_img  = snapshot.copy()           # <-- 用 snapshot
             result_mask = self.mask_img.copy()
             success_count = 0
 
@@ -84,12 +88,10 @@ class AIToolsMixin:
                 try:
                     from core.model_manager import ModelManager
                     manager = ModelManager()
-                    
+
                     if manager.img2img_pipe is None:
-                        raise RuntimeError(
-                            "img2img 管线未加载，请先加载底模"
-                        )
-                    
+                        raise RuntimeError("img2img 管线未加载，请先加载底模")
+
                     enhanced = manager.img2img_pipe(
                         prompt=(
                             "highly detailed face, perfect eyes, "
@@ -103,7 +105,6 @@ class AIToolsMixin:
 
                     fixed = enhanced.resize((cw, ch), Image.LANCZOS)
 
-                    # 羽化边缘遮罩
                     mask        = Image.new("L", (cw, ch), 0)
                     blur_radius = max(5, min(50, int(min(cw, ch) * 0.15)))
                     draw        = ImageDraw.Draw(mask)
@@ -118,11 +119,10 @@ class AIToolsMixin:
 
                     draw_mask = ImageDraw.Draw(result_mask)
                     draw_mask.ellipse([x1, y1, x2, y2], fill=255)
-                    
+
                     success_count += 1
 
                 except RuntimeError as e:
-                    # 管线未加载、显存不足等，记录后停止
                     import logging
                     logging.getLogger(__name__).error(
                         f"ADetailer 人脸 {idx+1} 失败: {e}"
@@ -133,10 +133,9 @@ class AIToolsMixin:
                             self, "错误", f"修复中止: {err}"
                         ),
                     )
-                    return  # 不再处理剩余人脸
-                
+                    return
+
                 except Exception as e:
-                    # 单张脸修复失败（裁剪越界、推理报错等），跳过继续
                     import logging
                     logging.getLogger(__name__).warning(
                         f"ADetailer 人脸 {idx+1} 跳过: {e}"
@@ -154,35 +153,62 @@ class AIToolsMixin:
 
             _status(f"✅ ADetailer 完成 ({success_count}/{len(faces)} 张)", "#a6e3a1")
             QTimer.singleShot(
-                0, lambda: self._on_adetailer_complete(result_img, result_mask, success_count, len(faces))
+                0,
+                lambda: self._on_adetailer_complete(
+                    result_img, result_mask, success_count, len(faces)
+                ),
             )
 
         except Exception as e:
             QTimer.singleShot(
                 0,
-                lambda: QMessageBox.critical(
-                    self, "错误", f"处理失败: {e}"
-                ),
+                lambda: QMessageBox.critical(self, "错误", f"处理失败: {e}"),
             )
         finally:
             self._adetailer_running = False
 
-    def _on_adetailer_complete(
-        self, result_img: Image.Image, result_mask: Image.Image,
-        success: int, total: int
-    ):
-        self.push_history(self.current_img, self.mask_img)
+    def _on_adetailer_complete(self, result_img, result_mask, success_count, total):
+        """ADetailer 完成回调"""
+        snapshot = self._adetailer_snapshot  # 从实例变量取
+    
+        if snapshot is None:
+            logger.warning("⚠️ ADetailer 完成但快照丢失，跳过确认")
+            self.current_img = result_img
+            self.mask_img = result_mask
+            self.base_img = result_img.copy()
+            self.push_history()
+            self.update_canvas(self.current_img, force=True)
+            return
+    
+        # 比较快照和当前画布
+        if self.current_img.tobytes() != snapshot.tobytes():
+            reply = QMessageBox.question(
+                self,
+                "确认覆盖",
+                f"画布已被修改，是否用 ADetailer 结果覆盖？\n成功修复 {success_count}/{total} 张人脸",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                logger.info("🚫 用户取消 ADetailer 覆盖")
+                return
+    
+        # 应用结果
+        self.push_history(self.current_img, self.mask_img)  # 修复前入历史
         self._filter_anchor = None
         self.current_img = result_img
-        self.mask_img    = result_mask
-        self.update_canvas(self.current_img)
-        QMessageBox.information(
-            self, "成功",
-            f"ADetailer 完成：{success}/{total} 张人脸修复成功。"
-        )
+        self.mask_img = result_mask
+        self.base_img = result_img.copy()
+        self.push_history()  # 修复后入历史
+        self.update_canvas(self.current_img, force=True)
+    
+        self.lbl_status.setText(f"✅ ADetailer 完成 ({success_count}/{total} 张)")
+        self.lbl_status.setStyleSheet("color:#a6e3a1; font-size:13px;")
+
+
 
     def _show_model_diagnostics(self):
         """弹出当前已加载模型的诊断信息对话框（共享实现见 core.model_diagnostics）。"""
         from core.model_diagnostics import show_runtime_diagnostics
-        mgr = getattr(self, 'model_manager', None) or getattr(self, 'ai_manager', None)
+        mgr = getattr(self, 'ai', None)
         show_runtime_diagnostics(self, mgr)

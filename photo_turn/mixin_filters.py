@@ -12,13 +12,11 @@ class FiltersMixin:
 
     def on_adjust_change(self, key=None, value=None):
         """调色滑块防抖 — ✅ 不触发滤镜"""
-        if self.adjust_timer and self.adjust_timer.isActive():
-            self.adjust_timer.stop()
-        self.adjust_timer = QTimer(self)
-        self.adjust_timer.setSingleShot(True)
-        # ✅ 只连 apply_adjustments，不连 apply_selected_filter
-        self.adjust_timer.timeout.connect(self.apply_adjustments)
-        self.adjust_timer.start(150)
+        if not hasattr(self, "_adjust_timer") or self._adjust_timer is None:
+            self._adjust_timer = QTimer(self)
+            self._adjust_timer.setSingleShot(True)
+            self._adjust_timer.timeout.connect(self.apply_adjustments)
+        self._adjust_timer.start(150)   # 已在跑就重置计时
 
     def apply_adjustments(self):
         try:
@@ -203,10 +201,14 @@ class FiltersMixin:
         out   = cv2.bitwise_and(color, color, mask=edges)
         return Image.fromarray(out)
 
-    def _compute_filter(self, filter_name: str):
-        """计算滤镜结果(不动状态),失败/未知返回 None"""
+    def _compute_filter(self, filter_name: str, source: "Image.Image | None" = None):
+        """计算滤镜结果(不动状态)，失败/未知返回 None。
+        source 默认取 current_img（已含调色），显式传入时使用传入值。"""
         try:
-            img       = self.base_img.copy()
+            src       = source if source is not None else self.current_img
+            if src is None:
+                src   = self.base_img
+            img       = src.copy()
             has_alpha = img.mode == "RGBA"
             if has_alpha:
                 alpha = img.split()[-1]
@@ -291,24 +293,34 @@ class FiltersMixin:
             return
 
         logger.info(f"[滤镜] 应用: {filter_name}")
-        # 优先提交预览结果;没有预览则现场计算
+
+        # 优先提交预览结果；没有预览则基于 current_img 现场计算
+        # （current_img 已含调色，滤镜自然叠加在调色之上）
         preview = getattr(self, "_filter_preview", None)
         if preview is not None and preview[0] == filter_name:
             img = preview[1]
             self._filter_preview = None
         else:
-            img = self._compute_filter(filter_name)
+            img = self._compute_filter(filter_name)   # 默认用 current_img
             if img is None:
                 return
             self._filter_preview = None
 
-        # 第一次叠加滤镜前,锚定基图(供「无」还原)
+        # 第一次叠加滤镜前，锚定调色后的基图（供「无」还原）
         if getattr(self, "_filter_anchor", None) is None:
-            self._filter_anchor = self.base_img.copy()
+            self._filter_anchor = self.current_img.copy()
 
         self.push_history()
         self.current_img = img
-        self.base_img    = img.copy()
+        self.base_img    = img.copy()   # 提交：调色 + 滤镜一起烘入 base
+        for k, w in self.adjust_vars.items():
+            w.blockSignals(True)
+            w.setValue(0)
+            w.blockSignals(False)
+            lbl = getattr(self, f"lbl_{k}", None)
+            if lbl is not None:
+                lbl.setText("0")
+
         self.update_canvas(self.current_img, force=True)
         self.lbl_status.setText(f"✅ 已应用滤镜: {filter_name}")
         self.lbl_status.setStyleSheet("color:#a6e3a1; font-size:13px;")

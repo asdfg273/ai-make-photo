@@ -54,10 +54,17 @@ class VRAMManager:
         logger.info(f"🎮 GPU: {info['name']} "
                     f"({total:.1f}GB 总量 / {budget:.1f}GB 可支配)")
 
-        # fp16 权重实际占用：SD1.5 ≈ 2.5GB，SDXL ≈ 5GB(UNet)
-        gpu_full    = 16.0 if is_sdxl else 6.0
-        gpu_sliced  = 11.0 if is_sdxl else 4.0
-        offload_min = 6.5 if is_sdxl else 2.5    # UNet 5GB + 激活值余量
+        # 根据实际显卡容量动态设定阈值（单位：GB）
+        if is_sdxl:
+            # SDXL fp16 常驻组件：UNet≈5.0GB + 双TE(CLIP-G+L)≈1.6GB + VAE≈0.2GB ≈ 6.8GB
+            # 全 GPU 需权重 6.8 + 激活值 1.5~2 ≈ 9~10GB
+            gpu_full    = 10.0   # ≥10GB：全塞 GPU
+            gpu_sliced  = 8.5    # 8.5~10GB：全 GPU + VAE 切片
+            offload_min = 6.0    # 6~8.5GB：UNet 留 GPU(≈5GB)，其余 offload
+        else:
+            gpu_full    = 6.0
+            gpu_sliced  = 4.0
+            offload_min = 2.5
 
         if budget >= gpu_full:
             pipe.to("cuda")
@@ -72,8 +79,6 @@ class VRAMManager:
 
         elif budget >= offload_min:
             pipe.enable_model_cpu_offload()
-            # 关键：offload 下 VAE 必须保持 fp16 且开切片，
-            # 否则 decode 时的 dtype 转换会把 VAE 钉死在 GPU
             VRAMManager._safe_enable(pipe, "enable_vae_slicing")
             VRAMManager._safe_enable(pipe, "enable_vae_tiling")
             pipe.enable_attention_slicing()
@@ -86,6 +91,7 @@ class VRAMManager:
 
         logger.info(f"✅ 策略: {strategy}")
         return strategy
+
     
     @staticmethod
     def cleanup():

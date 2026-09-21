@@ -104,6 +104,11 @@ class ShellMixin:
         self._build_menu_v6()
         self._init_defaults()
         self._setup_shortcuts()
+        self.lbl_ext_count = QLabel()
+        self.lbl_ext_count.setStyleSheet("color:#7d8187; font-size:11px; margin-right:6px;")
+        self.statusBar().addPermanentWidget(self.lbl_ext_count)
+        self._refresh_extension_count()
+
 
     # ---------- 全局快捷键（键位可在 设置→快捷键 改）----------
     def _setup_shortcuts(self):
@@ -791,7 +796,6 @@ class ShellMixin:
             return
 
         cfg = self.config
-        # 立即应用默认值；保住当前 prompt 不被 last_prompt 覆盖
         prompt_bak = self.txt_prompt.toPlainText() \
             if hasattr(self, "txt_prompt") else ""
         neg_bak = self.txt_neg.toPlainText() \
@@ -805,7 +809,6 @@ class ShellMixin:
             if hasattr(self, "txt_neg"):
                 self.txt_neg.setPlainText(neg_bak)
 
-        # apply_config_to_ui 未覆盖的：设备偏好
         if hasattr(self, "combo_device"):
             idx = self.combo_device.findText(
                 str(getattr(cfg, "device_preference", "auto")).upper())
@@ -814,20 +817,18 @@ class ShellMixin:
 
         self._rebuild_shortcuts()
         self.set_status("✅ 设置已保存并应用", "#a6e3a1")
-
-
-        # 状态栏扩展计数
-        self.lbl_ext_count = QLabel()
-        self.statusBar().addPermanentWidget(self.lbl_ext_count)
-        self._refresh_extension_count()
+        self._refresh_extension_count()   # 只刷新文字，不再重建控件
 
     def _refresh_extension_count(self):
+        lbl = getattr(self, 'lbl_ext_count', None)
+        if lbl is None:
+            return
         try:
             from utils.extension_manager import get_status_summary
             s = get_status_summary()
-            self.lbl_ext_count.setText(f"🧩 扩展: {s['installed']}/{s['total']}")
+            lbl.setText(f"🧩 扩展: {s['installed']}/{s['total']}")
         except Exception as e:
-            self.lbl_ext_count.setText("🧩 扩展: --")
+            lbl.setText("🧩 扩展: --")
             logger.warning(f"[EXT-COUNT] 刷新失败: {e}")
 
     def _open_extension_market(self):
@@ -862,7 +863,6 @@ class ShellMixin:
         QMessageBox.about(
             self, "关于",
             "<b>AI 绘画工作站 v6.0</b><br>"
-            "PyQt6 重构版 — GPU 加速<br><br>"
             "基于 Stable Diffusion + ADetailer<br>"
             "支持 LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer")
 
@@ -896,3 +896,8 @@ class ShellMixin:
         except ImportError:
             QMessageBox.information(
                 self, "提示", "请安装 psutil: pip install psutil")
+
+    def _on_tab_changed(self, index):
+        if self.tab_widget.tabText(index) == "文生图":
+            self.clear_reference()  # 自动清除参考图
+

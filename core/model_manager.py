@@ -35,6 +35,7 @@ import logging
 from core import arch as arch_mod
 logger = logging.getLogger(__name__)
 
+
 SDXL_KEYWORDS = (
     "xl", "sdxl", "pony", "turbo", "lightning", "illustrious", "noobai",
 )
@@ -224,6 +225,9 @@ class ModelManager(metaclass=SingletonMeta):
         return "FlowMatch" in cls_name or "RectifiedFlow" in cls_name
 
     def load_model(self, model_name):
+        import warnings
+        warnings.filterwarnings("ignore", message=".*kept in float32.*")
+
         # 同模型跳过
         if (self.current_model_name == model_name
                 and self.txt2img_pipe is not None):
@@ -314,6 +318,32 @@ class ModelManager(metaclass=SingletonMeta):
         try:
             result = get_loader(det.arch_id).load(model_path, ctx)
 
+            # ===== torch.compile 加速 UNet（暂时禁用：Windows 多 GPU 环境不兼容） =====
+            #对于多 GPU 用户，torch.compile 会导致 UNet 共享失败，报错：
+            #如果你在 Windows 上使用多 GPU，建议暂时禁用 torch.compile，或者升级到 PyTorch 2.1+。当然没有多 GPU 的用户可以尝试开启，首次推理会慢 30-60 秒，之后会快很多。
+            # try:
+            #     import torch
+            #     if torch.__version__ >= "2.0":
+            #         if hasattr(result.txt2img, "unet") and result.txt2img.unet is not None:
+            #             logger.info("⚡ 正在编译 UNet（首次推理会慢 30-60 秒）...")
+            #             result.txt2img.unet = torch.compile(
+            #                 result.txt2img.unet,
+            #                 backend="cudagraphs",
+            #                 fullgraph=False,
+            #             )
+            #             if (result.img2img is not None 
+            #                 and hasattr(result.img2img, "unet")
+            #                 and result.img2img.unet is not result.txt2img.unet):
+            #                 result.img2img.unet = torch.compile(
+            #                     result.img2img.unet,
+            #                     backend="cudagraphs",
+            #                     fullgraph=False,
+            #                 )
+            #             logger.info("✅ UNet 编译完成")
+            # except Exception as e:
+            #     logger.warning(f"⚠️ torch.compile 跳过: {e}")
+            # ===== 编译结束 =====
+
             self.txt2img_pipe = result.txt2img
             self.img2img_pipe = result.img2img
             self.inpaint_pipe = result.inpaint
@@ -323,9 +353,38 @@ class ModelManager(metaclass=SingletonMeta):
             self.current_lora_name  = None
             self._compel_cache.clear()
             self.compel_txt2img = self.compel_img2img = self.compel_controlnet = None
+            vae = result.txt2img.vae
+           
+            if not self.is_vpred:
+                # 二次检测：用文件名（不区分大小写）
+                fn_lower = (model_name or "").lower()
+                if any(kw in fn_lower for kw in ("vpred", "v-pred", "v_pred")):
+                    logger.warning(f"⚠️ 首次 vpred 检测未命中，文件名二次检测命中: {model_name}")
+                    self.is_vpred = True
+
+            if self.is_vpred:
+                sched = self.txt2img_pipe.scheduler
+                current = getattr(sched.config, "prediction_type", "epsilon")
+                if current != "v_prediction":
+                    from diffusers import EulerDiscreteScheduler
+                    self.txt2img_pipe.scheduler = EulerDiscreteScheduler.from_config(
+                        sched.config,
+                        prediction_type="v_prediction",
+                        rescale_betas_zero_snr=True,
+                    )
+                    logger.info(
+                        f"✅ v-pred 修正: {current} → v_prediction + zero-SNR"
+                    )
+                else:
+                    logger.info("✅ scheduler 已是 v_prediction，无需修正")
+            # ========== v-pred 兜底结束 ==========
+
             logger.info(f"✅ {det.info.display_name} 加载与显存优化完成！")
+
         except Exception as e:
             import traceback; traceback.print_exc()
+
+
             raise Exception(f"模型加载失败: {str(e)}")
 
     # ------------------------------------------------------------
@@ -793,6 +852,92 @@ class ModelManager(metaclass=SingletonMeta):
         self._ipa_variant       = None
         logger.info("✅ IP-Adapter 卸载完成")
 
+    @staticmethod
+    def _is_offloaded(module):
+        """
+        该模块是否已被 accelerate 接管（model/sequential CPU offload）。
+        被接管后不能再手动 .to()：
+          - sequential 下权重是 meta 占位张量，.to() 直接抛 NotImplementedError
+          - model_cpu_offload 下 .to() 会绕过 hook 的权重簿记，
+            下一次 forward 时 hook 又把它搬回去，白搬一趟还污染状态
+        """
+        return getattr(module, "_hf_hook", None) is not None
+
+    # ------------------------------------------------------------
+    #  提示词编码 (Compel,支持 SD1.5 / SDXL)
+    # ------------------------------------------------------------
+    def encode_prompt(self, prompt, negative_prompt, pipe=None):
+        prof = getattr(self, 'arch_profile', None)
+        if getattr(prof, 'prompt_mode', None) != "compel":
+            # ModularPipeline 系（Anima/Cosmos）等非 Compel 架构：
+            # 不做 Compel，直接退原始 prompt，交给 _adapt_call 转 PipelineState
+            return {"prompt": prompt, "negative_prompt": negative_prompt}
+        if not self.txt2img_pipe:
+            return {}
+
+        if pipe is None:
+            pipe = self.txt2img_pipe
+
+        # 仅在全 GPU 模式下手动搬 TE；offload 模式交给 accelerate 的 hook
+        if hasattr(pipe, "text_encoder") and pipe.text_encoder:
+            if not self._is_offloaded(pipe.text_encoder):
+                pipe.text_encoder.to(self.device)
+        if (self.is_sdxl
+                and hasattr(pipe, "text_encoder_2")
+                and pipe.text_encoder_2):
+            if not self._is_offloaded(pipe.text_encoder_2):
+                pipe.text_encoder_2.to(self.device)
+
+        cache_key = (prompt, negative_prompt, self.current_model_name,
+                     getattr(self, 'current_arch_id', None))
+        if cache_key in self._compel_cache:
+            return dict(self._compel_cache[cache_key])
+
+        if self.is_sdxl:
+            compel = Compel(
+                tokenizer    = [pipe.tokenizer, pipe.tokenizer_2],
+                text_encoder = [pipe.text_encoder, pipe.text_encoder_2],
+                returned_embeddings_type=
+                    ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED,
+                requires_pooled=[False, True],
+                device=self.device,
+                truncate_long_prompts = False,
+            )
+            prompt_embeds, pooled     = compel(prompt)
+            neg_embeds,    neg_pooled = compel(negative_prompt)
+            prompt_embeds, neg_embeds = \
+                compel.pad_conditioning_tensors_to_same_length(
+                    [prompt_embeds, neg_embeds])
+
+            result = {
+                "prompt_embeds":                prompt_embeds,
+                "pooled_prompt_embeds":         pooled,
+                "negative_prompt_embeds":       neg_embeds,
+                "negative_pooled_prompt_embeds":neg_pooled,
+            }
+        else:
+            compel = Compel(
+                tokenizer    = pipe.tokenizer,
+                text_encoder = pipe.text_encoder,
+                device       = self.device,
+                truncate_long_prompts = False,
+            )
+            prompt_embeds = compel(prompt)
+            neg_embeds    = compel(negative_prompt)
+            prompt_embeds, neg_embeds = \
+                compel.pad_conditioning_tensors_to_same_length(
+                    [prompt_embeds, neg_embeds])
+            result = {
+                "prompt_embeds":          prompt_embeds,
+                "negative_prompt_embeds": neg_embeds,
+            }
+
+        self._compel_cache[cache_key] = dict(result)
+        if len(self._compel_cache) > 16:
+            oldest = next(iter(self._compel_cache))
+            del self._compel_cache[oldest]
+
+        return result
 
     def set_ip_adapter_scale(self, scale: float = 0.6):
         """调整 IP-Adapter 影响强度 0.0~1.5（覆盖全部 4 个 pipeline）"""
@@ -829,12 +974,15 @@ class ModelManager(metaclass=SingletonMeta):
         if pipe is None:
             pipe = self.txt2img_pipe
 
+        # 仅在全 GPU 模式下手动搬 TE；offload 模式交给 accelerate 的 hook
         if hasattr(pipe, "text_encoder") and pipe.text_encoder:
-            pipe.text_encoder.to(self.device)
+            if not self._is_offloaded(pipe.text_encoder):
+                pipe.text_encoder.to(self.device)
         if (self.is_sdxl
                 and hasattr(pipe, "text_encoder_2")
                 and pipe.text_encoder_2):
-            pipe.text_encoder_2.to(self.device)
+            if not self._is_offloaded(pipe.text_encoder_2):
+                pipe.text_encoder_2.to(self.device)
 
         cache_key = (prompt, negative_prompt, self.current_model_name,
              getattr(self, 'current_arch_id', None))
