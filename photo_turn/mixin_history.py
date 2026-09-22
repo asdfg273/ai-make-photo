@@ -47,6 +47,8 @@ class HistoryMixin:
             self.future.append(current_state)
 
             prev = self.history[-1]
+            if prev is None:
+                return
             prev_img, prev_mask = prev[0], prev[1]
             prev_sliders = prev[2] if len(prev) > 2 else None
 

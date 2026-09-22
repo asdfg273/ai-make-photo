@@ -62,7 +62,7 @@ class ModelManager(metaclass=SingletonMeta):
         self.current_model_name = None
         self.current_lora_name  = None
         self.is_sdxl            = False
-
+        self.is_vpred = False
         self.txt2img_pipe       = None
         self.img2img_pipe       = None
         self.inpaint_pipe       = None
@@ -353,7 +353,6 @@ class ModelManager(metaclass=SingletonMeta):
             self.current_lora_name  = None
             self._compel_cache.clear()
             self.compel_txt2img = self.compel_img2img = self.compel_controlnet = None
-            vae = result.txt2img.vae
            
             if not self.is_vpred:
                 # 二次检测：用文件名（不区分大小写）
@@ -866,79 +865,6 @@ class ModelManager(metaclass=SingletonMeta):
     # ------------------------------------------------------------
     #  提示词编码 (Compel,支持 SD1.5 / SDXL)
     # ------------------------------------------------------------
-    def encode_prompt(self, prompt, negative_prompt, pipe=None):
-        prof = getattr(self, 'arch_profile', None)
-        if getattr(prof, 'prompt_mode', None) != "compel":
-            # ModularPipeline 系（Anima/Cosmos）等非 Compel 架构：
-            # 不做 Compel，直接退原始 prompt，交给 _adapt_call 转 PipelineState
-            return {"prompt": prompt, "negative_prompt": negative_prompt}
-        if not self.txt2img_pipe:
-            return {}
-
-        if pipe is None:
-            pipe = self.txt2img_pipe
-
-        # 仅在全 GPU 模式下手动搬 TE；offload 模式交给 accelerate 的 hook
-        if hasattr(pipe, "text_encoder") and pipe.text_encoder:
-            if not self._is_offloaded(pipe.text_encoder):
-                pipe.text_encoder.to(self.device)
-        if (self.is_sdxl
-                and hasattr(pipe, "text_encoder_2")
-                and pipe.text_encoder_2):
-            if not self._is_offloaded(pipe.text_encoder_2):
-                pipe.text_encoder_2.to(self.device)
-
-        cache_key = (prompt, negative_prompt, self.current_model_name,
-                     getattr(self, 'current_arch_id', None))
-        if cache_key in self._compel_cache:
-            return dict(self._compel_cache[cache_key])
-
-        if self.is_sdxl:
-            compel = Compel(
-                tokenizer    = [pipe.tokenizer, pipe.tokenizer_2],
-                text_encoder = [pipe.text_encoder, pipe.text_encoder_2],
-                returned_embeddings_type=
-                    ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED,
-                requires_pooled=[False, True],
-                device=self.device,
-                truncate_long_prompts = False,
-            )
-            prompt_embeds, pooled     = compel(prompt)
-            neg_embeds,    neg_pooled = compel(negative_prompt)
-            prompt_embeds, neg_embeds = \
-                compel.pad_conditioning_tensors_to_same_length(
-                    [prompt_embeds, neg_embeds])
-
-            result = {
-                "prompt_embeds":                prompt_embeds,
-                "pooled_prompt_embeds":         pooled,
-                "negative_prompt_embeds":       neg_embeds,
-                "negative_pooled_prompt_embeds":neg_pooled,
-            }
-        else:
-            compel = Compel(
-                tokenizer    = pipe.tokenizer,
-                text_encoder = pipe.text_encoder,
-                device       = self.device,
-                truncate_long_prompts = False,
-            )
-            prompt_embeds = compel(prompt)
-            neg_embeds    = compel(negative_prompt)
-            prompt_embeds, neg_embeds = \
-                compel.pad_conditioning_tensors_to_same_length(
-                    [prompt_embeds, neg_embeds])
-            result = {
-                "prompt_embeds":          prompt_embeds,
-                "negative_prompt_embeds": neg_embeds,
-            }
-
-        self._compel_cache[cache_key] = dict(result)
-        if len(self._compel_cache) > 16:
-            oldest = next(iter(self._compel_cache))
-            del self._compel_cache[oldest]
-
-        return result
-
     def set_ip_adapter_scale(self, scale: float = 0.6):
         """调整 IP-Adapter 影响强度 0.0~1.5（覆盖全部 4 个 pipeline）"""
         if not self.ip_adapter_loaded:

@@ -540,7 +540,8 @@ class EventMixin:
 
             # 归档到 photo/ 画廊,与 open_gallery_to_edit 保持一致
             try:
-                photo_dir = os.path.abspath("photo")
+                from utils.paths import resolve_output_dir
+                photo_dir = str(resolve_output_dir(self.config))
                 os.makedirs(photo_dir, exist_ok=True)
                 timestamp = datetime.datetime.now().strftime("%H%M%S")
                 archive_path = os.path.join(photo_dir, f"pro_edited_{timestamp}.png")
@@ -603,7 +604,8 @@ class EventMixin:
     def open_gallery_to_edit(self):
         logger.debug(f"[DEBUG] open_gallery_to_edit 被调用, 来自文件: {__file__}")
 
-        photo_dir = os.path.abspath("photo")
+        from utils.paths import resolve_output_dir
+        photo_dir = str(resolve_output_dir(self.config))
         os.makedirs(photo_dir, exist_ok=True)
 
         file_path, _ = QFileDialog.getOpenFileName(
@@ -623,24 +625,37 @@ class EventMixin:
 
         # ---- 保存回调 ----
         def on_editor_saved(edited_pil_img: Image.Image, mask_pil_img: Image.Image):
-            logger.info("[EDITOR] ▶ on_editor_saved 被触发 (from gallery)")
+            logger.info("[EDITOR] ▶ on_editor_saved 被触发")
+            from utils.paths import resolve_output_dir
+            output_base = resolve_output_dir(self.config)
+
+            temp_dir = output_base / "temp"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            ref_path  = str(temp_dir / "inpaint_ref.png")
+            mask_path = str(temp_dir / "inpaint_mask.png")
+            edited_pil_img.save(ref_path)
+
+            # 1) 归档（失败不影响后续流程）
             try:
+                archive_dir = output_base
+                archive_dir.mkdir(parents=True, exist_ok=True)
                 timestamp = datetime.datetime.now().strftime("%H%M%S")
+                archive_path = archive_dir / f"pro_edited_{timestamp}.png"
+                n = 1
+                while archive_path.exists():
+                    archive_path = archive_dir / f"pro_edited_{timestamp}_{n}.png"
+                    n += 1
+                edited_pil_img.save(str(archive_path))
+                logger.info(f"[EDITOR] 修图结果已归档到画廊: {archive_path}")
+                if hasattr(self, "refresh_gallery"):
+                    QTimer.singleShot(300, self.refresh_gallery)
+            except Exception as e:
+                logger.warning(f"⚠ 修图结果归档失败(不影响重绘流程): {e}")
 
-                # 1) 归档到 photo/
-                archive_path = os.path.join(photo_dir, f"pro_edited_{timestamp}.png")
-                edited_pil_img.save(archive_path)
-
-                # 2) 写入 inpaint 标准路径,和 open_editor 保持一致
-                temp_dir = os.path.join(OUTPUT_DIR, "temp")
-                os.makedirs(temp_dir, exist_ok=True)
-                ref_path  = os.path.abspath(os.path.join(temp_dir, "inpaint_ref.png"))
-                mask_path = os.path.abspath(os.path.join(temp_dir, "inpaint_mask.png"))
-                edited_pil_img.save(ref_path)
-
-                # 3) 遮罩诊断
-                has_mask = False
-                if mask_pil_img is not None:
+            # 2) 遮罩诊断（归档成功与否都要执行）
+            has_mask = False
+            if mask_pil_img is not None:
+                try:
                     mn, mx = mask_pil_img.getextrema()
                     logger.info(f"[EDITOR] 遮罩 extrema=({mn},{mx}) size={mask_pil_img.size}")
                     if mx > 0:
@@ -648,39 +663,41 @@ class EventMixin:
                         has_mask = True
                     else:
                         logger.warning("[EDITOR] ⚠ 遮罩全黑,未涂抹,退化为图生图")
-                else:
-                    logger.warning("[EDITOR] ⚠ 未收到遮罩对象,退化为图生图")
-
-                # 4) 设置参考图 / 遮罩
-                if has_mask:
-                    self.set_reference_image(ref_path, mask_path)
-                    self._set_status(
-                        "✅ 遮罩已准备完毕！点击生成将自动进入【局部重绘】模式",
-                        "#a6e3a1")
-                else:
-                    self.set_reference_image(ref_path, None)
-                    self._set_status(
-                        "✅ 修图完成！已加载为参考图(图生图模式)。",
-                        "#a6e3a1")
-
-                # 5) 关闭 ControlNet,避免抢走 inpaint 分支
-                try:
-                    if hasattr(self, 'chk_use_pose') and self.chk_use_pose.isChecked():
-                        self.chk_use_pose.setChecked(False)
-                        logger.info("👉 [工作流] 已自动关闭 ControlNet,优先执行局部重绘")
                 except Exception as e:
-                    logger.warning(f"⚠ 关闭 ControlNet 失败(可忽略): {e}")
+                    logger.warning(f"[EDITOR] 遮罩检查失败: {e}")
+            else:
+                logger.warning("[EDITOR] ⚠ 未收到遮罩对象,退化为图生图")
 
-                # 6) 刷新预览
-                self.show_preview(ref_path)
+            # 3) 设置参考图 / 遮罩
+            if has_mask:
+                self.set_reference_image(ref_path, mask_path)
+                self._set_status(
+                    "✅ 遮罩已准备完毕！点击生成将自动进入【局部重绘】模式",
+                    "#a6e3a1")
+            else:
+                self.set_reference_image(ref_path, None)
+                self._set_status(
+                    "✅ 修图完成！已加载为参考图(图生图模式)。",
+                    "#a6e3a1")
 
-                # 7) 更新 current_generated_path,后续再次进入编辑器时可直接复用
-                self.current_generated_path = ref_path
+            # 4) 关闭 ControlNet
+            try:
+                if hasattr(self, 'chk_use_pose') and self.chk_use_pose.isChecked():
+                    self.chk_use_pose.setChecked(False)
+                    logger.info("👉 [工作流] 已自动关闭 ControlNet,优先执行局部重绘")
+            except Exception as e:
+                logger.warning(f"⚠ 关闭 ControlNet 失败(可忽略): {e}")
 
             except Exception:
                 import traceback
                 logger.error("[EDITOR] ❌ 回调内部异常:")
                 logger.error(traceback.format_exc())
+
+            # 5) 刷新预览
+            self.show_preview(ref_path)
+
+            # 6) 更新路径
+            self.current_generated_path = ref_path
 
         # ---- 打开修图器 ----
         self._set_status("正在打开专业级图片编辑器...", "#f9e2af")

@@ -22,11 +22,38 @@ class AIToolsMixin:
         if self.current_img is None:
             QMessageBox.information(self, "提示", "没有可处理的图像。")
             return
+    
+        # 在 GUI 线程构建快照（包含图像数据 + 遮罩），避免线程不安全
+        snapshot = self.current_img.copy()
+        # mask_img 也应该快照（你的 worker 第 71 行直读 self.mask_img 是线程不安全的）
+        mask_snapshot = self.mask_img.copy() if self.mask_img else None
+    
         self._adetailer_running = True
-        self._adetailer_snapshot = self.current_img.copy() 
-        threading.Thread(target=self._adetailer_worker, daemon=True).start()
+        self._adetailer_snapshot = snapshot  # 完成回调会用
+    
+        # 传入快照，不是实例属性
+        threading.Thread(
+            target=self._adetailer_body, 
+            args=(snapshot, mask_snapshot), 
+            daemon=True
+        ).start()
 
-    def _adetailer_worker(self, snapshot):          # <-- 接收 snapshot
+    # 2. 新增幂等包装层（保证标志位一定复位）
+    def _adetailer_body(self, snapshot, mask_snapshot):
+        """标志位保护层：无论 worker 成功/异常/TypeError，都能复位。"""
+        try:
+            self._adetailer_worker(snapshot, mask_snapshot)
+        except Exception:
+            logger.exception("❌ ADetailer 处理失败")
+            # GUI 线程弹错误
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: QMessageBox.critical(
+                self, "错误", "ADetailer 处理失败，请查看日志"))
+        finally:
+            self._adetailer_running = False
+
+    def _adetailer_worker(self, snapshot, mask_snapshot):
+        """snapshot: PIL.Image，修复前的图；mask_snapshot: PIL.Image | None，修复前的遮罩。"""
         def _status(text, color="#f9e2af"):
             QTimer.singleShot(0, lambda: (
                 self.lbl_status.setText(text),
@@ -35,8 +62,8 @@ class AIToolsMixin:
 
         try:
             _status("🔍 正在检测人脸...", "#f9e2af")
-            cv_img = cv2.cvtColor(np.array(snapshot), cv2.COLOR_RGB2BGR)  # <-- 用 snapshot
-            gray   = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+            cv_img = cv2.cvtColor(np.array(snapshot), cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
 
             cascade_candidates = [
                 "weights/lbpcascade_animeface.xml",
@@ -68,8 +95,8 @@ class AIToolsMixin:
                 )
                 return
 
-            result_img  = snapshot.copy()           # <-- 用 snapshot
-            result_mask = self.mask_img.copy()
+            result_img = snapshot.copy()
+            result_mask = mask_snapshot.copy() if mask_snapshot else Image.new("L", snapshot.size, 0)
             success_count = 0
 
             for idx, (x, y, w, h) in enumerate(faces):

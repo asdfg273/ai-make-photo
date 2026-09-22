@@ -3,7 +3,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from typing import List
-
+from pathlib import Path
 from utils.paths import CONFIG_FILE
 import logging
 
@@ -119,3 +119,23 @@ class AppConfig:
             self.recent_prompts.insert(0, prompt[:200])
             self.recent_prompts = self.recent_prompts[:20] # 最多存20个
             self.save()  # 立即保存
+
+    def resolve_output_dir(config=None) -> Path:
+        """
+        返回有效输出目录：
+        - 优先 config.output_dir（非空且存在）
+        - 回落 paths.OUTPUT_DIR（即 photo/）
+        """
+        from pathlib import Path
+        if config:
+            custom = getattr(config, "output_dir", None)
+            if custom:
+                p = Path(custom)
+                if p.exists() or custom.strip():  # 允许新建
+                    try:
+                        p.mkdir(parents=True, exist_ok=True)
+                        return p
+                    except Exception:
+                        pass
+        from utils.paths import OUTPUT_DIR
+        return Path(OUTPUT_DIR)

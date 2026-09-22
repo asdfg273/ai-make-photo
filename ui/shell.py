@@ -168,6 +168,9 @@ class ShellMixin:
             except Exception:
                 pass
         self._current_page_id = page_id
+        if page_id == "txt2img" and getattr(self, "ref_image_path", None):
+            self.clear_reference()
+
         self.center_stack.setCurrentWidget(page.workspace())
 
         # 画廊页：隐藏整个右侧面板，画廊全宽
@@ -896,8 +899,4 @@ class ShellMixin:
         except ImportError:
             QMessageBox.information(
                 self, "提示", "请安装 psutil: pip install psutil")
-
-    def _on_tab_changed(self, index):
-        if self.tab_widget.tabText(index) == "文生图":
-            self.clear_reference()  # 自动清除参考图
 

@@ -20,6 +20,8 @@ class FiltersMixin:
 
     def apply_adjustments(self):
         try:
+            if getattr(self, "_filter_preview", None) is not None:
+                return
             if self.base_img is None:
                 return
             img       = self.base_img.copy()
@@ -266,6 +268,9 @@ class FiltersMixin:
 
     def preview_filter(self):
         """预览滤镜:只看效果,不入历史,Esc 取消"""
+        if hasattr(self, "_adjust_timer") and self._adjust_timer is not None:
+            self._adjust_timer.stop()
+
         name = self.filter_combo.currentText()
         if name == "无":
             self._cancel_filter_preview()
@@ -291,6 +296,14 @@ class FiltersMixin:
             self._cancel_filter_preview()
             self._revert_filters()
             return
+        if hasattr(self, "_adjust_timer") and self._adjust_timer is not None:
+            if self._adjust_timer.isActive():
+                self._adjust_timer.stop()
+                # 临时清除预览标记，让 apply_adjustments 能跑
+                saved_preview = getattr(self, "_filter_preview", None)
+                self._filter_preview = None
+                self.apply_adjustments()
+                self._filter_preview = saved_preview
 
         logger.info(f"[滤镜] 应用: {filter_name}")
 

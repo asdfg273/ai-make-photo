@@ -427,6 +427,7 @@ class GenerationMixin:
 
         if extracted_features:
             logger.info(f"📝 注入特征后第一条 prompt:\n   {en_prompts[0][:200]}...")
+        _current_page = getattr(self, "_current_page_id", "txt2img")
 
         # ── 返回 ctx ──
         return {
@@ -465,7 +466,11 @@ class GenerationMixin:
             'pose_image':        None,
             'pose_transfer_used': False,
             'skip_img2img':      False,
-            'init_image_path': self.ref_image_path if getattr(self, 'ref_image_path', None) else None,
+            'init_image_path': (
+                self.ref_image_path
+                if (getattr(self, 'ref_image_path', None) and _current_page == "img2img")
+                else None
+            ),
             'use_inpaint':       False,
 
             # === 角色一致性 ===
@@ -971,9 +976,6 @@ class GenerationMixin:
                     )
                 ctx['init_image'] = init_img
                 ctx['use_img2img'] = True
-                # strength 从 UI 读取（如果没有就用 0.75 默认值）
-                if 'strength' not in ctx:
-                    ctx['strength'] = 0.75
                 logger.info(
                     f"✅ 图生图模式: {os.path.basename(init_path)} | "
                     f"强度={ctx['strength']:.2f}"
