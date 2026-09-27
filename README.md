@@ -104,9 +104,9 @@
 | **视频播放** | QtMultimedia | 6.x | 视频预览播放 |
 | **绘图引擎** | PyQt6 | 6.x | 修图编辑器 |
 | **图像处理** | PIL/Pillow | 10.x | 图像加载、处理、保存 |
-| **深度学习** | PyTorch | 2.x（CUDA 12.8 单独安装） | GPU 加速推理 |
-| **扩散模型** | Diffusers | 0.32.2 | Stable Diffusion 管线 |
-| **文本编码** | Transformers | 4.49.0 | CLIP / T5 文本编码器 |
+| **深度学习** | PyTorch | 2.11（CUDA 12.8 单独安装） | GPU 加速推理 |
+| **扩散模型** | Diffusers | 0.40.x | Stable Diffusion 管线 |
+| **文本编码** | Transformers | 5.16.x | CLIP / T5 文本编码器 |
 | **视频扩散** | AnimateDiff | - | 视频生成管线 |
 | **控制网络** | ControlNet | - | 姿态/深度控制 |
 | **提示词编码** | Compel | ≥2.0 | 高级提示词处理（SD1.5/SDXL） |
@@ -289,6 +289,9 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 pip install -r requirements.txt
 
 # 5. 下载模型文件
+# 最简单的做法：把下载到的模型统一丢进 models/puton/ 即可，
+# 程序启动时会自动识别架构并移动到对应目录，并弹窗告知结果。
+# 也可以手动放置（见 5.3 表格）：
 # 将 SD 模型(.safetensors)放入 models/sd15/ 或 models/sdxl/ 等对应目录
 # 将 LoRA 文件放入 loras/sd1.5/ 或 loras/sdxl/ 目录
 # 将 Motion LoRA 文件放入 models/motion_lora/ 目录
@@ -299,14 +302,91 @@ python main.py
 
 ### 5.3 模型准备
 
+> **本项目不预置任何模型，也不在运行流程中静默下载模型。**
+> 底模 / LoRA / ControlNet 等请自行下载后放入下表目录。
+> 只有「辅助功能」会在你**明确点击并确认**后下载（见 5.4）。
+
+**不用自己判断架构**：把下载到的模型文件直接丢进 `models/puton/`
+（投递箱）即可。程序每次启动会读取文件头判断它是 SD1.5 / SDXL /
+Flux / SD3 / Anima / LoRA，自动移动到下表中正确的目录，并弹窗告诉你
+每个文件去了哪里。
+
+- 只读文件头，**不加载权重、不联网、不上传**；
+- 识别不了的文件（或 ControlNet/VAE 这类非底模）**原样留在投递箱**
+  并说明原因，绝不乱猜、绝不删除；
+- 同名文件**不会覆盖**：大小相同视为重复跳过，否则自动加 `_1` 后缀；
+- 正在下载的中间文件（`.part` / `.tmp` / `.crdownload` / 0 字节）会被忽略。
+
 | 文件类型 | 放置位置 | 说明 |
 |---------|---------|------|
+| **任何底模 / LoRA（推荐）** | **`models/puton/`** | **丢进来即可，启动时自动归位** |
 | SD 底模 | `models/sd15/*.safetensors` | SD 1.5 模型 |
 | SDXL 底模 | `models/sdxl/*.safetensors` | SDXL 模型 |
+| Flux / SD3 底模 | `models/flux/`、`models/sd3/` | 还需先装引擎组件，见 5.5 |
 | LoRA 插件 | `loras/sd1.5/*.safetensors` | SD 1.5 专用 |
 | LoRA 插件 | `loras/sdxl/*.safetensors` | SDXL 专用 |
+| LoRA（判不出底模） | `loras/_unknown_dit/` | 投递箱无法确定架构时的落点 |
 | Motion LoRA | `models/motion_lora/*/` | 运镜特效模型 |
 | ADetailer 模型 | `models/adetailer/*.pt` | 人脸/手部检测模型 |
+| IP-Adapter | `models/ip_adapter/` | 图生视频用（`ip-adapter_sd15.safetensors` + `image_encoder/`） |
+| ChatTTS | `models/tts/ChatTTS/` | 配音用 |
+
+> **LoRA 按架构分目录**：`loras/sd1.5/`、`loras/sdxl/`、`loras/flux/`、
+> `loras/sd3/`、`loras/anima/`；判不出底模的进 `loras/_unknown_dit/`。
+> 投递箱会自动放到正确子目录，不用你判断。
+| ControlNet | `controlnets/<type>/` | 需含 `config.json` |
+
+启动时会扫描缺失项并写进日志（`print_scan_report()`），**只扫描不下载**。
+命令行自查与手动获取：
+
+```bash
+python -m utils.model_downloader scan             # 查看缺什么
+python -m utils.model_downloader install <key>    # 手动下载单项（需自行执行）
+```
+
+### 5.4 联网行为说明
+
+| 行为 | 何时发生 | 说明 |
+|------|---------|------|
+| 启动扫描 | 每次启动 | 只读本地目录，**不联网** |
+| 扩展市场 | 你点「⬇️ 下载」 | 辅助功能（ControlNet / RIFE / ChatTTS / GPT-SoVITS / Qwen 等） |
+| 提示词智能改写 / 识图 | 你点按钮或勾选「生成前自动改写」 | 缺 Qwen 档位时**先弹窗告知体积与来源**，确认后才从 ModelScope 下载；也可自行放入 `models_cache/modelscope` |
+| 图生视频 | 切到该模式且缺 IP-Adapter | **先弹窗确认**，不静默下载 |
+| 配音（ChatTTS） | 勾选配音且缺模型 | **先弹窗确认**，不静默下载 |
+| ControlNet / OpenPose / 深度 | 首次启用且本地无模型 | 仍会联网获取；可自行放入 `controlnets/` 后离线使用 |
+| 翻译 | 默认「词典优先 + AI 兜底」模式 | 未命中词典时会请求 Google 翻译（可切「纯词典」完全离线） |
+
+### 5.5 新架构引擎（Flux / SD3）
+
+这些架构**不能只靠一个 checkpoint 跑起来**，还需要配套的文本编码器 / VAE
+等「引擎组件」。本项目把它拆成两部分，且**当前尚未接通**（放上模型也会明确
+提示，不会静默下载）：
+
+| 部分 | 体积 | 来源 |
+|------|------|------|
+| 引擎组件（T5-XXL / CLIP-L / VAE / tokenizer） | 约 10GB | **扩展市场 → 新架构引擎** |
+| transformer 主权重 | 约 24GB（bf16） | **你自行下载**，放进 `models/flux/` 或 `models/puton/` |
+
+检测到 Flux 模型但组件缺失时，启动会**单独弹窗**告知，并提供「去扩展市场下载」
+按钮 —— 不下载引擎就无法使用 Flux 生成。
+
+#### ⚠️ 许可证差异（选之前务必看清）
+
+| 变体 | 许可证 | 能否商用 |
+|------|--------|---------|
+| **FLUX.1-schnell** | Apache-2.0 | ✅ **可商用**，无附加限制（推荐） |
+| FLUX.1 [dev] | FLUX.1 [dev] Non-Commercial License v1.1.1 | ❌ **不可商用** |
+
+FLUX.1 [dev] 的非商用许可明确禁止「营利性活动」以及「直接面向终端用户、
+或对终端用户产生影响」的使用；商用需另行向 Black Forest Labs 申请授权。
+两者的**生成图片**都可商用（BFL 声明不对 Outputs 主张权利），受限的是
+「使用模型」这件事本身。
+
+本项目为「开源 + 打赏」形态：**schnell 无争议；用 dev 权重请自行确认你的
+使用方式落在非商用范围内，风险自负。** 详见
+[LICENSE-FLUX1-dev](https://github.com/black-forest-labs/flux/blob/main/model_licenses/LICENSE-FLUX1-dev)
+与 [LICENSE-FLUX1-schnell](https://github.com/black-forest-labs/flux/blob/main/model_licenses/LICENSE-FLUX1-schnell)。
+
 
 ---
 
@@ -518,3 +598,36 @@ python main.py
 
 **版本**：v6.0  
 **更新日期**：2026-09-20
+
+---
+
+## 十一、许可与合规（重要）
+
+本项目以 **AGPL-3.0** 发布，完整许可见 `LICENSE`。
+
+之所以是 AGPL 而不是 MIT：项目依赖/集成了两个 **AGPL-3.0** 组件——
+`ultralytics`（ADetailer 的 YOLOv8 检测）与 ChatTTS（中文配音）。
+这两个是强 copyleft，与本项目结合后整体须以 AGPL-3.0 发布。
+
+> **接受捐赠（打赏）通常不构成商业分发**，因此"开源 + 打赏"与 AGPL 兼容。
+> 但一旦提供付费功能 / 企业版 / 云端服务，AGPL 第 13 条要求你向网络用户
+> 提供完整源码。
+
+**如果你希望改用宽松许可（MIT / Apache-2.0）以便闭源或商用**，
+需要先移除 AGPL 组件，替换方案见 `THIRD_PARTY_NOTICES.md` 第四节，简要版：
+
+| 替换对象 | 建议方案 | 许可 |
+|---|---|---|
+| `ultralytics` YOLOv8 检测 | OpenCV 自带 `cv2.FaceDetectorYN`（YuNet） | Apache-2.0 |
+| ChatTTS | GPT-SoVITS（项目已内置）或系统 TTS | MIT |
+| NLLB-200（扩展市场条目） | 移除（CC-BY-NC-4.0 **禁止商用**） | — |
+| PyQt6 | PySide6（LGPL）或购买 PyQt6 商业许可 | LGPL / 商业 |
+
+**各依赖与模型权重的完整许可清单**（含底模的 CreativeML Open RAIL-M
+使用限制、RIFE/Real-ESRGAN 的 MIT/BSD、FFmpeg 的 LGPL 等）：
+见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+> ⚠️ 本项目**不预置任何模型权重**（`.gitignore` 已排除 `models/*`、`tools/`），
+> 由用户自行下载。这显著降低了"再分发 AGPL 权重与受限底模"的风险，
+> 请继续保持这一做法。
+

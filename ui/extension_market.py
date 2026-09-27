@@ -6,13 +6,14 @@
 - 后台线程下载/卸载,不卡主界面
 - 实时进度条 + 状态文本
 """
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QWidget, QProgressBar, QFrame, QMessageBox,
-    QSizePolicy,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 from utils.extension_manager import (
     EXTENSIONS, get_status_summary,
@@ -29,13 +30,58 @@ _C_DIM_BG, _C_DIM_FG = PALETTE["bg_soft"], PALETTE["fg_mute"]
 # ============================================================
 #  下载/卸载工作线程
 # ============================================================
+# 模块级注册表：worker **故意不挂到对话框上**。
+# 用户关闭扩展市场后，下载要继续在后台跑（需求原话），
+# 所以 worker 的生命周期必须独立于对话框；对话框关闭时只解除 UI 连接。
+_ACTIVE_WORKERS: set = set()
+
+
+def running_worker_count() -> int:
+    """当前仍在运行的下载/卸载任务数（供主窗口退出前判断）。"""
+    return sum(1 for w in list(_ACTIVE_WORKERS) if w.isRunning())
+
+
+def shutdown_workers(timeout_ms: int = 8000) -> int:
+    """退出程序前收尾：尽量等任务结束，超时则安全终止线程。
+
+    必须做这一步的原因：QThread 在**运行中**被销毁时 Qt 会 qFatal
+    直接终止进程（表现为"关掉程序后弹错/闪退"）。
+    这里先给宽限期，再 terminate()+wait()，保证析构时线程已停止。
+    终止是安全的：HF 下载器基于文件，已下载部分会保留，下次可续传。
+    """
+    import time as _t
+    alive = [w for w in list(_ACTIVE_WORKERS) if w.isRunning()]
+    if not alive:
+        return 0
+    logger.info("⏳ 等待 %d 个后台下载任务收尾（最多 %ds）…",
+                len(alive), timeout_ms // 1000)
+    deadline = _t.time() + timeout_ms / 1000.0
+    while _t.time() < deadline:
+        if not any(w.isRunning() for w in alive):
+            logger.info("✅ 后台下载已自然结束")
+            return 0
+        _t.sleep(0.1)
+
+    stopped = 0
+    for w in alive:
+        if w.isRunning():
+            try:
+                w.terminate()
+                w.wait(2000)
+                stopped += 1
+            except Exception as e:
+                logger.warning(f"⚠️ 终止下载线程失败: {e}")
+    logger.warning("⚠️ 已强制停止 %d 个未完任务（已下载部分保留，下次可续传）", stopped)
+    return stopped
+
+
 class ExtensionWorker(QThread):
     progress = pyqtSignal(float, str)   # pct, msg
     finished_ok = pyqtSignal(str)       # ext_id
     failed = pyqtSignal(str, str)       # ext_id, error
 
-    def __init__(self, ext_id: str, action: str):
-        super().__init__()
+    def __init__(self, ext_id: str, action: str, parent=None):
+        super().__init__(parent)
         self.ext_id = ext_id
         self.action = action  # "install" or "uninstall"
 
@@ -280,7 +326,7 @@ class ExtensionMarketDialog(QDialog):
             by_cat.setdefault(ext["category"], []).append((ext_id, ext))
 
         # 分类顺序
-        cat_order = ["图片增强", "控制", "修复", "视频", "音频"]
+        cat_order = ["图片增强", "控制", "修复", "视频", "音频", "新架构引擎"]
         ordered_cats = [c for c in cat_order if c in by_cat] + [c for c in by_cat if c not in cat_order]
 
         for cat in ordered_cats:
@@ -300,12 +346,23 @@ class ExtensionMarketDialog(QDialog):
 
         self.content_lay.addStretch()
 
+    def _set_status(self, text: str, color: str = "#89dceb"):
+        """在汇总标签上显示一句话状态（没有独立状态栏，复用顶部汇总行）。"""
+        try:
+            if getattr(self, "_orig_summary_text", None) is None:
+                self._orig_summary_text = self.lbl_summary.text()
+            self.lbl_summary.setText(text)
+            self.lbl_summary.setStyleSheet(f"color:{color}; font-weight:bold;")
+        except Exception:
+            pass
+
     def _update_summary(self):
         """更新顶部汇总"""
         summary = get_status_summary()
         installed = summary["installed"]
         total = summary["total"]
         self.lbl_summary.setText(f"📊 已安装: {installed} / {total}")
+        self.lbl_summary.setStyleSheet("")
 
 
     def refresh_all(self):
@@ -323,12 +380,21 @@ class ExtensionMarketDialog(QDialog):
         card = self.cards[ext_id]
         card.set_busy(True)
 
+        # 不传 parent：让 worker 独立于对话框存活，关窗后继续下载
         worker = ExtensionWorker(ext_id, action)
         worker.progress.connect(lambda p, m, c=card: c.update_progress(p, m))
         worker.finished_ok.connect(lambda eid: self._on_worker_done(eid, True))
         worker.failed.connect(lambda eid, err: self._on_worker_done(eid, False, err))
+        worker.finished.connect(lambda eid=ext_id: self._cleanup_worker(eid))
         self.workers[ext_id] = worker
+        _ACTIVE_WORKERS.add(worker)
         worker.start()
+
+    def _cleanup_worker(self, ext_id: str):
+        w = self.workers.pop(ext_id, None)
+        if w is not None:
+            _ACTIVE_WORKERS.discard(w)
+            w.deleteLater()
 
     def _on_worker_done(self, ext_id: str, success: bool, error: str = ""):
         card = self.cards.get(ext_id)
@@ -343,16 +409,21 @@ class ExtensionMarketDialog(QDialog):
             QMessageBox.critical(self, "操作失败", f"[{ext_id}]\n\n{error}")
 
     def closeEvent(self, event):
-        # 有下载中的任务提示
+        """关闭窗口 = 收工，但下载继续在后台跑。
+
+        线程生命周期不依赖本对话框（worker 无 parent、且登记在
+        _ACTIVE_WORKERS），所以关闭是安全的；真正需要收尾的是
+        退出程序时，由 shutdown_workers() 统一处理。
+        """
         running = [wid for wid, w in self.workers.items() if w.isRunning()]
         if running:
-            reply = QMessageBox.question(
-                self, "有任务在运行",
-                f"仍有 {len(running)} 个任务正在运行,关闭窗口不会中断下载。\n\n确定关闭?",
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                event.ignore()
-                return
+            logger.info("⏳ 关闭扩展市场：%d 个任务转入后台继续", len(running))
+            try:
+                self._set_status(
+                    f"⏳ {len(running)} 个下载任务已在后台继续，完成后会自动安装",
+                    "#89dceb")
+            except Exception:
+                pass
         event.accept()
 
 

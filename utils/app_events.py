@@ -1,20 +1,16 @@
 import os
-import gc
 import io
 import datetime
 import threading
 import traceback
-import warnings
-from utils.prompt_enhancer import get_enhancer
+from .prompt_enhancer import get_enhancer
 from PIL import Image
 
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
-from PyQt6.QtGui import QPixmap, QImage, QColor
-from PyQt6.QtCore import Qt,pyqtSlot,QMetaObject, QObject,Q_ARG, QTimer
-from utils.app_utils import OUTPUT_DIR
-from core.presets         import PROMPT_PRESETS
+from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtCore import Qt,pyqtSlot,QMetaObject, Q_ARG, QTimer
+from utils.paths import OUTPUT_DIR
 
-from utils.prompt_enhancer import get_enhancer, PromptEnhancer
 import logging
 logger = logging.getLogger(__name__)
 try:
@@ -114,6 +110,27 @@ class EventMixin:
             self.scale_ad_hand_blend.setValue(
                 getattr(cfg, 'ad_hand_blend', 0.65))
 
+        # ── FreeU ───────────────────────────────────────────
+        if hasattr(self, 'chk_freeu'):
+            self.chk_freeu.setChecked(
+                getattr(cfg, 'freeu_enabled', False))
+
+        # ── CLIP Skip ────────────────────────────────────────
+        if hasattr(self, 'combo_clip_skip'):
+            _cs = int(getattr(cfg, 'clip_skip', 0) or 0)
+            self.combo_clip_skip.blockSignals(True)
+            self.combo_clip_skip.setCurrentIndex(
+                _cs if 0 <= _cs < self.combo_clip_skip.count() else 0)
+            self.combo_clip_skip.blockSignals(False)
+
+        # ── Qwen 改写模式 ─────────────────────────────────────
+        if hasattr(self, 'combo_enhance_mode'):
+            _em = getattr(cfg, 'enhance_mode', 'strict') or 'strict'
+            _idx = self.combo_enhance_mode.findData(_em)
+            self.combo_enhance_mode.blockSignals(True)
+            self.combo_enhance_mode.setCurrentIndex(_idx if _idx >= 0 else 0)
+            self.combo_enhance_mode.blockSignals(False)
+
         # ── Hires.fix ────────────────────────────────────────
         if hasattr(self, 'chk_hires'):
             self.chk_hires.setChecked(
@@ -209,22 +226,22 @@ class EventMixin:
         """显示模型备注（已由 scan_models 读取）"""
         data = self._current_model_data()
         note = data.get("note", "").strip()
-        
+
         if note:
             preview = note[:80] + ("..." if len(note) > 80 else "")
             _set_label_style(self.lbl_model_info, f"📌 备忘: {preview}", "#89dceb")
         else:
             txt_path = os.path.splitext(data.get("path", ""))[0] + ".txt"
             _set_label_style(
-                self.lbl_model_info, 
-                f"💡 提示: 可在 {txt_path} 记录备注", 
+                self.lbl_model_info,
+                f"💡 提示: 可在 {txt_path} 记录备注",
                 "#585b70"
             )
 
     def load_lora_info(self, index=None):
         """任意 LoRA 槽位变化时，刷新备忘录文本框"""
         from utils import paths
-        
+
         info_texts = []
         has_lora   = False
         has_any_txt = False
@@ -508,7 +525,7 @@ class EventMixin:
 
     def open_editor(self):
         logger.debug(f"[DEBUG] open_editor 来自文件: {__file__}")
-        logger.debug(f"[DEBUG] 这是新版! 应该会传 callback_on_save")
+        logger.debug("[DEBUG] 这是新版! 应该会传 callback_on_save")
         """打开专业修图器 - PyQt6 版"""
         # 防重入
         if getattr(self, "_editor_opening", False):
@@ -626,78 +643,85 @@ class EventMixin:
         # ---- 保存回调 ----
         def on_editor_saved(edited_pil_img: Image.Image, mask_pil_img: Image.Image):
             logger.info("[EDITOR] ▶ on_editor_saved 被触发")
-            from utils.paths import resolve_output_dir
-            output_base = resolve_output_dir(self.config)
-
-            temp_dir = output_base / "temp"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            ref_path  = str(temp_dir / "inpaint_ref.png")
-            mask_path = str(temp_dir / "inpaint_mask.png")
-            edited_pil_img.save(ref_path)
-
-            # 1) 归档（失败不影响后续流程）
             try:
-                archive_dir = output_base
-                archive_dir.mkdir(parents=True, exist_ok=True)
-                timestamp = datetime.datetime.now().strftime("%H%M%S")
-                archive_path = archive_dir / f"pro_edited_{timestamp}.png"
-                n = 1
-                while archive_path.exists():
-                    archive_path = archive_dir / f"pro_edited_{timestamp}_{n}.png"
-                    n += 1
-                edited_pil_img.save(str(archive_path))
-                logger.info(f"[EDITOR] 修图结果已归档到画廊: {archive_path}")
-                if hasattr(self, "refresh_gallery"):
-                    QTimer.singleShot(300, self.refresh_gallery)
-            except Exception as e:
-                logger.warning(f"⚠ 修图结果归档失败(不影响重绘流程): {e}")
+                from utils.paths import resolve_output_dir
+                output_base = resolve_output_dir(self.config)
 
-            # 2) 遮罩诊断（归档成功与否都要执行）
-            has_mask = False
-            if mask_pil_img is not None:
+                temp_dir = output_base / "temp"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                ref_path  = str(temp_dir / "inpaint_ref.png")
+                mask_path = str(temp_dir / "inpaint_mask.png")
+                edited_pil_img.save(ref_path)
+
+                # 1) 归档（失败不影响后续流程）
                 try:
-                    mn, mx = mask_pil_img.getextrema()
-                    logger.info(f"[EDITOR] 遮罩 extrema=({mn},{mx}) size={mask_pil_img.size}")
-                    if mx > 0:
-                        mask_pil_img.save(mask_path)
-                        has_mask = True
-                    else:
-                        logger.warning("[EDITOR] ⚠ 遮罩全黑,未涂抹,退化为图生图")
+                    archive_dir = output_base
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    timestamp = datetime.datetime.now().strftime("%H%M%S")
+                    archive_path = archive_dir / f"pro_edited_{timestamp}.png"
+                    n = 1
+                    while archive_path.exists():
+                        archive_path = archive_dir / f"pro_edited_{timestamp}_{n}.png"
+                        n += 1
+                    edited_pil_img.save(str(archive_path))
+                    logger.info(f"[EDITOR] 修图结果已归档到画廊: {archive_path}")
+                    if hasattr(self, "refresh_gallery"):
+                        QTimer.singleShot(300, self.refresh_gallery)
                 except Exception as e:
-                    logger.warning(f"[EDITOR] 遮罩检查失败: {e}")
-            else:
-                logger.warning("[EDITOR] ⚠ 未收到遮罩对象,退化为图生图")
+                    logger.warning(f"⚠ 修图结果归档失败(不影响重绘流程): {e}")
 
-            # 3) 设置参考图 / 遮罩
-            if has_mask:
-                self.set_reference_image(ref_path, mask_path)
-                self._set_status(
-                    "✅ 遮罩已准备完毕！点击生成将自动进入【局部重绘】模式",
-                    "#a6e3a1")
-            else:
-                self.set_reference_image(ref_path, None)
-                self._set_status(
-                    "✅ 修图完成！已加载为参考图(图生图模式)。",
-                    "#a6e3a1")
+                # 2) 遮罩诊断（归档成功与否都要执行）
+                has_mask = False
+                if mask_pil_img is not None:
+                    try:
+                        mn, mx = mask_pil_img.getextrema()
+                        logger.info(f"[EDITOR] 遮罩 extrema=({mn},{mx}) size={mask_pil_img.size}")
+                        if mx > 0:
+                            mask_pil_img.save(mask_path)
+                            has_mask = True
+                        else:
+                            logger.warning("[EDITOR] ⚠ 遮罩全黑,未涂抹,退化为图生图")
+                    except Exception as e:
+                        logger.warning(f"[EDITOR] 遮罩检查失败: {e}")
+                else:
+                    logger.warning("[EDITOR] ⚠ 未收到遮罩对象,退化为图生图")
 
-            # 4) 关闭 ControlNet
-            try:
-                if hasattr(self, 'chk_use_pose') and self.chk_use_pose.isChecked():
-                    self.chk_use_pose.setChecked(False)
-                    logger.info("👉 [工作流] 已自动关闭 ControlNet,优先执行局部重绘")
-            except Exception as e:
-                logger.warning(f"⚠ 关闭 ControlNet 失败(可忽略): {e}")
+                # 3) 设置参考图 / 遮罩
+                if has_mask:
+                    self.set_reference_image(ref_path, mask_path)
+                    self._set_status(
+                        "✅ 遮罩已准备完毕！点击生成将自动进入【局部重绘】模式",
+                        "#a6e3a1")
+                else:
+                    self.set_reference_image(ref_path, None)
+                    self._set_status(
+                        "✅ 修图完成！已加载为参考图(图生图模式)。",
+                        "#a6e3a1")
 
+                # 4) 关闭 ControlNet
+                try:
+                    if hasattr(self, 'chk_use_pose') and self.chk_use_pose.isChecked():
+                        self.chk_use_pose.setChecked(False)
+                        logger.info("👉 [工作流] 已自动关闭 ControlNet,优先执行局部重绘")
+                except Exception as e:
+                    logger.warning(f"⚠ 关闭 ControlNet 失败(可忽略): {e}")
+
+                # 5) 刷新预览
+                self.show_preview(ref_path)
+
+                # 6) 更新路径
+                self.current_generated_path = ref_path
             except Exception:
-                import traceback
                 logger.error("[EDITOR] ❌ 回调内部异常:")
                 logger.error(traceback.format_exc())
-
-            # 5) 刷新预览
-            self.show_preview(ref_path)
-
-            # 6) 更新路径
-            self.current_generated_path = ref_path
+                try:
+                    self._set_status("❌ 修图回调出错，详见日志", "#f38ba8")
+                    QMessageBox.warning(
+                        self, "修图回调出错",
+                        "修图结果处理失败（已写入日志）。\n"
+                        "可能是输出目录不可写，请检查设置里的输出目录。")
+                except Exception:
+                    pass
 
         # ---- 打开修图器 ----
         self._set_status("正在打开专业级图片编辑器...", "#f9e2af")
@@ -718,15 +742,15 @@ class EventMixin:
         label = getattr(self, 'lbl_model_info', None)
         if not label:
             return
-    
+
         data = self.combo_model.currentData()
         if not data or not isinstance(data, dict):
             return
-    
+
         note = (data.get('note') or '').strip()
         mtype = data.get('type', '')
         fname = data.get('name', '')
-    
+
         # 组合信息: [类型] 文件名 + 备注
         lines = []
         if mtype and fname:
@@ -735,7 +759,7 @@ class EventMixin:
             lines.append(f"📌 {note}")
         else:
             lines.append("💡 可建同名 .txt 文件添加备注")
-    
+
         label.setText("\n".join(lines))
         label.setStyleSheet(
             f"color:{'#89dceb' if note else '#a6adc8'}; "
@@ -743,13 +767,33 @@ class EventMixin:
         )
 
     def on_enhance_prompt(self):
-        """智能改写：同时润色正面和负面提示词"""
+        """智能改写：按所选模式处理提示词。
+
+        模式（UI 下拉框 combo_enhance_mode）：
+          strict   —— ①严格翻译：忠实转换，不改变用户原意（默认）
+          polish   —— ②适当润色：修语法/统一用词/规范化排序
+          keywords —— ③关键词帮写：从少量关键词扩写成完整提示词
+
+        负面提示词始终走 negative 模式（与正向模式无关）。
+        """
         raw_pos = self.txt_prompt.toPlainText().strip()
         raw_neg = self.txt_neg.toPlainText().strip()
 
         if not raw_pos and not raw_neg:
             self._set_status("⚠️ 提示词为空", "#f9e2af")
             return
+
+        # 读取模式
+        mode_key = "strict"
+        try:
+            if hasattr(self, 'combo_enhance_mode'):
+                mode_key = self.combo_enhance_mode.currentData() or "strict"
+        except Exception:
+            pass
+        try:
+            self.config.enhance_mode = mode_key
+        except Exception:
+            pass
 
         self.btn_enhance_prompt.setEnabled(False)
         self.btn_enhance_prompt.setText("改写中...")
@@ -759,10 +803,10 @@ class EventMixin:
                 enhancer = get_enhancer()
                 enhancer.ensure_loaded()
 
-                logger.info(f"[ENHANCE] 正面输入: {raw_pos!r}")
+                logger.info(f"[ENHANCE] 模式={mode_key} 正面输入: {raw_pos!r}")
                 logger.info(f"[ENHANCE] 负面输入: {raw_neg!r}")
 
-                result_pos = enhancer.enhance(raw_pos, mode="positive") if raw_pos else ""
+                result_pos = enhancer.enhance(raw_pos, mode=mode_key) if raw_pos else ""
                 result_neg = enhancer.enhance(raw_neg, mode="negative") if raw_neg else ""
 
                 logger.info(f"[ENHANCE] 正面输出: {result_pos!r}")
@@ -791,7 +835,7 @@ class EventMixin:
                         logger.info("🧹 Qwen 已卸载 (智能改写完成)")
                     except Exception:
                         pass
-                
+
         import threading
         threading.Thread(target=task, daemon=True).start()
 
@@ -802,7 +846,9 @@ class EventMixin:
         if neg.strip():
             self.txt_neg.setPlainText(neg.strip())
         self._restore_enhance_button()
-        self._set_status("✨ 改写完成", "#a6e3a1")
+        _m = "严格翻译" if (hasattr(self, 'combo_enhance_mode')
+                            and self.combo_enhance_mode.currentData() == "strict") else "改写"
+        self._set_status(f"✨ {_m}完成", "#a6e3a1")
 
     @pyqtSlot()
     def _restore_enhance_button(self):
@@ -835,7 +881,7 @@ class EventMixin:
                     self, "_apply_video_enhance",
                     Qt.ConnectionType.QueuedConnection,
                     Q_ARG(str, result_pos), Q_ARG(str, result_neg))
-            except Exception as e:
+            except Exception:
                 traceback.print_exc()
                 QMetaObject.invokeMethod(
                     self, "_restore_video_enhance_button",
@@ -859,7 +905,7 @@ class EventMixin:
             self.btn_enhance_video_prompt.setEnabled(True)
             self.btn_enhance_video_prompt.setText("✨ 智能改写")
 
-    
+
 
     def on_vision_video_prompt(self):
         """动画 Tab 识图生成：选图 → AI 识别 → 填入视频正向提示词"""
@@ -944,7 +990,7 @@ class EventMixin:
                 QMetaObject.invokeMethod(
                     self, "_restore_travel_enhance_button",
                     Qt.ConnectionType.QueuedConnection, Q_ARG(int, len(segments_to_enhance)))
-            except Exception as e:
+            except Exception:
                 traceback.print_exc()
                 QMetaObject.invokeMethod(
                     self, "_restore_travel_enhance_button",
@@ -1020,7 +1066,7 @@ class EventMixin:
         # ── 成功：把结果填入正向提示词框 ─────────────────────
         if hasattr(self, 'txt_prompt'):
             self.txt_prompt.setPlainText(result)
-    
+
         self._set_status("✨ 提示词生成完成！", "#a6e3a1")
 
 
@@ -1029,7 +1075,7 @@ class EventMixin:
         user_hint = self.txt_prompt.toPlainText().strip() if hasattr(self, 'txt_prompt') else ""
         # 选择参考图
         from PyQt6.QtWidgets import QFileDialog
-    
+
         img_path, _ = QFileDialog.getOpenFileName(
             self, "选择要识别的图片", "",
             "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
@@ -1054,7 +1100,8 @@ class EventMixin:
                 try:
                     from core.model_manager import ModelManager
                     ModelManager()._compel_cache.clear()
-                    import gc, torch
+                    import gc
+                    import torch
                     gc.collect()
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
@@ -1064,7 +1111,7 @@ class EventMixin:
                 enhancer.ensure_loaded()
 
                 img = Image.open(img_path).convert("RGB")
-                result = enhancer.describe_image(img)
+                result = enhancer.describe_image(img, user_hint=user_hint)
                 del img
 
                 self._bridge.enhance_done_signal.emit(result)
@@ -1087,10 +1134,14 @@ class EventMixin:
 
     def run_tiled_diffusion(self):
         from utils.tiled_diffusion import tiled_img2img
-        from utils.app_utils import OUTPUT_DIR
+        from utils.paths import OUTPUT_DIR
         from PIL import Image
-        import os, glob, threading, traceback, datetime
-    
+        import os
+        import glob
+        import threading
+        import traceback
+        import datetime
+
         # ---- 1. 找最后一张图 ----
         last_path = getattr(self, "last_generated_path", None)
         if not last_path or not os.path.exists(last_path):
@@ -1100,12 +1151,12 @@ class EventMixin:
                 return
             last_path = max(pngs, key=os.path.getmtime)
             logger.info(f"📌 自动选择最新图: {last_path}")
-    
+
         # ---- 2. 检查 pipe ----
         if not getattr(self.ai, "img2img_pipe", None):
             self._set_status("⚠️ img2img pipeline 未加载，请先跑一次普通生成", "#f38ba8")
             return
-    
+
         # ---- 3. 收集 prompt (兼容多种控件名) ----
         def _get_text(*names):
             for n in names:
@@ -1116,11 +1167,11 @@ class EventMixin:
                     if hasattr(w, "text"):
                         return w.text().strip()
             return ""
-    
+
         prompt = _get_text("txt_prompt", "edit_prompt", "input_prompt")
         neg    = _get_text("txt_negative", "txt_neg", "edit_neg", "edit_negative",
                            "input_negative", "negative_prompt")
-    
+
         # ---- 4. 收集参数 ----
         init_img  = Image.open(last_path).convert("RGB")
         target_w  = self.spin_tiled_w.value()
@@ -1128,12 +1179,12 @@ class EventMixin:
         tile_size = int(self.combo_tile_size.currentText())
         overlap   = self.spin_tile_overlap.value()
         strength  = self.scale_tile_strength.value()
-    
+
         self._set_status(
             f"🧩 大图生成中: {target_w}×{target_h} (tile={tile_size})",
             "#89dceb"
         )
-    
+
         # ---- 5. 后台线程 ----
         def task():
             try:
@@ -1144,7 +1195,7 @@ class EventMixin:
                     )
                 def cancel_cb():
                     return getattr(self, "cancel_flag", False)
-            
+
                 result = tiled_img2img(
                     pipe=self.ai.img2img_pipe,
                     init_image=init_img,
@@ -1161,11 +1212,11 @@ class EventMixin:
                     callback=progress_cb,
                     cancel_check=cancel_cb,
                 )
-            
+
                 ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 out_path = os.path.join(OUTPUT_DIR, f"{ts}_tiled_{target_w}x{target_h}.png")
                 result.save(out_path)
-            
+
                 self._bridge.image_signal.emit(result)
                 self._bridge.status_signal.emit(
                     f"✅ 大图已保存: {os.path.basename(out_path)}", "#a6e3a1"
@@ -1176,5 +1227,5 @@ class EventMixin:
             except Exception as e:
                 traceback.print_exc()
                 self._bridge.error_signal.emit(f"大图生成失败: {e}")
-    
+
         threading.Thread(target=task, daemon=True).start()

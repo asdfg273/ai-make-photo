@@ -3,7 +3,6 @@
 #  PyQt6 专业修图窗口 — 全屏 / GPU / 滑块画笔 / 完整滤镜面板
 # ============================================================
 
-import io
 from PIL import Image
 
 from PyQt6.QtWidgets import (
@@ -11,10 +10,10 @@ from PyQt6.QtWidgets import (
     QSplitter, QLabel, QPushButton, QSlider,
     QSpinBox, QComboBox, QSizePolicy, QScrollArea,
 )
-from PyQt6.QtCore  import Qt, QTimer, QSize
+from PyQt6.QtCore  import Qt, QTimer
 from PyQt6.QtGui   import (
     QPixmap, QKeySequence, QImage,
-    QColor, QShortcut,
+    QShortcut,
 )
 
 from .components    import ImageCanvas
@@ -42,7 +41,7 @@ def _pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
         img.width * 4,                      # bytes per line
         QImage.Format.Format_RGBA8888,
     )
-    return QPixmap.fromImage(qimg.copy())   
+    return QPixmap.fromImage(qimg.copy())
 
 
 # ── 通用按钮工厂 ─────────────────────────────────────────────
@@ -86,11 +85,11 @@ class ProImageEditor(
                  callback_on_inpaint=None):
         super().__init__(parent)
         self.setWindowTitle("✨ 专业修图 & AI 遮罩引擎")
-        self.setMinimumSize(900, 600) 
+        self.setMinimumSize(900, 600)
 
         # ✅ 1. 默认最大化全屏
-        
-        
+
+
         self.setModal(True)
 
         self.callback_on_save    = callback_on_save
@@ -129,6 +128,7 @@ class ProImageEditor(
         self._adetailer_running  = False
         self._last_draw_pos      = None
         self._filter_anchor      = None   # 滤镜叠加前的基图(选「无」时还原)
+        self._adjust_dirty       = False  # 本次调色交互是否已入历史
 
         # ── 构建 UI ────────────────────────────────────────
         self._setup_ui()

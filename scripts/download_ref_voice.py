@@ -38,7 +38,7 @@ async def synth():
     await communicate.save(str(tmp_mp3))
 
     # mp3 → wav (GPT-SoVITS 要 wav)
-    print(f"🔄 转 wav...")
+    print("🔄 转 wav...")
     import imageio_ffmpeg
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     import subprocess
@@ -54,7 +54,7 @@ async def synth():
     size_kb = DEST_WAV.stat().st_size / 1024
     print()
     print("=" * 60)
-    print(f"✅ 完成!")
+    print("✅ 完成!")
     print(f"   音频: {DEST_WAV} ({size_kb:.1f} KB)")
     print(f"   文本: {DEST_TXT}")
     print("=" * 60)
@@ -63,7 +63,7 @@ async def synth():
 def main():
     if DEST_WAV.exists() and DEST_TXT.exists():
         print(f"✅ 参考音频已存在: {DEST_WAV}")
-        print(f"   如需重新生成,请先删除该文件")
+        print("   如需重新生成,请先删除该文件")
         return
 
     asyncio.run(synth())

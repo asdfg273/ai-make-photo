@@ -1,0 +1,75 @@
+<html style="margin:0;padding:0;">
+<div style="background-color:transparent;box-sizing:border-box;font-family:'Roboto','PingFang SC','Segoe UI',Arial,sans-serif;color:#1A1B1C;line-height:1.5;max-width:900px;">
+  <div style="padding:14px 0 4px;">
+    <div style="font-size:18px;font-weight:600;">下一步组件方向 · 基于当前代码缺口</div>
+    <div style="font-size:12px;color:#6B7280;margin-top:2px;">角色库/场景库/批量出图已成型，下一步按「闭环 → 提速 → 保质量 → 攻坚」推进</div>
+  </div>
+
+  <!-- 阶段 1：闭环 -->
+  <div style="margin:12px 0 4px;font-size:13px;font-weight:600;color:#8BC8EA;">① 本周 · 批量结果闭环（推荐先做）</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;">
+    <div style="flex:1 1 100%;min-width:0;padding:12px;background:linear-gradient(135deg, rgba(139,200,234,0.10), rgba(139,200,234,0.22));border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:13px;font-weight:600;">批量结果页 / 画廊归档</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.7;">
+        <b>依据</b>：`batch_runner._harvest` 已能按 mtime 收图，场景 `output_paths` 已存盘，但 `RENAME_OUTPUTS=False`、没有任何 UI 展示结果。<br>
+        <b>做什么</b>：角色→场景→序号归档视图；缩略图预览；一键挑图发回 img2img 精修（复用 `open_gallery_to_edit` 的桥接思路）。<br>
+        <b>为什么</b>：批量出图目前「生成完就结束」，挑图/回炉断链——这是体验闭环里最痛的一环，且全部基建已存在。
+      </div>
+    </div>
+  </div>
+
+  <!-- 阶段 2：提速 -->
+  <div style="margin:12px 0 4px;font-size:13px;font-weight:600;color:#9BBBF4;">② 本周 · 角色卡提速（低成本高收益）</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;">
+    <div style="flex:1 1 280px;min-width:0;padding:12px;background:#FFFFFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:13px;font-weight:600;">特征缓存（extracted_features）</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.7;">
+        <b>依据</b>：`Character.extracted_features` 字段存在，但全项目无一处填充/消费——应用角色时每次重新提取 CLIP 特征。<br>
+        <b>做什么</b>：保存角色时预提取并缓存 image embedding，应用/批量时直接复用。
+      </div>
+    </div>
+    <div style="flex:1 1 280px;min-width:0;padding:12px;background:#FFFFFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:13px;font-weight:600;">LoRA 触发词自动注入</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.7;">
+        <b>依据</b>：`_apply_character_to_shell` 的 `_lora_key` 已能解析 `name[trigger]` 格式，但 trigger 词没写进 prompt。<br>
+        <b>做什么</b>：应用角色时把 trigger 自动拼到 base_prompt。
+      </div>
+    </div>
+    <div style="flex:1 1 280px;min-width:0;padding:12px;background:#FFFFFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:13px;font-weight:600;">批量任务断点续跑</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.7;">
+        <b>依据</b>：批量跑一半关窗/崩溃，进度全丢（场景 status 有字段但无持久化清单）。<br>
+        <b>做什么</b>：jobs.json 记录队列进度，重开对话框可选「继续未完成场景」。
+      </div>
+    </div>
+  </div>
+
+  <!-- 阶段 3：质量 -->
+  <div style="margin:12px 0 4px;font-size:13px;font-weight:600;color:#A2DDAA;">③ 下周 · 质量保障</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;">
+    <div style="flex:1 1 100%;min-width:0;padding:12px;background:#FFFFFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:13px;font-weight:600;">pytest 化 + BatchRunner 契约测试</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.7;">
+        <b>依据</b>：已有 `tests/test_character_scene.py`（5 项手写断言，能跑），但 venv 无 pytest；batch_runner 依赖 10+ 个 host 接口，改一次崩一次。<br>
+        <b>做什么</b>：装 pytest；写 stub shell（假控件 + 假生成）驱动完整批量流程，断言参数下发与收图逻辑。
+      </div>
+    </div>
+  </div>
+
+  <!-- 阶段 4：攻坚 -->
+  <div style="margin:12px 0 4px;font-size:13px;font-weight:600;color:#C9A7E8;">④ 攻坚 · 一致性（角色卡的核心价值）</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;">
+    <div style="flex:1 1 100%;min-width:0;padding:12px;background:#FFFFFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:13px;font-weight:600;">多参考图 + 脸部一致性校验</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.7;">
+        <b>依据</b>：角色卡只存单张 `ref_image_path`；批量多姿势时脸部漂移无兜底（IP-Adapter 单图对姿态变化敏感）。<br>
+        <b>做什么</b>：角色卡支持 2-4 张参考图（正面/侧面/全身）；批量出图后自动比对参考图 face similarity，低于阈值标记重roll；或按姿势切换参考图。
+      </div>
+    </div>
+  </div>
+
+  <div style="padding:10px 0 4px;font-size:12px;color:#6B7280;">
+    优先级建议：①→②→③ 先做（都基于已有代码，投入小）；④ 留作主攻方向（对应你 Galgame 角色创作的核心诉求）。
+  </div>
+</div>
+</html>

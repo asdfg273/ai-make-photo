@@ -120,6 +120,10 @@ class PresetManagerMixin:
                 "blend":    self._get_float(self.scale_ad_hand_blend),
             }
 
+        # FreeU
+        if getattr(self, "chk_freeu", None) and self.chk_freeu.isChecked():
+            preset["freeu"] = {"enabled": True}
+
         # Hires.fix
         if getattr(self, "chk_hires", None) and self.chk_hires.isChecked():
             preset["hires"] = {

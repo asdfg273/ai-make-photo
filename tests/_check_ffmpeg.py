@@ -1,5 +1,6 @@
 """Check ffmpeg availability and test merge"""
-import os, sys, subprocess, shutil
+import os
+import shutil
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # Check ffmpeg

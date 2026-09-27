@@ -3,7 +3,6 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from typing import List
-from pathlib import Path
 from utils.paths import CONFIG_FILE
 import logging
 
@@ -36,7 +35,7 @@ SHORTCUT_LABELS = {
 @dataclass
 class AppConfig:
     config_file = CONFIG_FILE   # 绝对路径,不依赖 CWD
-    
+
     # 基础参数默认值
     default_steps: int = 30
     default_strength: float = 0.6
@@ -62,12 +61,26 @@ class AppConfig:
     use_hires: bool = False
     hires_denoise: float = 0.45
 
+    freeu_enabled: bool = False
+
+    # CLIP Skip：0=关闭（用最后一层）, 1=倒数第二层（社区常说 CLIP skip 2）
+    # 动漫向底模（Pony/Illustrious/NoobAI/多数 SD1.5 二次元）多在倒数第二层
+    # 上训练，用默认层会明显掉质量。
+    clip_skip: int = 0
+
+    # Qwen 提示词辅助模式：strict=严格翻译 / polish=适当润色 / keywords=关键词帮写
+    enhance_mode: str = "strict"
+
+    # 图生图底图细节预处理（CLAHE）：仅在检测到过暗/低对比时介入。
+    # 关掉 = 完全按原图使用（不改变像素）。
+    enhance_init_image: bool = True
+
     default_trans_mode: int = 2          # 翻译模式默认档位（0 词典/1 AI/2 混合）
     shortcuts: dict = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
 
     output_format: str = "PNG"
     output_dir: str = "outputs/"
-    
+
     # 历史记录
     recent_models: List[str] = field(default_factory=list)
     recent_prompts: List[str] = field(default_factory=list)
@@ -114,28 +127,12 @@ class AppConfig:
             self.recent_models = self.recent_models[:10]  # 最多存10个
             self.save()  # 立即保存
 
-    def add_recent_prompt(self, prompt):
-        if prompt and prompt not in self.recent_prompts:
-            self.recent_prompts.insert(0, prompt[:200])
-            self.recent_prompts = self.recent_prompts[:20] # 最多存20个
-            self.save()  # 立即保存
-
-    def resolve_output_dir(config=None) -> Path:
-        """
-        返回有效输出目录：
-        - 优先 config.output_dir（非空且存在）
-        - 回落 paths.OUTPUT_DIR（即 photo/）
-        """
-        from pathlib import Path
-        if config:
-            custom = getattr(config, "output_dir", None)
-            if custom:
-                p = Path(custom)
-                if p.exists() or custom.strip():  # 允许新建
-                    try:
-                        p.mkdir(parents=True, exist_ok=True)
-                        return p
-                    except Exception:
-                        pass
-        from utils.paths import OUTPUT_DIR
-        return Path(OUTPUT_DIR)
+    def add_recent_prompt(self, prompt: str):
+        if not prompt or not prompt.strip():
+            return
+        prompt = prompt.strip()
+        if prompt in self.recent_prompts:
+            self.recent_prompts.remove(prompt)
+        self.recent_prompts.insert(0, prompt)
+        self.recent_prompts = self.recent_prompts[:20]  # ✅ 截断到 20 个
+        self.save()

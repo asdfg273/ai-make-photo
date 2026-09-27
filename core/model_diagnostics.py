@@ -10,7 +10,6 @@ import struct
 import logging
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

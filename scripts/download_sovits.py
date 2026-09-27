@@ -5,7 +5,6 @@
 """
 import os
 import sys
-import shutil
 from pathlib import Path
 
 # 使用 HuggingFace 镜像
@@ -44,15 +43,15 @@ MODELS = [
 def _download_file(repo_id: str, filename: str, target_dir: Path) -> bool:
     """从 HuggingFace 下载单个文件"""
     from huggingface_hub import hf_hub_download
-    
+
     target_path = target_dir / filename
     if target_path.exists() and target_path.stat().st_size > 1024:
         print(f"  ✅ 已存在: {filename}")
         return True
-    
+
     print(f"  ⬇️  下载: {filename}")
     try:
-        downloaded = hf_hub_download(
+        hf_hub_download(
             repo_id=repo_id,
             filename=filename,
             local_dir=str(target_dir),
@@ -72,9 +71,9 @@ def main():
     print(f"📁 目标目录: {PRETRAINED_DIR}")
     print(f"🌐 镜像源: {os.environ.get('HF_ENDPOINT')}")
     print()
-    
+
     PRETRAINED_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     total = 0
     success = 0
     for group in MODELS:
@@ -85,12 +84,12 @@ def main():
             total += 1
             if _download_file(repo, f, target):
                 success += 1
-    
+
     print()
     print("=" * 60)
     print(f"📊 完成: {success}/{total}")
     print("=" * 60)
-    
+
     if success == total:
         print("✅ 全部下载完成!")
         print(f"📂 位置: {PRETRAINED_DIR}")

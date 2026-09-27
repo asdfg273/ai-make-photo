@@ -37,7 +37,7 @@ def main():
     ed.on_mouse_press(100, 100)
     ed.on_mouse_drag(150, 120)
     ed.on_mouse_release(150, 120)
-    assert not ed.draw_mode is False or True
+    assert ed.draw_mode is not False or True
 
     # 2) 画笔(半透明)
     ed.sld_brush_opacity.setValue(40)

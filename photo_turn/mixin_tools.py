@@ -1,6 +1,5 @@
 # photo_turn/mixin_tools.py
 
-import os
 from PIL import Image, ImageDraw, ImageFont, ImageChops, ImageOps
 from PyQt6.QtWidgets import QColorDialog, QInputDialog
 from PyQt6.QtCore    import Qt
@@ -304,9 +303,17 @@ class ToolsEventsMixin:
         stroke = self._build_stroke(points, size, self._brush_feather(r))
 
         if self.is_eraser:
-            # 从原图还原
-            src = self.original_img.convert(self.current_img.mode)
+            # 从"最后一次提交的基线"还原（base_img）。
+            # 用 original_img 会擦出未经滤镜/调色的原图彩色补丁；
+            # 且撤销后它可能与 current_img 尺寸不一致 → paste 抛
+            # ValueError（进程终止），故这里加尺寸兜底。
+            src = self.base_img.convert(self.current_img.mode)
+            if src.size != self.current_img.size:
+                src = src.resize(self.current_img.size)
+            if stroke.size != self.current_img.size:
+                stroke = stroke.resize(self.current_img.size)
             self.current_img.paste(src, (0, 0), stroke)
+            self._commit_current_to_base()
             self.update_canvas(self.current_img, force=True)
 
         elif self.is_mask_brush:
@@ -324,6 +331,9 @@ class ToolsEventsMixin:
             base = self.current_img.convert("RGB")
             base.paste(color_img, (0, 0), stroke)
             self.current_img = base
+            # 提交为新的调色基线，否则下一次拖调色滑块会从旧 base_img
+            # 重算 → 笔迹整片消失（且不可撤销）
+            self._commit_current_to_base()
             self.update_canvas(self.current_img, force=True)
 
     def _draw_at(self, x: int, y: int):
@@ -405,6 +415,8 @@ class ToolsEventsMixin:
                   **self._text_stroke_kwargs())
         self.text_element = None
         self.text_mode    = False
+        # 文字也是"已提交的编辑"，同步基线，避免被后续调色抹掉
+        self._commit_current_to_base()
         self.update_canvas(self.current_img, force=True)
         self._set_status("✅ 文字已写入图层", "#a6e3a1")
 
@@ -440,23 +452,31 @@ class ToolsEventsMixin:
         self.update_canvas(preview, force=True)
 
     def _do_crop(self, x0, y0, x1, y1):
-        x1, y1 = self._apply_crop_aspect(x0, y0, x1, y1)
-        if abs(x1 - x0) < 10 or abs(y1 - y0) < 10:
+        w, h = self.current_img.size
+
+        # 先把拖拽端点夹到图像范围内，再算比例。
+        # 否则在画布留白（坐标为负）处拖拽会得到 right < left，
+        # Image.crop 抛 ValueError（PyQt6 槽内未捕获异常 = 进程终止）。
+        x0c = max(0, min(w, x0))
+        y0c = max(0, min(h, y0))
+        x1c = max(0, min(w, x1))
+        y1c = max(0, min(h, y1))
+        x1c, y1c = self._apply_crop_aspect(x0c, y0c, x1c, y1c)
+
+        left   = max(0, min(x0c, x1c))
+        top    = max(0, min(y0c, y1c))
+        right  = min(w, max(x0c, x1c))
+        bottom = min(h, max(y0c, y1c))
+
+        if right - left < 10 or bottom - top < 10:
             self.update_canvas(self.current_img, force=True)
             self._set_status("✂ 选区过小,已取消裁剪", "#f9e2af")
             return
-        
+
         self._filter_anchor = None
         self.push_history()
-        
-        # clamp 到图像边界，防止裁出黑边
-        w, h = self.current_img.size
-        left   = max(0, min(x0, x1))
-        top    = max(0, min(y0, y1))
-        right  = min(w, max(x0, x1))
-        bottom = min(h, max(y0, y1))
+
         box = (left, top, right, bottom)
-        
         self.current_img   = self.current_img.crop(box)
         self.base_img      = self.current_img.copy()
         self.original_img  = self.original_img.crop(box)

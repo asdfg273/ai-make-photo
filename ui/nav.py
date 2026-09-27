@@ -1,6 +1,6 @@
 # ui/nav.py
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QToolButton, QButtonGroup
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal
 
 
 class NavRail(QWidget):

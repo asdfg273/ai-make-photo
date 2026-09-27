@@ -4,5 +4,6 @@ from ui.pages.txt2img_page import Txt2ImgPage
 from ui.pages.img2img_page import Img2ImgPage
 from ui.pages.video_page import VideoPage
 from ui.pages.gallery_page import GalleryPage
+from ui.pages.characters_page import CharactersPage  
 
-PAGES = [Txt2ImgPage, Img2ImgPage, VideoPage, GalleryPage]
+PAGES = [Txt2ImgPage, Img2ImgPage, VideoPage, GalleryPage, CharactersPage]

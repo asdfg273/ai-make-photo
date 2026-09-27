@@ -29,6 +29,21 @@ class SDXLLoader(BaseLoader):
             low_cpu_mem_usage=True,
             config=self.CONFIG_REPO,
         )
+
+        # ⚠️ 必须开启 output_hidden_states：
+        # diffusers 的 SDXL 管线在 encode_prompt 里直接访问
+        # `prompt_embeds.hidden_states[-2]`（用倒数第二层作为文本条件）。
+        # 若该标志为 False，transformers 返回的 hidden_states 是 None →
+        # `TypeError: 'NoneType' object is not subscriptable`。
+        try:
+            for name in ("text_encoder", "text_encoder_2"):
+                te = getattr(pipe, name, None)
+                if te is not None and hasattr(te, "config"):
+                    te.config.output_hidden_states = True
+            logger.info("✅ 已开启 text_encoder.output_hidden_states（SDXL 管线需要）")
+        except Exception as e:
+            logger.warning(f"⚠️ 开启 output_hidden_states 失败: {e}")
+
         r = LoadResult(txt2img=pipe)
         r.extras["classes"] = (StableDiffusionXLImg2ImgPipeline,
                                StableDiffusionXLInpaintPipeline)

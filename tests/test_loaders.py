@@ -1,5 +1,7 @@
 # tests/test_loaders.py — 加载器注册表与派生管线结构测试（不加载真实模型）
-import os, sys
+import os
+import _bootstrap  # noqa: F401,E402  (统一放宽 stdout 编码，避免 emoji 让脚本假失败)
+import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

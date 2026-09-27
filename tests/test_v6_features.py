@@ -1,5 +1,8 @@
 # tests/test_v6_features.py — v6 新功能测试（无头，纯脚本）
-import os, sys, time, tempfile
+import os
+import _bootstrap  # noqa: F401,E402  (统一放宽 stdout 编码，避免 emoji 让脚本假失败)
+import sys
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,8 +45,6 @@ def test_compare_canvas():
     cc.set_images(QPixmap(a), QPixmap(b))
     assert cc.has_images()
     # 模拟拖拽
-    from PyQt6.QtCore import QPointF, Qt
-    from PyQt6.QtGui import QMouseEvent
     cc._set_ratio_from_x(100)
     assert abs(cc._ratio - 100 / 400) < 1e-6
     cc.grab()   # 触发 paintEvent，不崩即过

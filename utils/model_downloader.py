@@ -179,7 +179,7 @@ def print_scan_report():
         for k in miss_required:
             e = report[k]["entry"]
             logger.info(f"      • {e['desc']} ({e['size_mb']}MB)")
-        logger.info(f"   💡 运行: python -m utils.model_downloader install-required")
+        logger.info("   💡 运行: python -m utils.model_downloader install-required")
     if miss_optional:
         logger.warning(f"   ⚠️  缺失可选 ({len(miss_optional)}):")
         for k in miss_optional:
@@ -294,6 +294,71 @@ def install(key: str):
         logger.info(f"✅ 已存在: {key}")
         return
     _download_one(key, entry)
+
+
+# ============================================================
+#  用户确认式下载（合规：不静默下载大模型）
+# ============================================================
+def confirm_and_install(key: str, reason: str, parent=None,
+                        default_no: bool = True) -> bool:
+    """缺失模型时先告知体积与来源，用户确认后才下载。
+
+    项目定位是「模型由用户自行下载」，所以运行流程里**不允许**静默
+    下载大模型。运行路径统一改调本函数，而不是直接 install()。
+
+    key:    MODEL_REGISTRY 的键
+    reason: 为什么需要它（展示给用户，例如"图生视频需要 IP-Adapter"）
+    parent: 父窗口，可为 None（此时退化为日志提示 + 不下载）
+
+    返回 True 表示用户同意且下载成功。
+    """
+    entry = MODEL_REGISTRY.get(key)
+    if entry is None:
+        logger.error(f"❌ 未知模型 key: {key}")
+        return False
+
+    if _check_exists(entry):
+        return True
+
+    desc = entry.get("desc", key)
+    size = entry.get("size_mb")
+    size_txt = f"约 {size} MB" if size else "体积未知"
+    repo = entry.get("repo", "未知来源")
+    local = _entry_dir(entry)
+    hint = (f"用途：{reason}\n"
+            f"模型：{desc}\n"
+            f"体积：{size_txt}\n"
+            f"来源：{repo}\n"
+            f"将下载到：{local}\n\n"
+            f"也可以自行下载后放入该目录，本程序不会强制联网。\n\n"
+            f"现在下载吗？")
+
+    if parent is None:
+        logger.warning(
+            "⚠️ 缺少模型 [%s]（%s）。为避免静默下载，已跳过自动获取。\n"
+            "   请自行放入 %s，或运行：\n"
+            "   python -m utils.model_downloader install %s",
+            desc, size_txt, local, key)
+        return False
+
+    try:
+        from PyQt6.QtWidgets import QMessageBox
+        default_btn = (QMessageBox.StandardButton.No if default_no
+                       else QMessageBox.StandardButton.Yes)
+        r = QMessageBox.question(
+            parent, "缺少模型", hint,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default_btn)
+        if r != QMessageBox.StandardButton.Yes:
+            logger.info(f"⏭️ 用户选择不下载 [{key}]")
+            return False
+    except Exception as e:
+        logger.warning(f"⚠️ 下载确认弹窗失败({e})，为避免静默下载，跳过 [{key}]")
+        return False
+
+    logger.info(f"📥 用户已确认，开始下载 [{key}] {size_txt} ...")
+    _download_one(key, entry)
+    return _check_exists(entry)
 
 
 # ============================================================

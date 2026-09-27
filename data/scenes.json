@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "scenes": [
+    {
+      "uuid": "4637ae9a698c451f8636f6ea03fed1af",
+      "character_uuid": "77a39d24-86fb-4baf-9e65-4cf538527172",
+      "name": "新场景",
+      "pose_prompt": "",
+      "negative_extra": "",
+      "seed": -1,
+      "count": 1,
+      "steps": null,
+      "cfg": null,
+      "width": null,
+      "height": null,
+      "enabled": true,
+      "status": "done",
+      "error": "",
+      "output_paths": [
+        "E:\\pythonprojects\\ai  make photo\\photo\\20260926_221632_abyssorangemix2_Hard.safetensors_01.png"
+      ]
+    }
+  ]
+}

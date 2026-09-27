@@ -1,5 +1,9 @@
 # tests/test_gallery_unified.py — 统一画廊（图片/动画）+ 防抖测试（无头，纯脚本）
-import os, sys, time, tempfile
+import os
+import _bootstrap  # noqa: F401,E402  (统一放宽 stdout 编码，避免 emoji 让脚本假失败)
+import sys
+import time
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -208,7 +212,8 @@ def test_gallery_page():
 
 def test_video_frame_icon():
     """cv2 抽帧：真实 mp4 → 非占位缩略图；坏文件 → None 回落。"""
-    import cv2, numpy as np
+    import cv2
+    import numpy as np
     from ui.gallery_panel import GalleryPanel
     tmp = tempfile.mkdtemp()
     mp4 = os.path.join(tmp, "real.mp4")

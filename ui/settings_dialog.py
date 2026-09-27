@@ -4,8 +4,7 @@
 #  只读写 AppConfig；应用动作由宿主（shell._open_settings）执行
 # ============================================================
 import logging
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QHBoxLayout,
-                             QTabWidget, QWidget, QLabel, QPushButton,
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QTabWidget, QWidget, QLabel, QPushButton,
                              QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox,
                              QKeySequenceEdit, QDialogButtonBox, QGroupBox)
 from PyQt6.QtGui import QKeySequence
@@ -133,6 +132,9 @@ class SettingsDialog(QDialog):
         self.chk_ad_hand = QCheckBox("默认开启 ADetailer 手部精修")
         self.chk_ad_hand.setChecked(bool(getattr(cfg, "use_ad_hand", False)))
         f2.addRow(self.chk_ad_hand)
+        self.chk_freeu = QCheckBox("默认开启 FreeU 细节增强")
+        self.chk_freeu.setChecked(bool(getattr(cfg, "freeu_enabled", False)))
+        f2.addRow(self.chk_freeu)
         v.addWidget(grp_fix)
 
         # ── AI / 设备 ──
@@ -193,6 +195,7 @@ class SettingsDialog(QDialog):
         cfg.use_hires = self.chk_hires.isChecked()
         cfg.use_adetailer = self.chk_adetailer.isChecked()
         cfg.use_ad_hand = self.chk_ad_hand.isChecked()
+        cfg.freeu_enabled = self.chk_freeu.isChecked()
         cfg.default_trans_mode = self.combo_trans.currentIndex()
         if self.combo_qwen.currentData():
             cfg.qwen_model_key = self.combo_qwen.currentData()

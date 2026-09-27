@@ -38,6 +38,7 @@ class ParamSnapshotMixin:
         "combo_ad_hand":             ("手部检测目标",      "⚙️ 高级"),
         "scale_ad_hand":             ("手部重绘强度",      "⚙️ 高级"),
         "scale_ad_hand_blend":       ("手部融合度",        "⚙️ 高级"),
+        "chk_freeu":                 ("FreeU",             "⚙️ 高级"),
         "chk_hires":                 ("Hires.fix",         "⚙️ 高级"),
         "combo_hires_scale":         ("放大倍率",          "⚙️ 高级"),
         "scale_hires_denoise":       ("Hires 降噪",        "⚙️ 高级"),
@@ -150,6 +151,7 @@ class ParamSnapshotMixin:
                 "ad_hand_target": self.combo_ad_hand.currentText(),
                 "ad_hand_str": self._read_float(self.scale_ad_hand),
                 "ad_hand_blend": self._read_float(self.scale_ad_hand_blend),
+                "freeu_on":  self.chk_freeu.isChecked() if hasattr(self, 'chk_freeu') else False,
                 "hires_on":   self.chk_hires.isChecked(),
                 "hires_scale":self.combo_hires_scale.currentText(),
                 "hires_denoise": self._read_float(self.scale_hires_denoise),
@@ -215,6 +217,7 @@ class ParamSnapshotMixin:
             self._safe_set_combo("combo_ad_hand", bk["ad_hand_target"])
             self._safe_set_float("scale_ad_hand", bk["ad_hand_str"])
             self._safe_set_float("scale_ad_hand_blend", bk["ad_hand_blend"])
+            self._safe_set_check("chk_freeu", bk.get("freeu_on", False))
             self._safe_set_check("chk_hires", bk["hires_on"])
             self._safe_set_combo("combo_hires_scale", bk["hires_scale"])
             self._safe_set_float("scale_hires_denoise", bk["hires_denoise"])

@@ -632,36 +632,36 @@ class GalleryPanel(QWidget):
     def _smart_position_meta(self):
         """智能定位元数据浮窗，确保完全在屏幕内"""
         from PyQt6.QtGui import QGuiApplication
-    
+
         # 目标位置：画廊右侧
         anchor = self.mapToGlobal(self.rect().topRight())
         x = anchor.x() + 10
         y = anchor.y()
-    
+
         # 获取屏幕可用区域
         screen = QGuiApplication.screenAt(anchor) or QGuiApplication.primaryScreen()
         geo = screen.availableGeometry()
-    
+
         pw = self.meta_panel.width() or 380
         ph = self.meta_panel.height() or 520
-    
+
         # 右边放不下 → 改放画廊左边
         if x + pw > geo.right():
             left_anchor = self.mapToGlobal(self.rect().topLeft())
             x = left_anchor.x() - pw - 10
-    
+
         # 还是不行 → 强制贴右边
         if x < geo.left():
             x = geo.right() - pw - 20
         if x < geo.left():
             x = geo.left() + 20
-    
+
         # 垂直方向越界
         if y + ph > geo.bottom():
             y = geo.bottom() - ph - 20
         if y < geo.top():
             y = geo.top() + 20
-    
+
         self.meta_panel.move(x, y)
 
 

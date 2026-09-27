@@ -4,12 +4,10 @@
 #  生成核心控件全局单例；页面专属区随导航切换
 # ============================================================
 import logging
-from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
-                             QStackedWidget, QProgressBar, QLabel, QStatusBar,
+from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget, QProgressBar, QLabel, QStatusBar,
                              QScrollArea, QSizePolicy)
 from PyQt6.QtCore import Qt
 
-from ui.theme import PALETTE
 from ui.nav import NavRail
 from ui.pages import PAGES
 from ui.contracts import install_aliases, check_contract, apply_degradation
@@ -426,6 +424,42 @@ class ShellMixin:
                   self.scale_ad_hand_blend):
             c.setEnabled(on)
 
+    def _toggle_freeu(self):
+        """FreeU 复选框切换回调（无额外控件联动，仅留钩子以备未来加 s1/s2/b1/b2 滑块）"""
+        pass
+
+    def _on_clip_skip_changed(self, index: int = 0):
+        """CLIP Skip 下拉框切换 → 立即应用到已加载的文本编码器。
+
+        之前这个能力只在 Capabilities.clip_skip 里声明、从未接线，
+        等于动漫底模的用户永远拿不到应有的质量。
+        """
+        skip = max(0, int(index))
+        try:
+            self.config.clip_skip = skip
+        except Exception:
+            pass
+        try:
+            from utils.clip_skip import apply_clip_skip_to_pipes, supports_clip_skip
+            ok, reason = supports_clip_skip(self.ai)
+            if skip and not ok:
+                # 架构不支持时明确说明原因，避免"调了没用"的假象
+                self._set_status(f"⚠️ CLIP Skip 不适用于当前模型：{reason}", "#f9e2af")
+                return
+            n = apply_clip_skip_to_pipes(self.ai, skip)
+            if skip:
+                if n:
+                    self._set_status(f"🎚️ CLIP Skip = {skip}（已作用于 {n} 个文本编码器）",
+                                     "#a6e3a1")
+                else:
+                    self._set_status(
+                        "⚠️ 当前架构不支持 CLIP Skip（仅 CLIP 系：SD1.5/SD2.1）", "#f9e2af")
+            else:
+                self._set_status("🎚️ CLIP Skip 已关闭（使用最后一层）", "#89dceb")
+        except Exception as e:
+            logger.warning(f"⚠️ CLIP Skip 应用失败: {e}")
+            self._set_status(f"⚠️ CLIP Skip 应用失败: {e}", "#f38ba8")
+
     def _toggle_hires(self):
         if not hasattr(self, 'chk_hires'):
             return
@@ -836,8 +870,12 @@ class ShellMixin:
 
     def _open_extension_market(self):
         try:
+            from PyQt6.QtCore import Qt
             from ui.extension_market import ExtensionMarketDialog
             dlg = ExtensionMarketDialog(self)
+            # 关闭即销毁：原来每次打开都 new 一个对话框且从不释放，
+            # 反复打开会累积对话框与全部卡片（内存单向增长）。
+            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             dlg.exec()
             self._refresh_extension_count()
         except Exception as e:
@@ -847,8 +885,10 @@ class ShellMixin:
             QMessageBox.critical(self, "错误", f"打开扩展市场失败:\n{e}")
 
     def _open_output_folder(self):
-        import subprocess, sys, os
-        from utils.app_utils import OUTPUT_DIR
+        import subprocess
+        import sys
+        import os
+        from utils.paths import OUTPUT_DIR
         if not os.path.exists(OUTPUT_DIR):
             os.makedirs(OUTPUT_DIR, exist_ok=True)
         try:
@@ -899,4 +939,21 @@ class ShellMixin:
         except ImportError:
             QMessageBox.information(
                 self, "提示", "请安装 psutil: pip install psutil")
+
+    def _goto_page(self, page_id: str):
+        page = getattr(self, "_pages", {}).get(page_id)
+        if page is None:
+            logger.warning(f"⚠️ 页面不存在: {page_id}")
+            return None
+        if hasattr(self, "nav"):
+            self.nav.select(page_id)
+        return page
+
+    def _page_call(self, page_id: str, method: str, *args):
+        page = self._goto_page(page_id)
+        fn = getattr(page, method, None) if page else None
+        if callable(fn):
+            return fn(*args)
+        logger.warning(f"⚠️ 页面 {page_id} 无方法 {method}")
+        return None
 

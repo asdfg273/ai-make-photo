@@ -37,13 +37,10 @@ from utils.gpu_init import enable_gpu_acceleration
 enable_gpu_acceleration()
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QMessageBox, QFileDialog,
-    QHBoxLayout, QVBoxLayout, QLineEdit, QSpinBox, QPushButton, QLabel,
-    QWidget, QGroupBox, QScrollArea, QComboBox, QCheckBox,
-    QListWidget, QListWidgetItem, QTextEdit, QDoubleSpinBox
+    QApplication, QMainWindow, QMessageBox, QFileDialog
 )
-from PyQt6.QtCore import QTimer, pyqtSignal, QObject, Qt, QSize, pyqtSlot,QMetaObject
-from PyQt6.QtGui  import QCloseEvent, QIcon, QPixmap, QImage
+from PyQt6.QtCore import QTimer, pyqtSignal, QObject, Qt, QMetaObject
+from PyQt6.QtGui  import QCloseEvent, QIcon, QPixmap
 from PIL import Image
 
 from core.translation_service  import TranslationService
@@ -119,6 +116,17 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         # ── 配置 & UI ──
         self.config = AppConfig.load()
 
+        # ── models/puton 投递箱：自动归位用户丢进来的模型 ──
+        # 用户几乎不可能知道下载的模型是什么架构，所以提供一个"丢进来就行"
+        # 的目录。必须在 setup_ui() 之前整理，这样模型下拉框一次就能列全。
+        # 只读文件头判架构，毫秒级；整段失败也不能影响程序启动。
+        self._inbox_report = None
+        try:
+            from utils.model_inbox import run as _run_inbox
+            self._inbox_report = _run_inbox()
+        except Exception as _e:
+            logger.warning(f"⚠️ 投递箱整理失败（已忽略）: {_e}")
+
         self.setup_ui()
         self.apply_config_to_ui()
         self.cleanup_temp_files(verbose=False)
@@ -176,6 +184,86 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
                 self._set_status("✅ 默认模型就绪（权重将在首次生成时加载）", "#a6e3a1")
         except Exception as e:
             logger.warning(f"[PRELOAD] ⚠️ 默认模型信息加载失败: {e}")
+
+    def _show_inbox_report(self):
+        """弹窗告知 models/puton 的整理结果。
+
+        只在**确实有文件被处理**时才弹，空目录静默通过 ——
+        否则每次启动都弹一个"没有新模型"的框会非常烦人。
+        """
+        rep = getattr(self, "_inbox_report", None)
+        if rep is None or not rep.entries:
+            return
+        text = rep.summary_text()
+        if not text:
+            return
+
+        # 有文件被挪动过 → 模型下拉框需要重扫一次
+        if rep.moved:
+            for fn in ("refresh_models", "refresh_lora_by_model"):
+                f = getattr(self, fn, None)
+                if callable(f):
+                    try:
+                        f()
+                    except Exception as e:
+                        logger.warning(f"[INBOX] {fn} 刷新失败: {e}")
+        try:
+            QMessageBox.information(self, "📥 模型已自动整理", text)
+        except Exception as e:
+            logger.warning(f"[INBOX] 弹窗失败: {e}")
+
+        self._maybe_warn_flux_engine(rep)
+
+    def _confirm_go_market(self, title, text, go_label="去扩展市场下载"):
+        """带「去扩展市场」动作按钮的提示框，返回用户是否点了它。
+
+        单独抽成一个方法是为了**可测试**：无头测试里可以直接替换掉，
+        不必去桩 QMessageBox 的整个类。
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(title)
+        box.setText(text)
+        go = box.addButton(go_label, QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("知道了", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return box.clickedButton() is go
+
+    def _maybe_warn_flux_engine(self, rep):
+        """检测到 Flux 模型但引擎组件缺失时，单独弹窗说明。
+
+        投递箱那份总报告里虽然每个文件都有备注，但 Flux 的门槛是
+        "不下载引擎就完全不能用"，值得单独强调一次并给出去处。
+        """
+        try:
+            if not any(getattr(e, "arch_id", "") == "flux" for e in rep.entries):
+                return
+            from utils.flux_engine import installed_variant, status_text
+            if installed_variant():
+                return          # 引擎已就位，无需打扰
+            text = status_text()
+        except Exception as e:
+            logger.warning(f"[FLUX] 引擎状态查询失败: {e}")
+            return
+
+        logger.warning("[FLUX] 检测到 Flux 模型，但引擎组件缺失")
+        try:
+            goto = self._confirm_go_market(
+                "⚠️ Flux 引擎尚未下载",
+                "检测到 Flux 模型，但 Flux 引擎组件（T5/CLIP/VAE，约 10GB）"
+                "还没下载。\n\n**不下载引擎就无法使用 Flux 生成。**\n\n" + text)
+        except Exception as e:
+            logger.warning(f"[FLUX] 弹窗失败: {e}")
+            return
+        if goto:
+            opener = getattr(self, "_open_extension_market", None)
+            if callable(opener):
+                try:
+                    opener()
+                except Exception as e:
+                    logger.warning(f"[FLUX] 打开扩展市场失败: {e}")
+            else:
+                logger.info("[FLUX] 未找到扩展市场入口，请从菜单打开")
 
     def _set_status(self, text: str, color: str = "#89dceb"):
         self.set_status(text, color)
@@ -318,6 +406,9 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             self._safe_set_combo("combo_cn_type", cn.get("type"))
             self._safe_set_float("scale_cn_strength", cn.get("strength"))
 
+        if (fu := preset.get("freeu")) is not None:
+            self._safe_set_check("chk_freeu", fu.get("enabled"))
+
         for toggle in ("_toggle_adetailer", "_toggle_ad_hand",
                        "_toggle_hires", "_toggle_cn"):
             if hasattr(self, toggle):
@@ -432,6 +523,12 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             self.config.use_hires      = self.chk_hires.isChecked()
             self.config.hires_denoise  = self.scale_hires_denoise.float_value()
 
+            if hasattr(self, 'chk_freeu'):
+                self.config.freeu_enabled = self.chk_freeu.isChecked()
+
+            if hasattr(self, 'combo_clip_skip'):
+                self.config.clip_skip = max(0, self.combo_clip_skip.currentIndex())
+
             self.config.output_format = self.combo_img_format.currentText()
             self.config.output_dir    = self.combo_output_dir.currentText()
 
@@ -469,6 +566,16 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             if t.is_alive():
                 logger.warning("⚠️ 线程未在 10 秒内退出，强制关闭")
 
+        # ── 扩展市场的后台下载线程收尾 ──
+        # worker 故意不挂父对象（关窗后要继续下载），所以必须在这里显式收尾：
+        # QThread 在运行中被销毁时 Qt 会 qFatal 直接终止进程
+        # （表现为"关掉程序时闪退/弹错"）。
+        try:
+            from ui.extension_market import shutdown_workers
+            shutdown_workers(timeout_ms=8000)
+        except Exception as e:
+            logger.warning(f"⚠️ 后台下载线程收尾失败(忽略): {e}")
+
         event.accept()
 
     # ==========================================================
@@ -483,17 +590,17 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
     def show_preview_image(self, path: str):
         logger.debug(f"[SHOW] 收到预览 path={path}")
         if not path or not os.path.exists(path):
-            logger.error(f"[SHOW] ❌ 文件不存在")
+            logger.error("[SHOW] ❌ 文件不存在")
             return
         try:
             from PyQt6.QtGui import QPixmap
             pix = QPixmap(path)
             if pix.isNull():
-                logger.error(f"[SHOW] ❌ QPixmap 加载失败")
+                logger.error("[SHOW] ❌ QPixmap 加载失败")
                 return
             if hasattr(self, 'lbl_preview'):
                 self.lbl_preview.set_pixmap(pix)
-                logger.debug(f"[SHOW] ✅ 已刷新 lbl_preview")
+                logger.debug("[SHOW] ✅ 已刷新 lbl_preview")
         except Exception as e:
             import traceback
             logger.error(f"[SHOW] ❌ 异常: {e}")
@@ -504,7 +611,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         if hasattr(self, 'gallery') and path and os.path.exists(path):
             try:
                 self.gallery.add_image(path, prepend=True)
-                logger.debug(f"[GALLERY-SIG] ✅ add_image 成功")
+                logger.debug("[GALLERY-SIG] ✅ add_image 成功")
             except Exception as e:
                 logger.error(f"[GALLERY-SIG] ❌ add_image 失败: {e}")
 
@@ -827,6 +934,8 @@ if __name__ == "__main__":
     def _show_main():
         window.showMaximized()
         splash.finish_loading(window)
+        # 投递箱结果等主界面出来后再弹，免得被启动画面挡住
+        QTimer.singleShot(1200, window._show_inbox_report)
 
     QTimer.singleShot(500, _show_main)
     sys.exit(app.exec())

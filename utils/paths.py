@@ -36,3 +36,24 @@ for _d in _RUNTIME_DIRS:
         os.makedirs(_d, exist_ok=True)
     except OSError as _e:
         _INIT_FAILURES.append((_d, str(_e)))
+
+
+def resolve_output_dir(config=None):
+    """返回有效输出目录（Path）。
+
+    - 优先 config.output_dir（非空即用，不存在则创建）
+    - 创建失败或未配置时回落 OUTPUT_DIR（photo/）
+
+    全项目唯一实现，供 utils.app_events / ui 等处 import。
+    """
+    from pathlib import Path
+
+    custom = getattr(config, "output_dir", None) if config is not None else None
+    if custom and str(custom).strip():
+        try:
+            p = Path(str(custom).strip()).expanduser()
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except OSError as _e:
+            _INIT_FAILURES.append((str(custom), str(_e)))
+    return Path(OUTPUT_DIR)

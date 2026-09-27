@@ -262,6 +262,12 @@ class VideoPanelMixin:
                     if hasattr(self, 'video_generator') and self.video_generator is not None:
                         if getattr(self.video_generator, '_base_model_name', None) != self.ai.current_model_name:
                             logger.info("🔄 底模已更换,重建 VideoGenerator")
+                            # 必须先 dispose：直接置 None 会漏掉 deepcopy 的 UNet
+                            # 与共享组件上的 offload hook
+                            try:
+                                self.video_generator.dispose()
+                            except Exception as de:
+                                logger.warning(f"⚠️ 释放旧 VideoGenerator 失败(忽略): {de}")
                             self.video_generator = None
 
                     if not hasattr(self, 'video_generator') or self.video_generator is None:
@@ -314,6 +320,12 @@ class VideoPanelMixin:
                             logger.warning(f"⚠️ 配音合成失败(保留原视频): {ve}")
                             traceback.print_exc()
 
+                    # ── RIFE 插帧（配音之后做，音轨才能一起保留）──
+                    if self._ui_read(
+                            lambda: bool(getattr(self, "chk_rife", None)
+                                        and self.chk_rife.isChecked()), False):
+                        final_path = self._maybe_run_rife(final_path, fps)
+
                     QMetaObject.invokeMethod(
                         self, "_on_video_generated",
                         Qt.ConnectionType.QueuedConnection,
@@ -330,6 +342,24 @@ class VideoPanelMixin:
                         Q_ARG(int, 0),
                         Q_ARG(str, error_msg),
                     )
+
+            # ── GUI 线程预检（必须在起线程前做）──
+            # 图生视频需要 IP-Adapter；缺失时在这里弹窗告知体积/来源、
+            # 由用户决定是否下载（项目定位：模型自行下载，不静默下载）。
+            if mode_str == "img2video":
+                try:
+                    vg = getattr(self, "video_generator", None)
+                    if vg is None:
+                        from utils.video_gen import VideoGenerator
+                        vg = VideoGenerator(self.ai)
+                        self.video_generator = vg
+                    if not vg.preflight_ip_adapter(parent=self):
+                        self._reset_video_button()
+                        self._set_status(
+                            "⏸ 已取消：图生视频需要 IP-Adapter 模型", "#f9e2af")
+                        return
+                except Exception as pe:
+                    logger.warning(f"⚠️ IP-Adapter 预检异常: {pe}")
 
             threading.Thread(target=generate_task, daemon=True).start()
 
@@ -455,6 +485,76 @@ class VideoPanelMixin:
                 logger.warning(f"⚠️ 背景音混合失败 (code={r2.returncode}), 使用配音版")
 
         return out_path
+
+    @pyqtSlot(str, str)
+    def _set_status_via_bridge(self, text: str, color: str = "#89dceb"):
+        """供后台线程通过 QueuedConnection 安全更新状态栏。"""
+        try:
+            self._set_status(text, color)
+        except Exception:
+            logger.info(text)
+
+    def _maybe_run_rife(self, video_path: str, source_fps) -> str:
+        """按 UI 设置对刚生成的视频做 RIFE 插帧。
+
+        在**配音之后**调用，这样插帧输出的音轨合成能把配音一起带上
+        （RIFE 只用 cv2.VideoWriter 写视频流，音轨靠 ffmpeg 合回）。
+
+        失败一律保留原视频，并明确告知，绝不静默丢结果。
+        """
+        try:
+            target = int(self._ui_read(
+                lambda: self.combo_rife_fps.currentText(), "24") or 24)
+        except Exception:
+            target = 24
+
+        try:
+            from utils.rife_interpolate import RIFEInterpolator
+            ri = RIFEInterpolator()
+            if not ri.is_available():
+                logger.warning("⚠️ RIFE 未安装，跳过插帧")
+                QMetaObject.invokeMethod(
+                    self, "_set_status_via_bridge",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, "⚠️ RIFE 未安装（扩展市场可装），已跳过插帧"),
+                    Q_ARG(str, "#f9e2af"))
+                return video_path
+
+            base, ext = os.path.splitext(video_path)
+            out_path = f"{base}_rife{target}fps{ext or '.mp4'}"
+            logger.info(f"🎞️ [RIFE] 插帧: {os.path.basename(video_path)} → {target}fps")
+            QMetaObject.invokeMethod(
+                self, "_set_status_via_bridge",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, f"🎞️ RIFE 正在插帧到 {target}fps..."),
+                Q_ARG(str, "#89dceb"))
+
+            res = ri.interpolate_video(
+                video_path, output_video=out_path,
+                target_fps=target, source_fps=source_fps or None,
+                keep_audio=True)
+
+            # 目标帧率 <= 源帧率时 interpolate_video 会原样返回
+            if os.path.normcase(res) == os.path.normcase(video_path):
+                QMetaObject.invokeMethod(
+                    self, "_set_status_via_bridge",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, f"ℹ️ 源帧率已≥{target}fps，无需插帧"),
+                    Q_ARG(str, "#f9e2af"))
+                return video_path
+
+            return res
+        except Exception as e:
+            logger.error(f"❌ RIFE 插帧失败(保留原视频): {e}")
+            try:
+                QMetaObject.invokeMethod(
+                    self, "_set_status_via_bridge",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, f"⚠️ RIFE 插帧失败，已保留原视频: {e}"),
+                    Q_ARG(str, "#f9e2af"))
+            except Exception:
+                pass
+            return video_path
 
     # ==========================================================
     #  按钮 / 回调
@@ -664,7 +764,7 @@ class VideoPanelMixin:
                     self._app_bridge.status_msg.emit(f"⚠️ {name} 已添加", "#ff7a17")
                 return
 
-        from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QSlider, QPushButton
+        from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton
         from PyQt6.QtCore import Qt
 
         row = QWidget()

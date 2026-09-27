@@ -62,12 +62,8 @@ EXTENSIONS = {
         "size_mb": 1400,
         "required": False,
         "desc": "通过骨骼图控制人物姿势",
-        "check_any": [
-            "models_cache/models--lllyasviel--sd-controlnet-openpose",
-            "models_cache/huggingface/hub/models--lllyasviel--sd-controlnet-openpose",
-            os.path.expanduser("~/.cache/huggingface/hub/models--lllyasviel--sd-controlnet-openpose"),
-        ],
-        "download": lambda cb=None: _dl_controlnet(cb, "openpose"),
+        # 必须与 core/model_manager.py 的查找路径一致：controlnets/{type}/config.json
+        "check": ["controlnets/openpose/config.json"],
     },
     "controlnet_canny": {
         "name": "ControlNet 边缘 (Canny)",
@@ -75,12 +71,7 @@ EXTENSIONS = {
         "size_mb": 1400,
         "required": False,
         "desc": "通过 Canny 边缘图控制构图",
-        "check_any": [
-            "models_cache/models--lllyasviel--sd-controlnet-canny",
-            "models_cache/huggingface/hub/models--lllyasviel--sd-controlnet-canny",
-            os.path.expanduser("~/.cache/huggingface/hub/models--lllyasviel--sd-controlnet-canny"),
-        ],
-        "download": lambda cb=None: _dl_controlnet(cb, "canny"),
+        "check": ["controlnets/canny/config.json"],
     },
     "controlnet_depth": {
         "name": "ControlNet 深度",
@@ -88,11 +79,35 @@ EXTENSIONS = {
         "size_mb": 1400,
         "required": False,
         "desc": "通过深度图控制场景空间",
-        "check_any": [
-            "models_cache/models--lllyasviel--sd-controlnet-depth",
-            "models_cache/huggingface/hub/models--lllyasviel--sd-controlnet-depth",
-            os.path.expanduser("~/.cache/huggingface/hub/models--lllyasviel--sd-controlnet-depth"),
-        ],
+        "check": ["controlnets/depth/config.json"],
+    },
+    # ---- SDXL 专用 ControlNet ----
+    # core/model_manager.py 在 is_sdxl 时走 sdxl_model_id_map，
+    # 本地目录是 controlnets/sdxl_{type}/。以前市场只有 SD1.5 那三套，
+    # SDXL 用户装了也用不上，只能等加载时联网。
+    "controlnet_openpose_sdxl": {
+        "name": "ControlNet 姿势 (SDXL)",
+        "category": "控制",
+        "size_mb": 2500,
+        "required": False,
+        "desc": "SDXL 专用骨骼控制（SD1.5 版不能用于 SDXL）",
+        "check": ["controlnets/sdxl_openpose/config.json"],
+    },
+    "controlnet_canny_sdxl": {
+        "name": "ControlNet 边缘 (SDXL)",
+        "category": "控制",
+        "size_mb": 2500,
+        "required": False,
+        "desc": "SDXL 专用 Canny 边缘控制",
+        "check": ["controlnets/sdxl_canny/config.json"],
+    },
+    "controlnet_depth_sdxl": {
+        "name": "ControlNet 深度 (SDXL)",
+        "category": "控制",
+        "size_mb": 2500,
+        "required": False,
+        "desc": "SDXL 专用深度控制",
+        "check": ["controlnets/sdxl_depth/config.json"],
     },
 
     # ---------- 修复 ----------
@@ -138,7 +153,9 @@ EXTENSIONS = {
             "models/motion_lora/rolling-clockwise",
             "models/motion_lora/rolling-anticlockwise",
         ],
-        "check_mode": "any",
+        # 必须 all：用 any 的话只要 8 个里有 1 个存在就判定"已安装"，
+        # download_extension 会直接返回，另外 7 个永远补不齐。
+        "check_mode": "all",
     },
     "ip_adapter_sd15": {
         "name": "IP-Adapter SD1.5 (图生视频)",
@@ -172,11 +189,11 @@ EXTENSIONS = {
         "size_mb": 1100,
         "required": False,
         "desc": "中文 TTS,支持男/女多种音色",
-        "check": [
-            "~/.cache/huggingface/hub/models--2Noise--ChatTTS",
-            "models_cache/models--2Noise--ChatTTS",
-        ],
-        "check_mode": "any",
+        # 必须与 utils/tts_engine.py 的判据一致（models/tts/ChatTTS/asset/GPT.pt）
+        # 也要与 model_downloader.MODEL_REGISTRY["chattts"].local 一致。
+        # 以前这里用 ~/.cache/huggingface/hub，导致「市场里装了、配音仍判缺失」
+        # 于是又下一份 1.1GB。
+        "check": ["models/tts/ChatTTS/asset/GPT.pt"],
     },
     "gpt_sovits": {
         "name": "GPT-SoVITS 日语克隆 TTS",
@@ -189,6 +206,42 @@ EXTENSIONS = {
             "third_party/GPT-SoVITS/GPT_SoVITS/pretrained_models/gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt",
             "third_party/GPT-SoVITS/GPT_SoVITS/pretrained_models/chinese-hubert-base",
             "third_party/GPT-SoVITS/GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large",
+        ],
+        "check_mode": "all",
+    },
+
+    # ---------- 新架构引擎 ----------
+    # ⚠️ Flux 引擎**只提供组件**（T5-XXL / CLIP-L / VAE / tokenizer /
+    #    scheduler，约 10GB），transformer 主权重（约 24GB）由用户自行
+    #    下载后放进 models/puton/ 或 models/flux/。
+    #    判据与 utils/flux_engine.py 的 REQUIRED_FILES 保持一致。
+    # 许可证差别很大，务必看清 desc：
+    #    schnell = Apache-2.0（可商用）；dev = 非商用许可（不可商用）
+    "flux_engine_schnell": {
+        "name": "Flux 引擎组件（schnell · 可商用）",
+        "category": "新架构引擎",
+        "size_mb": 10500,
+        "required": False,
+        "desc": "Apache-2.0 可商用。提供 T5/CLIP/VAE 组件；"
+                "transformer 主权重请自行下载放入 models/puton/",
+        "check": [
+            "models/flux_engine/schnell/model_index.json",
+            "models/flux_engine/schnell/text_encoder_2/config.json",
+            "models/flux_engine/schnell/vae/config.json",
+        ],
+        "check_mode": "all",
+    },
+    "flux_engine_dev": {
+        "name": "Flux 引擎组件（dev · 不可商用）",
+        "category": "新架构引擎",
+        "size_mb": 10500,
+        "required": False,
+        "desc": "⚠️ FLUX.1 [dev] 为非商用许可（禁止营利性/面向终端用户的生产使用），"
+                "商用请改用 schnell 或向 Black Forest Labs 申请授权",
+        "check": [
+            "models/flux_engine/dev/model_index.json",
+            "models/flux_engine/dev/text_encoder_2/config.json",
+            "models/flux_engine/dev/vae/config.json",
         ],
         "check_mode": "all",
     },
@@ -207,6 +260,24 @@ def _resolve_path(p: str) -> Path:
     return path.resolve()
 
 
+def _controlnet_installed(control_type: str, is_sdxl: bool) -> bool:
+    """复用 core.model_manager 的探测逻辑，避免两处路径各写一份而漂移。
+
+    以前这里只硬编码 controlnets/{type}/config.json，导致：
+      · HF 本地缓存里明明有完整仓库（lllyasviel/sd-controlnet-*）却判"未安装"
+      · 单文件 checkpoint 完全不支持
+      · 权重下好但缺 config.json 时反复提示下载
+    """
+    try:
+        from core.model_manager import ModelManager
+        src, _how = ModelManager.describe_local_controlnet(control_type, is_sdxl)
+        return bool(src)
+    except Exception as e:
+        logger.debug(f"[ext] ControlNet 探测失败，回退路径检查: {e}")
+        sub = ("sdxl_" if is_sdxl else "") + control_type
+        return os.path.exists(_resolve_path(f"controlnets/{sub}/config.json"))
+
+
 def is_installed(ext_id: str) -> bool:
     """
     检测扩展是否已安装
@@ -216,6 +287,14 @@ def is_installed(ext_id: str) -> bool:
     ext = EXTENSIONS.get(ext_id)
     if not ext:
         return False
+
+    # ControlNet 系走统一探测（支持 HF 缓存 / 单文件 / 直接放置三种落地方式）
+    if ext_id.startswith("controlnet_"):
+        _sdxl = ext_id.endswith("_sdxl")
+        _ctype = ext_id[len("controlnet_"):]
+        if _sdxl:
+            _ctype = _ctype[:-len("_sdxl")]
+        return _controlnet_installed(_ctype, _sdxl)
 
     # check_any: 任一路径存在即算装(用于 HF 缓存等多位置)
     if "check_any" in ext:
@@ -396,16 +475,68 @@ def _dl_nllb_600m(cb):
 
 
 def _dl_controlnet(cb, control_type):
+    """下载 ControlNet 到 core/model_manager.py 实际查找的目录。
+
+    加载器只认 controlnets/{sdxl_}{type}/config.json，
+    以前下载到 models_cache/models--lllyasviel--* 导致「下了却永远用不上、
+    一启用又联网重下」。
+    """
     _hf_snapshot(
         f"lllyasviel/sd-controlnet-{control_type}",
-        _proj(f"models_cache/models--lllyasviel--sd-controlnet-{control_type}"),
+        _proj(f"controlnets/{control_type}"),
         cb,
     )
+
+
+def _dl_controlnet_sdxl(cb, control_type):
+    """下载 SDXL 专用 ControlNet。
+
+    repo 必须与 core/model_manager.py 的 sdxl_model_id_map 一致，
+    否则加载器在本地找不到（config.json）就仍会联网重下。
+    """
+    sdxl_repos = {
+        "openpose": "thibaud/controlnet-openpose-sdxl-1.0",
+        "canny":    "diffusers/controlnet-canny-sdxl-1.0",
+        "depth":    "diffusers/controlnet-depth-sdxl-1.0",
+    }
+    repo = sdxl_repos.get(control_type)
+    if not repo:
+        raise ValueError(f"未知 SDXL ControlNet 类型: {control_type}")
+    _hf_snapshot(repo, _proj(f"controlnets/sdxl_{control_type}"), cb)
 
 
 def _dl_adetailer(cb, kind):
     fname = f"{kind}_yolov8n.pt"
     _hf_single_file("Bingsu/adetailer", fname, _proj(f"models/adetailer/{fname}"), cb)
+
+
+def _dl_flux_engine(cb, variant):
+    """下载 Flux 引擎**组件**（不含 transformer 主权重）。
+
+    只拉 T5-XXL / CLIP-L / VAE / tokenizer / scheduler + 配置，
+    刻意 ignore 掉 transformer/*：
+      · 主权重约 24GB，按本项目约定由用户自行下载；
+      · 与 core/loaders/flux.py 的设计一致（transformer 用
+        FluxTransformer2DModel.from_single_file 单独加载）。
+    """
+    from utils.flux_engine import VARIANTS
+    info = VARIANTS.get(variant)
+    if not info:
+        raise ValueError(f"未知 Flux 引擎变体: {variant}")
+    if not info["commercial"]:
+        _emit(cb, 2, f"⚠️ {info['label']} 为非商用许可（{info['license']}），"
+                     f"请确认使用方式合规")
+    _hf_snapshot(
+        info["repo"],
+        _proj(f"models/flux_engine/{variant}"),
+        cb,
+        ignore_patterns=[
+            "transformer/*",      # 主权重：用户自备
+            "*.gguf", "*.md", "*.png", "*.jpg",
+            "flux1-dev.safetensors", "flux1-schnell.safetensors",
+            "ae.safetensors",
+        ],
+    )
 
 
 def _dl_motion_adapter_v3(cb):
@@ -488,10 +619,12 @@ def _dl_rife_v46(cb):
 
 
 def _dl_chattts(cb):
-    default_cache = os.path.expanduser("~/.cache/huggingface/hub")
-    os.makedirs(default_cache, exist_ok=True)
-    _hf_snapshot("2Noise/ChatTTS",
-                 os.path.join(default_cache, "models--2Noise--ChatTTS"), cb)
+    """下载到 models/tts/ChatTTS —— 与 tts_engine / model_downloader 同一路径。
+
+    ChatTTS 运行时用 source="custom", custom_path=models/tts/ChatTTS，
+    所以必须落到那里；落到 HF 默认缓存会让运行时仍判"缺失"并重复下载。
+    """
+    _hf_snapshot("2Noise/ChatTTS", _proj("models/tts/ChatTTS"), cb)
 
 
 def _dl_gpt_sovits(cb):
@@ -516,6 +649,9 @@ DOWNLOADERS = {
     "controlnet_openpose":   lambda cb: _dl_controlnet(cb, "openpose"),
     "controlnet_canny":      lambda cb: _dl_controlnet(cb, "canny"),
     "controlnet_depth":      lambda cb: _dl_controlnet(cb, "depth"),
+    "controlnet_openpose_sdxl": lambda cb: _dl_controlnet_sdxl(cb, "openpose"),
+    "controlnet_canny_sdxl":    lambda cb: _dl_controlnet_sdxl(cb, "canny"),
+    "controlnet_depth_sdxl":    lambda cb: _dl_controlnet_sdxl(cb, "depth"),
     "adetailer_face":        lambda cb: _dl_adetailer(cb, "face"),
     "adetailer_hand":        lambda cb: _dl_adetailer(cb, "hand"),
     "motion_adapter_v3":     _dl_motion_adapter_v3,
@@ -524,6 +660,8 @@ DOWNLOADERS = {
     "rife_v46":              _dl_rife_v46,
     "chattts":               _dl_chattts,
     "gpt_sovits":            _dl_gpt_sovits,
+    "flux_engine_schnell":   lambda cb: _dl_flux_engine(cb, "schnell"),
+    "flux_engine_dev":       lambda cb: _dl_flux_engine(cb, "dev"),
 }
 
 
@@ -563,7 +701,9 @@ def uninstall_extension(ext_id: str, progress_cb: ProgressCallback = None) -> bo
         return False
 
     ext = EXTENSIONS[ext_id]
-    paths = ext.get("check", [])
+    # 同时支持 check 与 check_any：以前只读 check，
+    # 而三个 controlnet 扩展只定义了 check_any → 点卸载永远"未定义 check 路径"。
+    paths = list(ext.get("check", [])) + list(ext.get("check_any", []))
     if not paths:
         _emit(progress_cb, 0, f"⚠️ {ext_id} 未定义 check 路径,无法卸载")
         return False
@@ -602,7 +742,7 @@ def uninstall_extension(ext_id: str, progress_cb: ProgressCallback = None) -> bo
         _emit(progress_cb, 100, f"✅ 已卸载 {len(deleted)} 个文件/目录")
         return True
     else:
-        _emit(progress_cb, 100, f"⚠️ 未找到要删除的文件")
+        _emit(progress_cb, 100, "⚠️ 未找到要删除的文件")
         return False
 
 

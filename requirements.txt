@@ -4,12 +4,20 @@
 #
 #  ⚠️ PyTorch (CUDA 12.8) 请单独安装,不要直接用本文件装:
 #    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+#
+#  ⚠️ 版本口径（2026-09 实测环境,勿随意回退）:
+#    diffusers 0.40 / transformers 5.16 / huggingface-hub 1.24
+#    旧版 0.32.2 / 4.49 下部分 API 行为不同,回退前请先跑 tests/。
+#    注意 diffusers >= 0.40 的以下几点（本项目代码已按新版适配）:
+#      · Pipeline 上已无 enable_vae_tiling/slicing → 用 pipe.vae.enable_tiling()
+#      · enable_xformers_* 是废弃 shim → 装了 xformers 才调用
+#      · StableDiffusionReferencePipeline 已移除 → Reference-Only 需 community pipeline
 # ============================================================
 
 # --- 深度学习核心 ---
 # torch / torchvision / torchaudio 见上方说明
-diffusers==0.32.2
-transformers==4.49.0
+diffusers>=0.40,<0.41
+transformers>=5.16,<6
 accelerate>=1.0
 compel>=2.0
 peft>=0.19
@@ -18,7 +26,7 @@ bitsandbytes>=0.49 ; sys_platform == "win32"
 onnxruntime-gpu
 
 # --- 模型下载 ---
-huggingface-hub>=0.26
+huggingface-hub>=1.24
 modelscope>=1.37
 
 # --- 图像 / 视频 ---
@@ -33,6 +41,7 @@ scikit-image
 
 # --- GUI ---
 PyQt6>=6.7
+qdarkstyle>=3.2          # 缺失时主题回退 Fusion 深色（ui/theme.py）
 
 # --- LLM 提示词增强 ---
 qwen-vl-utils

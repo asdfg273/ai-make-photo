@@ -122,20 +122,84 @@ class VideoGenerator:
                 feature_extractor=None,
                 image_encoder=None,
             )
-            self._offload(self.v2v_pipe)
+            # 与 self.pipe 共享组件，不能再次安装 offload hook
+            self._offload(self.v2v_pipe, already_offloaded=True)
             logger.info("✅ AnimateDiff v2v 就绪")
 
         self._apply_scheduler(scheduler)
 
-    def _offload(self, pipe):
+    def dispose(self):
+        """释放 AnimateDiff 管线与 hook。
+
+        切换底模时 ui 会把 self.video_generator 置 None —— 只丢 Python 引用
+        无法回收 deepcopy 的 UNet（~0.9GB），而且共享组件上残留的 offload
+        hook 会与新底模冲突。所以置 None 前必须先调本方法。
+        """
+        for attr in ("pipe", "v2v_pipe"):
+            pipe = getattr(self, attr, None)
+            if pipe is None:
+                continue
+            try:
+                from accelerate.hooks import remove_hook_from_module
+                for sub in ("unet", "vae", "text_encoder", "image_encoder"):
+                    mod = getattr(pipe, sub, None)
+                    if mod is not None:
+                        remove_hook_from_module(mod, recurse=True)
+            except Exception as e:
+                logger.debug(f"[dispose] 移除 offload hook 失败: {e}")
+            setattr(self, attr, None)
+        self.adapter = None
+        self.current_adapter_name = None
+        self.loaded_motion_loras = []
+        self._ipa_loaded = False
         try:
-            pipe.enable_vae_slicing()
-            pipe.enable_vae_tiling()
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         except Exception:
             pass
+        logger.info("🗑️ AnimateDiff 管线已释放")
+
+    def _has_offload_hooks(self, pipe) -> bool:
+        """该管线（或其组件）是否已经挂过 accelerate offload hook。"""
+        try:
+            if getattr(pipe, "_all_hooks", None):
+                return True
+        except Exception:
+            pass
+        for attr in ("unet", "vae", "text_encoder", "image_encoder"):
+            mod = getattr(pipe, attr, None)
+            if mod is not None and getattr(mod, "_hf_hook", None) is not None:
+                return True
+        return False
+
+    def _offload(self, pipe, already_offloaded: bool = False):
+        """为新管线启用 offload / VAE 优化。
+
+        ⚠️ 关键：`self.pipe` 与 `self.v2v_pipe` **共享** vae / text_encoder /
+        scheduler（unet 是 deepcopy 出来的独立副本）。若对两者各调一次
+        enable_model_cpu_offload()，accelerate 会在同一批 module 上重复安装
+        hook（第二次覆盖第一次），典型症状就是
+        "Expected all tensors to be on the same device"。
+        所以只在第一条管线上装，第二条（already_offloaded=True）跳过。
+        """
+        from utils.vram_manager import VRAMManager
+
+        # VAE 优化作用在共享的 pipe.vae 上，第一条管线设置一次即可
+        if not already_offloaded:
+            VRAMManager._set_vae_option(pipe, "slicing", True)
+            VRAMManager._set_vae_option(pipe, "tiling", True)
+
+        if already_offloaded or self._has_offload_hooks(pipe):
+            logger.debug("⏭️ 组件已挂 offload hook，跳过重复安装")
+            return
+
         try:
             pipe.enable_model_cpu_offload()
-        except Exception:
+            logger.info("✅ 已启用 model CPU offload")
+        except Exception as e:
+            logger.warning(f"⚠️ cpu offload 失败，回退全量上卡: {e}")
             pipe.to("cuda" if torch.cuda.is_available() else "cpu")
 
     def _apply_scheduler(self, name="dpm++"):
@@ -200,29 +264,55 @@ class VideoGenerator:
             self.loaded_motion_loras = names
 
     # ---------- IP-Adapter ----------
+    @staticmethod
+    def _ipa_paths():
+        """IP-Adapter 权重与编码器的路径。
+
+        ⚠️ 用 project 锚定的绝对路径，不要 os.path.join("models", ...)：
+        相对路径依赖 CWD，从别的目录启动时会误判"缺失"。
+        """
+        from utils import paths
+        ipa_dir = os.path.join(paths.MODEL_DIR, "ip_adapter")
+        return (ipa_dir,
+                os.path.join(ipa_dir, "ip-adapter_sd15.safetensors"),
+                os.path.join(ipa_dir, "image_encoder"))
+
+    def ip_adapter_present(self) -> bool:
+        _d, weight, encoder = self._ipa_paths()
+        return (os.path.isfile(weight)
+                and os.path.isfile(os.path.join(encoder, "model.safetensors")))
+
+    def preflight_ip_adapter(self, parent=None) -> bool:
+        """**必须在 GUI 线程调用**：图生视频前检查 IP-Adapter。
+
+        缺失时告知体积与来源、由用户决定是否下载（项目定位：模型自行下载），
+        而不是在后台线程里静默下载 2.5GB。
+        返回 True 表示已就绪（原本就有或用户确认下载成功）。
+        """
+        if self.ip_adapter_present():
+            return True
+        from utils.model_downloader import confirm_and_install
+        ok1 = confirm_and_install(
+            "ip_adapter_sd15",
+            "图生视频需要 IP-Adapter 锁定画面风格", parent=parent)
+        ok2 = confirm_and_install(
+            "ip_adapter_image_encoder",
+            "IP-Adapter 的图像编码器（CLIP ViT-H）", parent=parent)
+        return bool(ok1 and ok2 and self.ip_adapter_present())
+
     def _ensure_ip_adapter(self, scale: float = 0.6):
-        """确保 IP-Adapter 已加载,缺失时自动下载"""
+        """加载 IP-Adapter。缺失时**不下载**，由 preflight_ip_adapter 在
+        GUI 线程提前处理；这里只做加载与显存安置。"""
         import torch
 
-        ipa_dir = os.path.join("models", "ip_adapter")
-        weight_path = os.path.join(ipa_dir, "ip-adapter_sd15.safetensors")
-        encoder_dir = os.path.join(ipa_dir, "image_encoder")
+        ipa_dir, weight_path, encoder_dir = self._ipa_paths()
 
         if not getattr(self, "_ipa_loaded", False):
-            # 检查缺失 → 自动下载
-            if not os.path.isfile(weight_path) or not os.path.isfile(
-                os.path.join(encoder_dir, "model.safetensors")
-            ):
-                logger.info("📥 IP-Adapter 缺失,开始自动下载...")
-                from utils.model_downloader import install
-                install("ip_adapter_sd15")
-                install("ip_adapter_image_encoder")
-
-            if not os.path.isfile(weight_path):
+            if not self.ip_adapter_present():
                 raise RuntimeError(
-                    "❌ IP-Adapter 下载失败,请手动运行: "
-                    "python -m utils.model_downloader install ip_adapter_sd15"
-                )
+                    "❌ 图生视频需要 IP-Adapter，但模型缺失。\n"
+                    "可自行下载到 models/ip_adapter/ 后重试，或运行：\n"
+                    "python -m utils.model_downloader install ip_adapter_sd15")
 
             logger.info(f"🔌 加载 IP-Adapter: {weight_path}")
             self.pipe.load_ip_adapter(
@@ -355,15 +445,14 @@ class VideoGenerator:
         height=512,
         fps=8,
         scheduler="dpm++",
-        motion_loras=None,      
-        motion_lora=None,      
+        motion_loras=None,
+        motion_lora=None,
         motion_scale=0.8,
         use_context_window=False,
         prompt_travel=None,
         output_format="mp4",
         output_dir="photo/videos",
         progress_callback=None,
-        # 新增
         mode="txt2video",       # txt2video / img2video / vid2vid / prompt_travel
         input_path=None,
         strength=0.75,          # v2v

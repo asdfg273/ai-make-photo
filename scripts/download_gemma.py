@@ -14,7 +14,7 @@ def download_model():
     print(f"开始下载模型: {MODEL_REPO}")
     print(f"保存路径: {SAVE_PATH}")
     print(f"下载镜像: {os.environ['HF_ENDPOINT']}")
-    
+
     try:
         snapshot_download(
             repo_id=MODEL_REPO,

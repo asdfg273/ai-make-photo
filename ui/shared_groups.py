@@ -173,6 +173,33 @@ def _build_advanced(host) -> CollapsibleSection:
     gh.addRow(host.lbl_ad_hand_blend, host.scale_ad_hand_blend)
     layout.addWidget(grp_hand)
 
+    # ---------- FreeU ----------
+    host.chk_freeu = QCheckBox("✨ FreeU 细节增强")
+    host.chk_freeu.setToolTip(
+        "免训练的细节增强技术，提升图像清晰度和纹理细节\n"
+        "SD1.5 / SDXL 系可用；FLUX / SD3 架构不支持")
+    _wire(host, host.chk_freeu.toggled, "_toggle_freeu")
+    layout.addWidget(host.chk_freeu)
+
+    # ---------- CLIP Skip ----------
+    host.combo_clip_skip = QComboBox()
+    host.combo_clip_skip.addItems(["关闭 (最后一层)", "跳过 1 层 (推荐动漫)",
+                                   "跳过 2 层", "跳过 3 层"])
+    host.combo_clip_skip.setCurrentIndex(0)
+    host.combo_clip_skip.setToolTip(
+        "🎚️ CLIP Skip —— 文本编码器用倒数第 N 层输出。\n\n"
+        "• Pony / Illustrious / NoobAI 以及多数 SD1.5 二次元底模\n"
+        "  都是在【倒数第二层】上训练的 → 选「跳过 1 层」。\n"
+        "• 用默认的最后一层常见症状：线条发脏、色彩发灰、脸更容易崩。\n"
+        "• 真实系底模一般保持「关闭」。\n"
+        "• 仅对 CLIP 系生效（SD1.5 / SDXL）；FLUX/SD3/Anima 会自动跳过。\n"
+        "• 切换后在下一次生成时生效；X/Y 矩阵可用它对比效果。")
+    _wire(host, host.combo_clip_skip.currentIndexChanged, "_on_clip_skip_changed")
+    grp_cs = QGroupBox("🎚️ CLIP Skip — 文本编码层")
+    gcs = QFormLayout(grp_cs)
+    gcs.addRow("跳过层数:", host.combo_clip_skip)
+    layout.addWidget(grp_cs)
+
     # ---------- Hires.fix ----------
     grp_hr = QGroupBox("Hires.fix — 高清修复")
     ghr = QFormLayout(grp_hr)

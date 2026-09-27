@@ -56,14 +56,14 @@ def scan_models(model_type: str) -> list[dict]:
 
     exts = MODEL_TYPES.get(model_type, {}).get("ext", _DEFAULT_EXT)
     results = []
-    
+
     for fname in sorted(os.listdir(sub_dir)):
         fpath = os.path.join(sub_dir, fname)
         if not os.path.isfile(fpath):
             continue
         if not any(fname.lower().endswith(e) for e in exts):
             continue
-        
+
         # 读取同名 .txt 备注
         note = ""
         txt_path = os.path.splitext(fpath)[0] + ".txt"
@@ -73,7 +73,7 @@ def scan_models(model_type: str) -> list[dict]:
                     note = f.read().strip()
             except Exception:
                 pass
-        
+
         size_gb = os.path.getsize(fpath) / (1024 ** 3)
         results.append({
             "name": fname,
@@ -82,7 +82,7 @@ def scan_models(model_type: str) -> list[dict]:
             "size_gb": round(size_gb, 2),
             "type": model_type,
         })
-    
+
     return results
 
 

@@ -10,8 +10,7 @@ import os
 import json
 import sys
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QTextBrowser, QCheckBox, QPushButton, QMessageBox
+    QDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QCheckBox, QPushButton
 )
 from PyQt6.QtCore import Qt
 import logging

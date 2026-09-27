@@ -1,10 +1,9 @@
 # file_name: ui_builder.py
 import os
 import sys
-from tkinter import CURRENT
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget,
+    QWidget,
     QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QLabel, QPushButton, QComboBox, QSlider, QCheckBox,
     QTextEdit, QLineEdit, QSpinBox, QDoubleSpinBox,
@@ -16,14 +15,10 @@ from PyQt6.QtCore import Qt, QTimer, QSize, QUrl
 from PyQt6.QtGui import QColor, QIcon, QPixmap, QAction
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-import core.presets
-from ui.extension_market import ExtensionMarketDialog
 from ui.gallery_panel import GalleryPanel
 
 # 从独立文件导入 — 已从 ui_builder.py 提取
-from utils.gpu_init import enable_gpu_acceleration
 from ui.widgets import FloatSlider, GpuCanvas
-from ui.splash import SplashScreen, create_splash
 from ui.design_tokens import DARK_STYLE,VIDEO_TAB_QSS
 from utils.paths import PROJECT_ROOT
 import logging
@@ -94,7 +89,7 @@ class UIBuilderMixin:
 
         # 启动时回填画廊
         try:
-            from utils.app_utils import OUTPUT_DIR
+            from utils.paths import OUTPUT_DIR
             self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
         except Exception as e:
             logger.warning(f"⚠️ 画廊初始化失败: {e}")
@@ -154,7 +149,7 @@ class UIBuilderMixin:
                 self.stop_video()
                 self.right_stacked.setCurrentIndex(0)
                 try:
-                    from utils.app_utils import OUTPUT_DIR
+                    from utils.paths import OUTPUT_DIR
                     if hasattr(self, 'gallery'):
                         self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
                 except Exception as e:
@@ -388,7 +383,7 @@ class UIBuilderMixin:
             "AI 智能改写",
             " 词典优先 + AI 兜底 ",
         ])
-        self.combo_trans_mode.setCurrentIndex(2)  
+        self.combo_trans_mode.setCurrentIndex(2)
         self.combo_trans_mode.setToolTip(
             " 纯词典: 只用 JSON 词典查词, 速度快但不通顺\n"
             " AI 改写: 每次都调 Qwen, 效果最好但慢\n"
@@ -404,7 +399,7 @@ class UIBuilderMixin:
         gp = QFormLayout(grp_preview)
 
         self.chk_use_preview = QCheckBox("生成时显示实时预览")
-        self.chk_use_preview.setChecked(False)  
+        self.chk_use_preview.setChecked(False)
         self.chk_use_preview.setToolTip(
             "每 N 步解码一次 latent 显示到画布\n"
             "GPU: 开启基本无影响\n"
@@ -1143,7 +1138,7 @@ class UIBuilderMixin:
         self.chk_pose_transfer.toggled.connect(_toggle_pt)
         _toggle_pt(False)  # 初始禁用
 
-        
+
 
         g_consist = QGroupBox("🎯 单图角色一致性增强")
         g_consist.setStyleSheet(
@@ -1186,7 +1181,7 @@ class UIBuilderMixin:
         v_consist.addWidget(hint_ref)
 
         layout.addWidget(grp_pt)
-        layout.addWidget(g_consist)        
+        layout.addWidget(g_consist)
         layout.addStretch()
         return w
 
@@ -1405,7 +1400,7 @@ class UIBuilderMixin:
 
         grp_photo = QGroupBox("🖼️ 大图生成 (Tiled Diffusion)")
         fl_tiled = QFormLayout(grp_photo)
-    
+
         # 总开关
         self.chk_use_tiled = QCheckBox("启用大图生成(对当前图后处理)")
         self.chk_use_tiled.setToolTip(
@@ -1414,7 +1409,7 @@ class UIBuilderMixin:
             "⚠️ CPU 用户慎用：一张 2K 图约需 2-4 小时"
         )
         fl_tiled.addRow(self.chk_use_tiled)
-    
+
         # 目标尺寸
         size_row = QHBoxLayout()
         self.spin_tiled_w = QSpinBox()
@@ -1430,14 +1425,14 @@ class UIBuilderMixin:
         size_row.addWidget(self.spin_tiled_h)
         wrap = QWidget(); wrap.setLayout(size_row)
         fl_tiled.addRow("目标分辨率:", wrap)
-    
+
         # Tile 大小
         self.combo_tile_size = QComboBox()
         self.combo_tile_size.addItems(["512", "640", "768", "1024"])
         self.combo_tile_size.setCurrentText("768")
         self.combo_tile_size.setToolTip("单块大小，越大越慢但接缝越少")
         fl_tiled.addRow("Tile 大小:", self.combo_tile_size)
-    
+
         # 重叠
         self.spin_tile_overlap = QSpinBox()
         self.spin_tile_overlap.setRange(32, 256)
@@ -1445,7 +1440,7 @@ class UIBuilderMixin:
         self.spin_tile_overlap.setValue(96)
         self.spin_tile_overlap.setToolTip("重叠像素，消接缝必需，建议 64-128")
         fl_tiled.addRow("Tile 重叠:", self.spin_tile_overlap)
-    
+
         # img2img 强度
         self.scale_tile_strength = FloatSlider(0.2, 0.8, 0.05, 0.4)
         self.scale_tile_strength.setToolTip(
@@ -1454,7 +1449,7 @@ class UIBuilderMixin:
             "0.7+: 大幅改变原图"
         )
         fl_tiled.addRow("重绘强度:", self.scale_tile_strength)
-    
+
         # 执行按钮(独立触发，不污染主生成流程)
         self.btn_run_tiled = QPushButton("🚀 对最后一张图执行大图生成")
         self.btn_run_tiled.clicked.connect(self.run_tiled_diffusion)
@@ -1566,9 +1561,9 @@ class UIBuilderMixin:
             btn_row.addWidget(b)
         preview_layout.addLayout(btn_row)
         self.btn_open_editor.clicked.connect(self.open_gallery_to_edit)
-        self.btn_save_as.clicked.connect(self.save_current_image_as)         
-        self.btn_send_img2img.clicked.connect(self.send_preview_to_img2img) 
-        self.btn_send_inpaint.clicked.connect(self.send_preview_to_inpaint)  
+        self.btn_save_as.clicked.connect(self.save_current_image_as)
+        self.btn_send_img2img.clicked.connect(self.send_preview_to_img2img)
+        self.btn_send_inpaint.clicked.connect(self.send_preview_to_inpaint)
         # ── 下半区: 画廊标题 + 画廊 ──
         gallery_wrap = QWidget()
         gallery_layout = QVBoxLayout(gallery_wrap)
@@ -2276,7 +2271,6 @@ class UIBuilderMixin:
     def _flash_widget(self, name, color="#dadbdf"):
         from PyQt6.QtWidgets import QGraphicsColorizeEffect
         from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
-        from PyQt6.QtGui import QColor
 
         w = getattr(self, name, None)
         if w is None:
@@ -2372,21 +2366,21 @@ class UIBuilderMixin:
         """
         import os
         triggers_list = []
-    
+
         for i, combo in enumerate(self.combo_loras):
             if slot_idx is not None and i != slot_idx:
                 continue
-        
+
             lora_name = combo.currentText().strip()
             if not lora_name or lora_name in ("无", "None", ""):
                 continue
-        
+
             # 去除可能的 [大小] 后缀
             if "[" in lora_name:
                 lora_name = lora_name.split("[")[0].strip()
-        
+
             base = os.path.splitext(lora_name)[0]
-        
+
             # 尝试多个可能路径
             for sub in ["sdxl", "sd1.5", "sd15", ""]:
                 txt_path = os.path.join("loras", sub, base + ".txt") if sub else os.path.join("loras", base + ".txt")
@@ -2399,7 +2393,7 @@ class UIBuilderMixin:
                         break
                     except Exception as e:
                         logger.warning(f"⚠️ 读取 {txt_path} 失败: {e}")
-    
+
         if not triggers_list:
             self._set_status("⚠️ 没有可插入的触发词", "#ff7a17")
             return
@@ -2426,7 +2420,7 @@ class UIBuilderMixin:
 
     def _open_output_folder(self):
         import subprocess
-        from utils.app_utils import OUTPUT_DIR
+        from utils.paths import OUTPUT_DIR
         if not os.path.exists(OUTPUT_DIR):
             os.makedirs(OUTPUT_DIR, exist_ok=True)
         try:
@@ -2550,7 +2544,6 @@ class UIBuilderMixin:
 
 
     def on_pick_video_input(self):
-        from PyQt6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getOpenFileName(
             self, "选择首帧图/输入视频",
             "", "图片/视频 (*.png *.jpg *.jpeg *.mp4 *.gif)"
@@ -2560,7 +2553,7 @@ class UIBuilderMixin:
             self.lbl_video_input.setText(os.path.basename(path))
 
 
-    
+
     def _on_tts_engine_changed(self, idx):
         """引擎切换 → 显示对应参数面板"""
         engine_text = self.combo_tts_engine.currentText() \
@@ -2583,7 +2576,6 @@ class UIBuilderMixin:
 
     def _on_pick_sovits_ref(self):
         """选择自定义参考音频"""
-        from PyQt6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getOpenFileName(
             self, "选择参考音频 (3-10秒)", "", "音频文件 (*.wav *.mp3 *.flac)"
         )

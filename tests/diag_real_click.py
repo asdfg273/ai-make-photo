@@ -1,5 +1,8 @@
 # tests/diag_real_click.py — 真实窗口诊断：按钮渲染 + 胶片条回填（无头）
-import os, sys, time, glob
+import os
+import sys
+import time
+import glob
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

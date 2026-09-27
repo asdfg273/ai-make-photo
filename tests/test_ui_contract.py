@@ -1,5 +1,6 @@
 # tests/test_ui_contract.py — UI 契约测试（无头，纯脚本）
-import os, sys
+import os
+import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -13,7 +14,7 @@ _WINDOWS = []
 
 def test_contract_lists():
     from ui.contracts import (GLOBAL_WIDGETS, PAGE_WIDGETS, METHOD_CONTRACT,
-                              ALIASES, LIST_ALIASES, CRITICAL)
+                              ALIASES, CRITICAL)
     assert "txt_prompt" in GLOBAL_WIDGETS
     assert "combo_model" in GLOBAL_WIDGETS
     assert "btn_generate" in GLOBAL_WIDGETS
@@ -63,7 +64,7 @@ def test_shell_skeleton():
 def test_core_widgets():
     from ui.shell import ShellMixin
     from PyQt6.QtWidgets import QMainWindow
-    from ui.contracts import check_contract, GLOBAL_WIDGETS
+    from ui.contracts import check_contract
 
     class MiniApp(QMainWindow, ShellMixin):
         pass

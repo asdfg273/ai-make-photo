@@ -42,7 +42,11 @@ class BaseLoader:
     def apply_vram(self, result, ctx):
         from utils.vram_manager import VRAMManager
         heavy = ctx.arch_id in ("sdxl", "pony", "sd3")
-        VRAMManager.apply_optimal_strategy(result.txt2img, is_sdxl=heavy)
+        # 把检查点体积作为「权重占用」的兜底估计传进去：对没有主干模块
+        # 可测的管线（Anima ModularPipeline）需要它来扣减。
+        _w = getattr(getattr(ctx, "detection", None), "size_gb", 0.0)
+        VRAMManager.apply_optimal_strategy(result.txt2img, is_sdxl=heavy,
+                                          weights_gb=_w, arch_id=ctx.arch_id)
         VRAMManager.print_status()
 
     def derive_pipes(self, result, ctx):

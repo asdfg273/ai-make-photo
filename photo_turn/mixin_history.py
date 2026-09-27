@@ -24,8 +24,16 @@ class HistoryMixin:
         if mask is None:
             mask = self.mask_img
 
-        # 同时快照滑块状态，让撤销能还原调色值
-        self.history.append((img.copy(), mask.copy(), self._slider_snapshot()))
+        # 同时快照滑块状态与 original_img：
+        # - 滑块：让撤销能还原调色值
+        # - original_img：crop/flip/rotate/resize 都会改它，撤销时必须一起还原，
+        #   否则它与 current_img/mask_img 尺寸失同步（橡皮 paste / 遮罩叠加会崩）
+        self.history.append((
+            img.copy(),
+            mask.copy(),
+            self._slider_snapshot(),
+            self.original_img.copy() if getattr(self, "original_img", None) else None,
+        ))
         self.future.clear()
         if len(self.history) > 1:
             self._dirty = True
@@ -51,10 +59,13 @@ class HistoryMixin:
                 return
             prev_img, prev_mask = prev[0], prev[1]
             prev_sliders = prev[2] if len(prev) > 2 else None
+            prev_original = prev[3] if len(prev) > 3 else None
 
             self.current_img = prev_img.copy()
             self.mask_img    = prev_mask.copy()
             self.base_img    = self.current_img.copy()
+            if prev_original is not None:
+                self.original_img = prev_original.copy()
             self._restore_sliders(prev_sliders)
             self.update_canvas(self.current_img)
             self._hist_status("已撤销")
@@ -70,10 +81,13 @@ class HistoryMixin:
 
             next_img, next_mask = next_state[0], next_state[1]
             next_sliders = next_state[2] if len(next_state) > 2 else None
+            next_original = next_state[3] if len(next_state) > 3 else None
 
             self.current_img = next_img.copy()
             self.mask_img    = next_mask.copy()
             self.base_img    = self.current_img.copy()
+            if next_original is not None:
+                self.original_img = next_original.copy()
             self._restore_sliders(next_sliders)
             self.update_canvas(self.current_img)
             self._hist_status("已重做")

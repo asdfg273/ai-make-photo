@@ -1,5 +1,8 @@
 # tests/test_settings.py — 设置界面：改键 + 默认值（无头，纯脚本）
-import os, sys, tempfile
+import os
+import _bootstrap  # noqa: F401,E402  (统一放宽 stdout 编码，避免 emoji 让脚本假失败)
+import sys
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

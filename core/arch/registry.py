@@ -33,7 +33,7 @@ REGISTRY: dict[str, ArchInfo] = {
     "anima": ArchInfo(
         arch_id="anima",
         display_name="Anima (Cosmos DiT 2B)",
-        engine_id="anima",    
+        engine_id="anima",
         supported=True,
         lora_subdir="anima",
         extra_components=["Qwen3-0.6B text_encoder", "LLM adapter", "Qwen VAE"],
@@ -51,9 +51,16 @@ REGISTRY: dict[str, ArchInfo] = {
     "flux": ArchInfo(
         "flux", "FLUX.1", "diffusers", False, _TXT2IMG_ONLY,
         model_subdir="flux", lora_subdir="flux",
-        unsupported_reason="Flux 引擎尚未实现。",
+        unsupported_reason=(
+            "Flux 引擎尚未接通：需要先在「扩展市场」安装 Flux 引擎组件"
+            "（T5-XXL / CLIP-L / VAE，约 10GB），"
+            "transformer 主权重（约 24GB）请自行下载后放入 models/flux/ 或 "
+            "models/puton/。\n"
+            "⚠️ 许可证差异很大：schnell 为 Apache-2.0（可商用）；"
+            "dev 为非商用许可（不可商用）。"
+        ),
         extra_components=("T5-XXL 文本编码器", "CLIP-L", "Flux VAE"),
-        extra_download_size="约 10GB",
+        extra_download_size="约 10GB（扩展市场）",
     ),
     "sd3": ArchInfo(
         "sd3", "Stable Diffusion 3", "sd3", False, _TXT2IMG_ONLY,

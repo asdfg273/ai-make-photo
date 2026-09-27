@@ -1,91 +1,119 @@
 <html style="margin:0;padding:0;">
-<div style="background-color:transparent;box-sizing:border-box;font-family:'Roboto','PingFang SC','Segoe UI',Arial,sans-serif;color:#1A1B1C;">
-  <div style="padding:4px 2px 12px;">
-    <div style="font-size:15px;font-weight:600;margin-bottom:10px;">AI 绘画工作站 v6.0 · 代码体检结论</div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-      <div style="flex:1 1 130px;min-width:0;padding:10px 12px;background:linear-gradient(135deg,rgba(234,102,104,0.12),rgba(234,102,104,0.22));border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:11px;color:#6B7280;">P0 · 崩溃级</div>
-        <div style="font-size:20px;font-weight:600;color:#C0392B;margin-top:2px;">2</div>
-      </div>
-      <div style="flex:1 1 130px;min-width:0;padding:10px 12px;background:linear-gradient(135deg,rgba(250,173,20,0.12),rgba(250,173,20,0.22));border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:11px;color:#6B7280;">P1 · 功能失效</div>
-        <div style="font-size:20px;font-weight:600;color:#B26A00;margin-top:2px;">4</div>
-      </div>
-      <div style="flex:1 1 130px;min-width:0;padding:10px 12px;background:linear-gradient(135deg,rgba(158,172,234,0.12),rgba(158,172,234,0.22));border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:11px;color:#6B7280;">P2 · 健壮性</div>
-        <div style="font-size:20px;font-weight:600;color:#3D4C8C;margin-top:2px;">6</div>
-      </div>
-      <div style="flex:1 1 160px;min-width:0;padding:10px 12px;background:rgba(0,0,0,0.03);border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:11px;color:#6B7280;">检查范围</div>
-        <div style="font-size:12px;font-weight:500;margin-top:4px;line-height:1.5;">97 个 py 编译 ✓<br/>未定义名 0 真命中 · test_theme ✓<br/>undo 崩溃已复现</div>
-      </div>
+<div style="background-color:transparent;box-sizing:border-box;font-family:'Roboto','PingFang SC','Segoe UI',Arial,sans-serif;color:#1A1B1C;line-height:1.5;max-width:880px;">
+  <!-- ═══ 第四轮复查（2026-09-27）═══ -->
+  <div style="padding:14px;background:linear-gradient(135deg, rgba(158,172,234,0.10), rgba(158,172,234,0.20));border:1px solid rgba(158,172,234,0.35);border-radius:12px;margin-top:14px;">
+    <div style="font-size:14px;font-weight:600;color:#4a56a8;">第四轮复查 · 2026-09-27 · 角色库/场景库/批量重构后再检</div>
+    <div style="font-size:12px;color:#6B7280;margin-top:6px;line-height:1.7;">
+      <b style="color:#4d7c1f;">✅ 你已自修（我上轮的建议落地）</b>：btn_batch 双重连接删除、open_batch 的 page 判断移除、eventFilter 升级为实例方法（带 super() 转发与 dispose 清理）；scene_batch_dialog 移入 ui/ 并重写为字段表驱动。<br>
+      <b style="color:#4d7c1f;">✅ 本轮新修 1 处</b>：SceneLibrary.add 空 uuid 兜底——「复制场景」会把 uuid 置空入库，重载后多个场景 uuid 全为空，get/delete/move 互相误伤（已复现→修复→验证）。<br>
+      <b style="color:#8a5a00;">⚠️ 遗留未变</b>：resolve_output_dir 缩进错误（两个来源 ImportError 实测仍在）、recent 截断空操作、main.py output_dir 只写不读。<br>
+      <b style="color:#4a56a8;">📋 验证</b>：108 文件 AST 全过 · test_character_scene.py 5/5 PASS。
     </div>
+  </div>
 
-    <div style="font-size:13px;font-weight:600;margin:4px 0 8px;color:#C0392B;">P0 — 必现崩溃（未提交改动引入）</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <div style="flex:1 1 240px;min-width:0;padding:10px 12px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#C0392B;font-weight:600;margin-bottom:4px;">photo_turn/mixin_history.py:50</div>
-        <div style="font-size:13px;font-weight:600;">撤销必崩（Ctrl+Z）</div>
-        <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.5;">undo 里 <code>prev_img, prev_mask = prev, prev</code> 把整个 3 元组赋给两个变量，随后 .copy() 对元组调用 → AttributeError，已脚本复现</div>
-      </div>
-      <div style="flex:1 1 240px;min-width:0;padding:10px 12px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#C0392B;font-weight:600;margin-bottom:4px;">photo_turn/mixin_ai.py:27,29</div>
-        <div style="font-size:13px;font-weight:600;">ADetailer 修脸永久卡死</div>
-        <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.5;">线程启动未传 snapshot 参数，_adetailer_worker 立即 TypeError；finally 不执行，_adetailer_running 永远 True</div>
-      </div>
-    </div>
+  <!-- ═══ 头部 ═══ -->
+  <div style="padding:20px 0 8px;">
+    <div style="font-size:20px;font-weight:600;color:#1A1B1C;">项目体检报告 · 第四轮复查</div>
+    <div style="font-size:12px;color:#6B7280;margin-top:4px;">AI 绘画工作站 v6 · 2026-09-27 · 全项目 AST 语法检查 108/108 通过 · 角色场景测试 5/5 PASS</div>
+  </div>
 
-    <div style="font-size:13px;font-weight:600;margin:14px 0 8px;color:#B26A00;">P1 — 功能失效 / 静默错误</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <div style="flex:1 1 240px;min-width:0;padding:10px 12px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#B26A00;font-weight:600;margin-bottom:4px;">ui/shell.py:900</div>
-        <div style="font-size:13px;font-weight:600;">"切回文生图清参考图"守卫失效</div>
-        <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.5;">_on_tab_changed 引用不存在的 self.tab_widget，且从未被 connect（v6 切页走 nav.page_selected）→ 死代码</div>
-      </div>
-      <div style="flex:1 1 240px;min-width:0;padding:10px 12px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#B26A00;font-weight:600;margin-bottom:4px;">utils/app_generation.py:468,961</div>
-        <div style="font-size:13px;font-weight:600;">文生图被静默转成图生图</div>
-        <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.5;">init_image_path 无条件取 ref_image_path，残留参考图时 txt2img 会静默走 img2img 通道（强度=图生图滑块值）</div>
-      </div>
-      <div style="flex:1 1 240px;min-width:0;padding:10px 12px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#B26A00;font-weight:600;margin-bottom:4px;">core/model_manager.py:869,965</div>
-        <div style="font-size:13px;font-weight:600;">encode_prompt 定义两遍</div>
-        <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.5;">内容几乎相同的两个同名方法，后者静默覆盖前者 → 死代码 + 后续改错位置的隐患</div>
-      </div>
-      <div style="flex:1 1 240px;min-width:0;padding:10px 12px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:12px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#B26A00;font-weight:600;margin-bottom:4px;">main.py:436</div>
-        <div style="font-size:13px;font-weight:600;">"输出目录"设置无效</div>
-        <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.5;">config.output_dir 全项目只写不读，出图永远存进 photo/，设置里改目录不生效</div>
-      </div>
+  <!-- ═══ 总览 ═══ -->
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0;">
+    <div style="flex:1 1 150px;min-width:0;padding:12px;background:linear-gradient(135deg, rgba(82,196,26,0.12), rgba(82,196,26,0.22));border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:12px;color:#4d7c1f;">本轮已修复</div>
+      <div style="font-size:20px;font-weight:600;color:#1A1B1C;margin-top:2px;">6 处<span style="font-size:12px;color:#6B7280;font-weight:400;">（2 P0 + 2 P1 + 2 P2）</span></div>
     </div>
+    <div style="flex:1 1 150px;min-width:0;padding:12px;background:linear-gradient(135deg, rgba(250,173,20,0.12), rgba(250,173,20,0.22));border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:12px;color:#8a5a00;">仍遗留</div>
+      <div style="font-size:20px;font-weight:600;color:#1A1B1C;margin-top:2px;">3 处<span style="font-size:12px;color:#6B7280;font-weight:400;">（1 P0 待拍板）</span></div>
+    </div>
+    <div style="flex:1 1 150px;min-width:0;padding:12px;background:linear-gradient(135deg, rgba(158,172,234,0.15), rgba(158,172,234,0.28));border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:12px;color:#4a56a8;">误报澄清</div>
+      <div style="font-size:20px;font-weight:600;color:#1A1B1C;margin-top:2px;">undo/redo</div>
+      <div style="font-size:11px;color:#6B7280;">实为输出层过滤，非 bug</div>
+    </div>
+  </div>
 
-    <div style="font-size:13px;font-weight:600;margin:14px 0 8px;color:#3D4C8C;">P2 — 健壮性 / 隐患</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <div style="flex:1 1 180px;min-width:0;padding:8px 10px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:10px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#3D4C8C;font-weight:600;">model_manager.py:358</div>
-        <div style="font-size:12px;color:#1A1B1C;margin-top:3px;line-height:1.5;">is_vpred 直读未初始化属性，靠 post_load 隐式顺序兜底</div>
-      </div>
-      <div style="flex:1 1 180px;min-width:0;padding:8px 10px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:10px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#3D4C8C;font-weight:600;">model_manager.py:356</div>
-        <div style="font-size:12px;color:#1A1B1C;margin-top:3px;line-height:1.5;">vae = result.txt2img.vae 未使用变量</div>
-      </div>
-      <div style="flex:1 1 180px;min-width:0;padding:8px 10px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:10px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#3D4C8C;font-weight:600;">app_generation.py:975</div>
-        <div style="font-size:12px;color:#1A1B1C;margin-top:3px;line-height:1.5;">strength 0.75 兜底是死代码（ctx 恒有该键）</div>
-      </div>
-      <div style="flex:1 1 180px;min-width:0;padding:8px 10px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:10px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#3D4C8C;font-weight:600;">mixin_filters.py</div>
-        <div style="font-size:12px;color:#1A1B1C;margin-top:3px;line-height:1.5;">调色防抖与滤镜应用竞态；滑块清零后撤销状态不一致</div>
-      </div>
-      <div style="flex:1 1 180px;min-width:0;padding:8px 10px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:10px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#3D4C8C;font-weight:600;">mixin_ai.py:71</div>
-        <div style="font-size:12px;color:#1A1B1C;margin-top:3px;line-height:1.5;">worker 线程直读 self.mask_img（GUI 状态）</div>
-      </div>
-      <div style="flex:1 1 180px;min-width:0;padding:8px 10px;background:#FFF;border:1px solid rgba(0,0,0,0.08);border-radius:10px;box-sizing:border-box;">
-        <div style="font-size:10px;color:#3D4C8C;font-weight:600;">ui_builder.py（旧UI）</div>
-        <div style="font-size:12px;color:#1A1B1C;margin-top:3px;line-height:1.5;">未装 install_aliases → scale_str 缺失 → strength 恒 0.0</div>
+  <!-- ═══ 已修复 ═══ -->
+  <div style="margin:18px 0 6px;font-size:15px;font-weight:600;color:#4d7c1f;">✅ 本轮已修复</div>
+
+  <div style="display:flex;gap:0;flex-direction:column;border:1px solid rgba(0,0,0,0.08);border-radius:12px;overflow:hidden;">
+    <div style="display:flex;gap:10px;padding:12px;background:#FFFFFF;box-sizing:border-box;border-bottom:1px solid rgba(0,0,0,0.06);flex-wrap:wrap;">
+      <span style="background:#EA6668;color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;align-self:flex-start;">P0</span>
+      <div style="flex:1 1 300px;min-width:0;">
+        <div style="font-size:13px;font-weight:600;">core/model_manager.py — `@contextmanager` 未导入</div>
+        <div style="font-size:12px;color:#6B7280;margin-top:2px;">`freeu_disabled()` 用了装饰器但全文件无 `from contextlib import contextmanager`。启用 Hires.fix 或 ADetailer 时 NameError 直接崩溃。<b>已补导入（CRLF 精确写入，验证 2 处命中）。</b></div>
       </div>
     </div>
+    <div style="display:flex;gap:10px;padding:12px;background:#FFFFFF;box-sizing:border-box;border-bottom:1px solid rgba(0,0,0,0.06);flex-wrap:wrap;">
+      <span style="background:#EA6668;color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;align-self:flex-start;">P0</span>
+      <div style="flex:1 1 300px;min-width:0;">
+        <div style="font-size:13px;font-weight:600;">utils/character_library.py — 导出角色必崩</div>
+        <div style="font-size:12px;color:#6B7280;margin-top:2px;">`export_character` 调用 `shutil.copy2` 但顶部只 import 了 json/copy/PIL 等。<b>已补 `import shutil`（验证 6 处命中）。</b>导入逻辑本身（副本深拷贝、文件名改写）是对的。</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;padding:12px;background:#FFFFFF;box-sizing:border-box;border-bottom:1px solid rgba(0,0,0,0.06);flex-wrap:wrap;">
+      <span style="background:#FAAD14;color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;align-self:flex-start;">P1</span>
+      <div style="flex:1 1 300px;min-width:0;">
+        <div style="font-size:13px;font-weight:600;">characters_page.py — 批量按钮信号连两次</div>
+        <div style="font-size:12px;color:#6B7280;margin-top:2px;">`_build()` 后与 `_build()` 内各 connect 一次 → 点一次「批量出图」弹两个对话框。<b>已删 `_build()` 后的重复连接。</b></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;padding:12px;background:#FFFFFF;box-sizing:border-box;border-bottom:1px solid rgba(0,0,0,0.06);flex-wrap:wrap;">
+      <span style="background:#FAAD14;color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;align-self:flex-start;">P1</span>
+      <div style="flex:1 1 300px;min-width:0;">
+        <div style="font-size:13px;font-weight:600;">open_batch 访问不存在的属性</div>
+        <div style="font-size:12px;color:#6B7280;margin-top:2px;">`self._batch_runner.page` —— BatchRunner 无 page 属性，第二次打开批量对话框必 AttributeError。<b>已改为 `if self._batch_runner is None`。</b></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;padding:12px;background:#FFFFFF;box-sizing:border-box;border-bottom:1px solid rgba(0,0,0,0.06);flex-wrap:wrap;">
+      <span style="background:#8BC8EA;color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;align-self:flex-start;">P2</span>
+      <div style="flex:1 1 300px;min-width:0;">
+        <div style="font-size:13px;font-weight:600;">模块级 eventFilter 永不生效</div>
+        <div style="font-size:12px;color:#6B7280;margin-top:2px;">`eventFilter` 写在模块顶层，实例 `self.eventFilter` 解析到基类 QObject 版本 → 窗口缩放时角色卡片网格不重排。<b>已移入 CharactersPage 类内。</b></div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;padding:12px;background:#FFFFFF;box-sizing:border-box;">
+      <span style="background:#8BC8EA;color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:8px;align-self:flex-start;">P2</span>
+      <div style="flex:1 1 300px;min-width:0;">
+        <div style="font-size:13px;font-weight:600;">scene_batch_dialog.py — 切换场景写坏数据</div>
+        <div style="font-size:12px;color:#6B7280;margin-top:2px;">`_on_row` 只 block 了 3 个文本控件，`sp_seed/count/steps/cfg/w/h` 的 setValue 会触发 `_commit` 把新旧混合的中间态提交并反复写盘。<b>已扩展 blockSignals 覆盖全部 10 个控件。</b></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 遗留 ═══ -->
+  <div style="margin:18px 0 6px;font-size:15px;font-weight:600;color:#8a5a00;">⚠️ 仍遗留（上一轮已确认，未动，等你拍板）</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;">
+    <div style="flex:1 1 260px;min-width:0;padding:12px;background:#FFFDF5;border:1px solid rgba(250,173,20,0.35);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:12px;color:#8a5a00;font-weight:600;">P0 · resolve_output_dir 缩进错误</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;">core/config_manager.py:127 该函数被嵌套进 `add_recent_prompt` 方法体 → 模块级不存在。画廊→高级调色（app_events.py:607 无 try 保护）一点就崩。修复方案二选一：移到 utils/paths.py，或修正 config_manager 缩进。</div>
+    </div>
+    <div style="flex:1 1 260px;min-width:0;padding:12px;background:#FFFDF5;border:1px solid rgba(250,173,20,0.35);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:12px;color:#8a5a00;font-weight:600;">P2 · recent 截断是空操作</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;">config_manager.py:114/124 `self.recent_models = self.recent_models`，注释声称截断 10/20 实际没截。main.py:436 `config.output_dir` 只写不读，同根因。</div>
+    </div>
+  </div>
+
+  <!-- ═══ 新增功能审查 ═══ -->
+  <div style="margin:18px 0 6px;font-size:15px;font-weight:600;color:#4a56a8;">🧩 新增功能（角色库/场景库/批量出图）审查结论</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;">
+    <div style="flex:1 1 260px;min-width:0;padding:12px;background:#F6F8FF;border:1px solid rgba(158,172,234,0.3);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:12px;color:#4a56a8;font-weight:600;">架构正确性</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;">scene_library 原子写（tmp.replace）+ from_dict 字段过滤；batch_runner 主线程 QTimer 轮询，零跨线程控件操作，MAX_DEAD 防假死——设计都站得住。</div>
+    </div>
+    <div style="flex:1 1 260px;min-width:0;padding:12px;background:#F6F8FF;border:1px solid rgba(158,172,234,0.3);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:12px;color:#4a56a8;font-weight:600;">host 接口核验</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;">txt_prompt/txt_neg/combo_res/spin_steps/scale_cfg/spin_seed 均在 shell 上（core_panel 创建）；start_generation/stop_generation/is_generating/_gen_thread 由 app_generation mixin 混入——批量功能可跑通。</div>
+    </div>
+    <div style="flex:1 1 260px;min-width:0;padding:12px;background:#F6F8FF;border:1px solid rgba(158,172,234,0.3);border-radius:12px;box-sizing:border-box;">
+      <div style="font-size:12px;color:#4a56a8;font-weight:600;">风格小提醒</div>
+      <div style="font-size:12px;color:#6B7280;margin-top:4px;">app_generation.py 1056-1065 是 +1 奇数缩进（合法但不齐）；characters_page 第 160 行 `batch_request = pyqtSignal()` 局部变量遮蔽类属性（无害但易误读）。</div>
+    </div>
+  </div>
+
+  <div style="padding:10px 0 4px;font-size:12px;color:#6B7280;">
+    建议下一步：① 修 resolve_output_dir（我来做，需你选方案）；② 装 pytest 补场景库单测；③ LoRA 训练集成。
   </div>
 </div>
 </html>

@@ -11,10 +11,8 @@ import threading
 import torch
 import functools
 from PIL import Image
-from transformers import BitsAndBytesConfig
 import logging
 logger = logging.getLogger(__name__)
-from transformers import AutoModelForImageTextToText, AutoProcessor
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 def _guard_busy(fn):
     """推理期间挂起空闲卸载，结束后再重新计时"""
@@ -119,6 +117,71 @@ open_book_on_desk, desk, head_down, melancholic, sad, upper_body,
 depth_of_field, blurry_background, anime_style
 
 Output ONLY the tag list.
+"""
+
+    # ============================================================
+    # ✨ SYSTEM_PROMPT_POLISH —— 适当润色修复（模式 2）
+    #    调用方: enhance(mode="polish")
+    # ============================================================
+    SYSTEM_PROMPT_POLISH = """You are a senior Stable Diffusion prompt engineer.
+You receive a draft prompt (Chinese or broken English) and POLISH it.
+
+# TASK
+Rewrite it into clean, well-ordered English Danbooru-style tags, while
+keeping the author's intent EXACTLY the same.
+
+# WHAT YOU MAY DO
+- Fix grammar / broken English / mixed-language fragments.
+- Reorder into the conventional hierarchy:
+  quality -> subject count -> character features (hair/eyes/race) ->
+  outfit -> pose/expression -> camera/composition -> background ->
+  lighting/atmosphere -> style
+- Replace vague wording with the standard Danbooru tag
+  (e.g. "有点害羞的表情" -> "embarrassed, light blush").
+- Split run-on phrasing into separate tags.
+- Preserve the author's weight syntax exactly: (tag:1.2).
+
+# WHAT YOU MUST NOT DO
+- Do NOT invent subjects, characters, props, or scenes the author did
+  not mention.
+- Do NOT add animal_ears / tail / wings / horns unless the input has them.
+- Do NOT change the meaning, the mood, or the character's identity.
+- Do NOT drop any detail.
+
+# OUTPUT
+ONLY the polished tag list, comma-separated. No prose, no explanation,
+no markdown fences.
+"""
+
+    # ============================================================
+    # 🧩 SYSTEM_PROMPT_KEYWORDS —— 关键词帮写（模式 3）
+    #    调用方: enhance(mode="keywords")
+    # ============================================================
+    SYSTEM_PROMPT_KEYWORDS = """You are a Stable Diffusion prompt writer.
+The user gives only a few KEYWORDS (maybe 1-4 words, possibly Chinese).
+Your job is to EXPAND them into a complete, ready-to-use prompt.
+
+# TASK
+Turn the keywords into a full English Danbooru-style prompt.
+
+# HOW TO EXPAND
+1. Start from the keywords - they define the subject and the point.
+   NEVER contradict or replace them.
+2. Fill the standard slots that the keywords imply:
+   quality -> subject count -> hair -> eyes -> expression -> outfit ->
+   pose -> camera/composition -> background -> lighting -> atmosphere -> style
+3. Prefer concrete, widely-used Danbooru tags over poetic sentences.
+4. Keep it coherent: the added background/pose/lighting should make sense
+   together with the given keywords, not a random pile of tags.
+5. Length: about 12-25 tags. Enough to be complete, short enough that
+   the CLIP 77-token budget is not wasted on filler.
+
+# HARD RULES
+- Output ONLY comma-separated tags. No prose, no explanation.
+- Use underscores inside a tag: long_hair, not "long hair".
+- Do NOT output weight syntax (no parentheses, no colons).
+- If a keyword is a proper noun you cannot translate confidently,
+  keep it unchanged rather than inventing a translation.
 """
 
     # ============================================================
@@ -299,7 +362,7 @@ Output ONLY the translated text.
         },
     }
     DEFAULT_MODEL_KEY = "qwen2vl_2b"
-    MAX_TAGS_POSITIVE = 0      
+    MAX_TAGS_POSITIVE = 0
     MAX_TAGS_NEGATIVE = 40
 
     # ============================================================
@@ -330,7 +393,7 @@ Output ONLY the translated text.
         self._idle_seconds = 90        # 90 秒没人用就自动释放
         self._device_used = None
         self._ever_cuda_ok = False
-        
+
 
     def _touch(self):
         """刷新空闲计时器"""
@@ -363,6 +426,63 @@ Output ONLY the translated text.
     def load_llm(self, *args, **kwargs):
         """兼容旧 API → 实际调用 load()"""
         self.load()
+
+    # ============================================================
+    #  下载确认（合规：不静默下载大模型）
+    # ============================================================
+    @staticmethod
+    def _ui_parent():
+        """取主窗口作弹窗父对象；拿不到返回 None（退化为"只提示不下载"）。"""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is None:
+                return None
+            w = app.activeWindow()
+            if w is not None:
+                return w
+            ws = app.topLevelWidgets()
+            return ws[0] if ws else None
+        except Exception:
+            return None
+
+    def _confirm_download(self, model_id: str) -> bool:
+        """缺失 Qwen 档位时，先告知体积与来源，由用户决定是否下载。
+
+        项目定位是「模型由用户自行下载」，所以这里绝不静默拉取
+        （2B 档约 4.5GB，7B 档更大）。拿不到父窗口时直接返回 False。
+        """
+        label, size = model_id, "体积未知"
+        for _c in self.MODEL_REGISTRY.values():
+            if _c.get("repo") == model_id:
+                label = _c.get("label", model_id)
+                size = f"约 {_c.get('size_gb', '数')}GB"
+                break
+        logger.warning(
+            "⚠️ 缺少 AI 辅助模型 [%s]（%s，来源 ModelScope：%s）。\n"
+            "   为避免静默下载，已暂停。可自行放入 models_cache/modelscope，"
+            "或改用纯词典翻译模式。", label, size, model_id)
+
+        parent = self._ui_parent()
+        if parent is None:
+            return False
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            r = QMessageBox.question(
+                parent, "需要下载 AI 辅助模型",
+                f"此功能需要模型：{label}\n"
+                f"体积：{size}\n"
+                f"来源：ModelScope（{model_id}）\n\n"
+                f"本程序不预置模型，也可以自行下载后放入 "
+                f"models_cache/modelscope。\n\n现在下载吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            ok = r == QMessageBox.StandardButton.Yes
+            logger.info("📥 用户已确认下载" if ok else "⏭️ 用户取消下载")
+            return ok
+        except Exception as e:
+            logger.warning(f"⚠️ 下载确认弹窗失败({e})，跳过下载")
+            return False
 
     # ============================================================
     #  加载 模型
@@ -422,18 +542,32 @@ Output ONLY the translated text.
             )
 
             # ── 1. 下载(自动重试) ──
+            # 先在本地缓存里找，找到就不联网（项目定位：模型由用户自行下载）。
+            # 只有确实缺失时才询问用户，避免静默拉 4.5GB。
             local_dir = None
-            for attempt in range(1, 6):
-                try:
-                    logger.info(f"🔄 下载尝试 {attempt}/5 ...")
-                    local_dir = snapshot_download(model_id, cache_dir=cache_dir)
-                    logger.info(f"✅ 模型路径: {local_dir}")
-                    break
-                except Exception as e:
-                    logger.warning(f"⚠️ 第 {attempt} 次失败: {e}")
-                    if attempt == 5:
-                        raise
-                    time.sleep(3)
+            try:
+                local_dir = snapshot_download(model_id, cache_dir=cache_dir,
+                                              local_files_only=True)
+                logger.info(f"✅ 使用本地缓存: {local_dir}")
+            except Exception:
+                local_dir = None
+
+            if local_dir is None:
+                if not self._confirm_download(model_id):
+                    raise RuntimeError(
+                        f"已取消下载 {model_id}。\n"
+                        f"可自行放入 {cache_dir}，或改用纯词典翻译模式。")
+                for attempt in range(1, 6):
+                    try:
+                        logger.info(f"🔄 下载尝试 {attempt}/5 ...")
+                        local_dir = snapshot_download(model_id, cache_dir=cache_dir)
+                        logger.info(f"✅ 模型路径: {local_dir}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"⚠️ 第 {attempt} 次失败: {e}")
+                        if attempt == 5:
+                            raise
+                        time.sleep(3)
 
             # ── 2. 加载模型 (4bit 需要 CUDA，CPU 直接走 fp32/fp16) ──
             if device == "cuda":
@@ -481,23 +615,65 @@ Output ONLY the translated text.
     # ============================================================
     #  纯文本改写
     # ============================================================
+    # 三种改写模式的元信息：system prompt / 生成上限 / 后处理开关
+    ENHANCE_MODES = {
+        # ① 严格翻译：忠实转换，不增不减（质量标签由模型按原提示词决定）
+        "strict":   {"prompt": "SYSTEM_PROMPT_TEXT",     "max_tokens": 900,
+                     "add_quality": False, "chunk": True,
+                     "label": "严格翻译（不改变原意）"},
+        # ② 适当润色修复：修语法/排序/用词，不新增内容
+        "polish":   {"prompt": "SYSTEM_PROMPT_POLISH",   "max_tokens": 900,
+                     "add_quality": True,  "chunk": False,
+                     "label": "适当润色（修语法与用词）"},
+        # ③ 关键词帮写：从少量关键词扩写成完整提示词
+        "keywords": {"prompt": "SYSTEM_PROMPT_KEYWORDS", "max_tokens": 700,
+                     "add_quality": True,  "chunk": False,
+                     "label": "关键词帮写（扩写成完整提示词）"},
+    }
+
     @_guard_busy
-    def enhance(self, raw_prompt: str, mode: str = "positive") -> str:
+    def enhance(self, raw_prompt: str, mode: str = "strict") -> str:
+        """Qwen 提示词辅助。
+
+        mode:
+          "strict"   —— ①严格翻译：忠实转换，不改变用户原意（默认）
+          "polish"   —— ②适当润色修复：修语法/统一用词/规范化排序
+          "keywords" —— ③关键词帮写：从少量关键词扩写成完整提示词
+          "negative" —— 负向提示词（保留旧行为）
+
+        ⚠️ 旧实现的 mode="positive" 虽然系统提示词写着"不改变原意"，
+        但分段处理 + 后处理强制注入 (masterpiece:1.2) 会悄悄改动用户输入，
+        与"严格"矛盾。现在严格模式不再注入质量标签。
+        """
         if self.model is None:
             self.load()
+
+        # 兼容旧调用
+        if mode == "positive":
+            mode = "strict"
 
         if mode == "negative":
             system_prompt = self.SYSTEM_PROMPT_NEGATIVE
             max_tokens = 400
+            add_quality = False
+            chunk = False
         else:
-            system_prompt = self.SYSTEM_PROMPT_TEXT
-            max_tokens = 900
+            cfg = self.ENHANCE_MODES.get(mode) or self.ENHANCE_MODES["strict"]
+            if mode not in self.ENHANCE_MODES:
+                logger.warning(f"⚠️ 未知改写模式 {mode!r}，回退 strict")
+                mode = "strict"
+            system_prompt = getattr(self, cfg["prompt"])
+            max_tokens = cfg["max_tokens"]
+            add_quality = cfg["add_quality"]
+            chunk = cfg["chunk"]
 
         has_think = self.MODEL_REGISTRY[self.model_key].get("has_thinking")
 
-        if mode == "positive":
+        if chunk:
             import re
-            # 切原始中文，按长度合并成 ~80 字的段
+            # 切原始中文，按长度合并成 ~80 字的段。
+            # 只对「严格翻译」分段：长中文一次翻完容易漏细节，
+            # 分段+全局去重是"不漏"的关键；润色/帮写需要全局视野，不能切段。
             parts = [p.strip() for p in re.split(r"[，,；;、]|\n", raw_prompt) if p.strip()]
             segs, cur = [], ""
             for p in parts:
@@ -509,6 +685,8 @@ Output ONLY the translated text.
                     cur = p
             if cur:
                 segs.append(cur)
+            if not segs:
+                segs = [raw_prompt]
 
             results, t_all = [], time.time()
             for i, seg in enumerate(segs):
@@ -540,8 +718,8 @@ Output ONLY the translated text.
 
             # 全局去重：每段都会自带 masterpiece/best_quality，保留首次出现顺序
             seen, merged = set(), []
-            for chunk in results:
-                for tag in chunk.split(","):
+            for chunk_res in results:
+                for tag in chunk_res.split(","):
                     tag = tag.strip()
                     if not tag:
                         continue
@@ -552,7 +730,7 @@ Output ONLY the translated text.
                     merged.append(tag)
             result = ", ".join(merged)
             logger.info(
-                f"[TEXT-positive] {len(segs)} 段，{len(merged)} tag"
+                f"[TEXT-{mode}] {len(segs)} 段，{len(merged)} tag"
                 f"（去重前 {sum(len(c.split(',')) for c in results)}），"
                 f"总耗时 {time.time()-t_all:.1f}s"
             )
@@ -577,14 +755,14 @@ Output ONLY the translated text.
                     pad_token_id=self.tokenizer.eos_token_id,
                 )
             if output[0].shape[0] - n_in >= dyn:
-                logger.warning(f"⚠️ negative 达上限 {dyn}，疑似截断")
+                logger.warning(f"⚠️ {mode} 达上限 {dyn}，疑似截断")
             result = self._strip_thinking(
                 self.tokenizer.decode(output[0][n_in:], skip_special_tokens=True).strip()
             )
-            logger.info(f"[TEXT-negative] 耗时 {time.time()-t0:.1f}s")
+            logger.info(f"[TEXT-{mode}] 耗时 {time.time()-t0:.1f}s")
 
         self._touch()
-        return self._postprocess(result, mode)
+        return self._postprocess(result, mode, add_quality=add_quality)
 
     # ============================================================
     #  识图 + 合并用户意图
@@ -828,7 +1006,8 @@ Output ONLY the translated text.
         "inappropriate", "i must decline",
     ]
 
-    def _postprocess(self, text: str, mode: str = "positive") -> str:
+    def _postprocess(self, text: str, mode: str = "strict",
+                     add_quality: bool = False) -> str:
         # 拒绝检测
         low = text.lower()
         for pat in self.REFUSE_PATTERNS:
@@ -852,7 +1031,8 @@ Output ONLY the translated text.
 
         # 切分 + 去黑名单 + 去重
         tags = [t.strip() for t in text.replace("\n", ",").split(",") if t.strip()]
-        limit = self.MAX_TAGS_NEGATIVE if mode == "negative" else self.MAX_TAGS_POSITIVE
+        limit = (self.MAX_TAGS_NEGATIVE if mode == "negative"
+                 else self.MAX_TAGS_POSITIVE)
 
         seen = set()
         out = []
@@ -872,40 +1052,43 @@ Output ONLY the translated text.
 
         result = ", ".join(out)
 
-        if mode != "negative" and "masterpiece" not in result.lower():
+        # ⚠️ 只有"润色/帮写"模式才补质量标签。
+        # 「严格翻译」模式绝不能注入 —— 那会让用户输入被悄悄改动，
+        # 与"不改变用户提示词"的承诺直接冲突。
+        if add_quality and mode != "negative" and "masterpiece" not in result.lower():
             result = "(masterpiece:1.2), (best quality:1.3), " + result
         return result
 
-    
+
     def translate_zh_to_en(self, text: str) -> str:
         """中译英 —— 复用 Qwen 模型"""
 
         if not text or not text.strip():
             return ""
-    
+
         # 全英文直接返回
         if all(ord(c) < 128 for c in text):
             return text
-    
+
         if self.model is None:
             self.load()
-    
+
         try:
             messages = [
                 {"role": "system", "content": self.SYSTEM_PROMPT_TRANSLATE},
                 {"role": "user", "content": f"Translate to English tags: {text}"}
             ]
-        
+
             text_input = self._chat_text(messages)
             inputs = self.processor(text=[text_input], return_tensors="pt").to(self.model.device)
-        
+
             with torch.no_grad():
                 generated_ids = self.model.generate(
                     **inputs,
                     max_new_tokens=256,
                     do_sample=False,
                 )
-        
+
             generated_ids_trimmed = [
                 out_ids[len(in_ids):]
                 for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
@@ -944,14 +1127,14 @@ Output ONLY the translated text.
         if target_lang == "ja":
             kana_count = sum(1 for c in text if '\u3040' <= c <= '\u30ff')
             if kana_count > len(text) * 0.3:
-                logger.info(f"🌐 [translate] 输入已是日语,跳过")
+                logger.info("🌐 [translate] 输入已是日语,跳过")
                 return text
         # 如果目标是中文但输入无假名且全是中文,跳过
         if target_lang == "zh":
             has_kana = any('\u3040' <= c <= '\u30ff' for c in text)
             has_chinese = any('\u4e00' <= c <= '\u9fff' for c in text)
             if has_chinese and not has_kana:
-                logger.info(f"🌐 [translate] 输入已是中文,跳过")
+                logger.info("🌐 [translate] 输入已是中文,跳过")
                 return text
 
         # 确保模型加载
@@ -1052,17 +1235,24 @@ Output ONLY the translated text.
             torch.cuda.empty_cache()
 
         # 4. 记录本次 CUDA 是否成功（兜底：驱动读数不可靠时不退 CPU）
-        alloc = torch.cuda.memory_allocated() / 1024**3
-        reserved = torch.cuda.memory_reserved() / 1024**3
-        free_b, total_b = torch.cuda.mem_get_info()
-        logger.info(
-            f"🧹 Qwen 已卸载{f'({reason})' if reason else ''}，"
-            f"空闲显存 {free_b/1024**3:.2f}GB / 总 {total_b/1024**3:.2f}GB"
-        )
-        logger.info(
-            f"[DIAG] unload 后 torch 已分配 {alloc:.2f}GB / "
-            f"缓存池 {reserved:.2f}GB / 设备空闲 {free_b/1024**3:.2f}GB"
-        )
+        #    以前这里只打日志、从不赋值，导致 _ever_cuda_ok 恒为 False：
+        #    出过图后再点"智能改写"，显存预检必然判定不足 → 退化成 CPU 推理。
+        self._ever_cuda_ok = True
+
+        if torch.cuda.is_available():
+            alloc = torch.cuda.memory_allocated() / 1024**3
+            reserved = torch.cuda.memory_reserved() / 1024**3
+            free_b, total_b = torch.cuda.mem_get_info()
+            logger.info(
+                f"🧹 Qwen 已卸载{f'({reason})' if reason else ''}，"
+                f"空闲显存 {free_b/1024**3:.2f}GB / 总 {total_b/1024**3:.2f}GB"
+            )
+            logger.info(
+                f"[DIAG] unload 后 torch 已分配 {alloc:.2f}GB / "
+                f"缓存池 {reserved:.2f}GB / 设备空闲 {free_b/1024**3:.2f}GB"
+            )
+        else:
+            logger.info(f"🧹 Qwen 已卸载{f'({reason})' if reason else ''}（CPU 模式）")
 
 
     def unload(self, reason: str = ""):
@@ -1074,7 +1264,7 @@ Output ONLY the translated text.
                 self._unload_locked(reason)
                 skip = False
         if skip:
-            self._touch()       
+            self._touch()
 
     def _strip_thinking(self, text: str) -> str:
         """移除 Qwen 思考段落，保留真正的回答。"""

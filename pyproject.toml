@@ -1,0 +1,15 @@
+# pyproject.toml
+[tool.ruff.lint]
+ignore = [
+    "E501",  # 行长超限（UI 代码、HTML 字符串常见，不强制）
+    "E701",  # 单行 if（简洁写法，Python 允许）
+    "E702",  # 单行分号（部分场景更紧凑）
+    "E722",  # 裸 except（已有 logger，暂时豁免）
+    "E741",  # 变量名 l（lambda 参数 l=lbl 是惯用法）
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["F841", "E402"]      # 测试代码宽松
+"scripts/*.py" = ["E402"]            # 脚本 import 顺序宽松
+"ui/disclaimer.py" = ["E501"]        # 免责声明 HTML 不拆行
+"ui/design_tokens.py" = ["E501"]     # CSS 字符串不拆行

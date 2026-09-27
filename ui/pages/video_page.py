@@ -9,8 +9,7 @@ import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QLabel, QPushButton, QComboBox, QCheckBox,
                              QTextEdit, QSpinBox, QDoubleSpinBox, QGroupBox,
-                             QScrollArea, QFrame, QListWidget, QStackedWidget,
-                             QSplitter)
+                             QListWidget, QStackedWidget)
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -492,6 +491,37 @@ class VideoPage(PageBase):
         host.chk_frame_interp.toggled.connect(host.combo_frame_interp.setEnabled)
         host.chk_video_upscale.toggled.connect(host.combo_upscale_factor.setEnabled)
         root.addWidget(grp_post)
+
+        # ============ 🎞️ RIFE 插帧 ============
+        # ⚠️ 之前 RIFE 只有实现、没有任何调用点：扩展市场里装了也用不上。
+        grp_rife = _group("🎞️ RIFE 插帧 — 提升流畅度")
+        r_lay = QVBoxLayout(grp_rife)
+        host.chk_rife = QCheckBox("生成后自动插帧")
+        host.chk_rife.setToolTip(
+            "用 RIFE (ncnn-vulkan) 把低帧率动画插值到更高帧率。\n"
+            "AI 视频通常只有 8fps，插到 24fps 会明显顺滑。\n\n"
+            "• 需要先在【扩展市场】安装 RIFE\n"
+            "• 会自动保留原音轨（若有配音）\n"
+            "• 生成耗时约增加 1.5~3 倍（按帧数线性增长）")
+        r_lay.addWidget(host.chk_rife)
+
+        r = QHBoxLayout()
+        r.setSpacing(8)
+        r.addWidget(_field("目标帧率:", 80))
+        host.combo_rife_fps = QComboBox()
+        host.combo_rife_fps.addItems(["24", "30", "48", "60"])
+        host.combo_rife_fps.setCurrentText("24")
+        host.combo_rife_fps.setMinimumHeight(32)
+        r.addWidget(host.combo_rife_fps, 1)
+        r.addStretch()
+        r_lay.addLayout(r)
+        r_lay.addWidget(_hint("源帧率自动探测；目标 ≤ 源 时自动跳过插帧。"))
+
+        def _toggle_rife(checked):
+            host.combo_rife_fps.setEnabled(checked)
+        host.chk_rife.toggled.connect(_toggle_rife)
+        _toggle_rife(False)
+        root.addWidget(grp_rife)
 
         # ============ 💾 输出设置 ============
         grp_out = _group("💾 输出设置")

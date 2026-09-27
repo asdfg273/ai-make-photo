@@ -1,7 +1,7 @@
 # core/arch/base.py
 """架构能力声明与数据结构（不含加载逻辑）"""
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

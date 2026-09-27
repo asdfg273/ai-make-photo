@@ -11,9 +11,10 @@ from PIL import Image, ImageDraw, ImageFont
 from PIL.PngImagePlugin import PngInfo
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from utils.app_utils       import OUTPUT_DIR, parse_dynamic_prompt
+from utils.app_utils       import  parse_dynamic_prompt
+from utils.paths import OUTPUT_DIR
 from utils.system_utils    import (performance_timer,
-                                   generate_unique_filename, logger)
+                                   logger)
 from utils.image_processor import make_comic_strip, process_adetailer
 
 
@@ -25,7 +26,7 @@ class _GenBridge(QObject):
     progress_signal = pyqtSignal(int, int)
     sub_prog_signal = pyqtSignal(int, int)
     preview_signal  = pyqtSignal(str)
-    live_preview_signal = pyqtSignal(str) 
+    live_preview_signal = pyqtSignal(str)
     preview_img_sig = pyqtSignal(object)
     done_signal     = pyqtSignal()
     error_signal    = pyqtSignal(str)
@@ -169,17 +170,17 @@ class GenerationMixin:
 
     # ----------------------------------------------------------
     def apply_adetailer(self, base_image, prompt, negative_prompt, seed,
-                        target="现实脸部", strength=None):
+                    target="现实脸部", strength=None):
         """简洁封装，正确匹配 process_adetailer 的真实签名"""
         if strength is None:
             strength = self._sld(
                 getattr(self, 'scale_adetailer_strength', None))
-        return process_adetailer(
-            base_image, self.ai.inpaint_pipe,
-            prompt, negative_prompt,
-            strength=strength, target=target,
-        )
-
+        with self.ai.freeu_disabled():          # ← 包在 return 里面
+            return process_adetailer(
+                base_image, self.ai.inpaint_pipe,
+                prompt, negative_prompt,
+                strength=strength, target=target,
+            )
     # ==================================================================
     #  启动生成
     # ==================================================================
@@ -187,15 +188,15 @@ class GenerationMixin:
         if not getattr(self, 'combo_model', None) or \
                 self._cbo(self.combo_model) in ("未找到模型", ""):
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "警告",
-                                "请先在 models 文件夹中放入模型！")
+            if not getattr(self, '_batch_mode', False):      
+                QMessageBox.warning(self, "警告", "请先在 models 文件夹中放入模型！")
             return
 
         if self._chk(getattr(self, 'chk_use_pose', None)) and \
                 not getattr(self, 'pose_image_path', None):
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "警告",
-                                "启用了动作控制，但没有载入真人动作图！")
+            if not getattr(self, '_batch_mode', False):       
+                QMessageBox.warning(self, "警告", "启用了动作控制，但没有载入真人动作图！")
             return
         if getattr(self, 'is_generating', False):
             self._bridge.status_signal.emit("⚠️ 已有任务在运行", "#f38ba8")
@@ -278,7 +279,7 @@ class GenerationMixin:
             try:
                 from utils.vram_manager import VRAMManager
                 VRAMManager.cleanup()
-                VRAMManager.print_status()    
+                VRAMManager.print_status()
             except Exception:
                 pass
             try: self._bridge.cancel_signal.emit()
@@ -301,7 +302,6 @@ class GenerationMixin:
     def _gt_prepare_context(self):
         """收集所有参数到一个 ctx 字典,贯穿整个流程。"""
         import torch
-        from utils.app_utils import parse_dynamic_prompt
 
         # --- 设备 ---
         device_str = self._cbo(getattr(self, 'combo_device', None))
@@ -333,6 +333,22 @@ class GenerationMixin:
 
         raw_prompt = self._txt(getattr(self, 'txt_prompt', None))
         raw_neg    = self._txt(getattr(self, 'txt_neg', None))
+
+        # ── 提取 <lora:name:weight> 标签 ──
+        # 社区通用写法。以前 parse_dynamic_prompt 只是把标签删掉却不用，
+        # 用户以为挂了 LoRA 其实没有。
+        lora_tags = []
+        try:
+            from utils.app_utils import parse_lora_tags
+            raw_prompt, lora_tags = parse_lora_tags(raw_prompt)
+            if lora_tags:
+                logger.info(f"🎯 提示词内 LoRA 标签: {lora_tags}")
+                self._bridge.status_signal.emit(
+                    "🎯 检测到 <lora:> 标签: "
+                    + "、".join(f"{t['name']}:{t['weight']:.2f}" for t in lora_tags[:4]),
+                    "#cba6f7")
+        except Exception as e:
+            logger.warning(f"⚠️ LoRA 标签解析失败(忽略): {e}")
 
         mode_idx = self._ui_read(
             lambda: self.combo_trans_mode.currentIndex(), 2) \
@@ -375,7 +391,8 @@ class GenerationMixin:
             total_generate_count = combo_count * base_count
 
             SAFETY_THRESHOLD = 12
-            if total_generate_count > SAFETY_THRESHOLD:
+            if total_generate_count > SAFETY_THRESHOLD and \
+                not getattr(self, "_batch_mode", False):
                 if not self._gt_confirm_batch(combo_count, base_count, total_generate_count):
                     logger.info(f"⏸ 用户取消批量队列 ({total_generate_count} 张)")
                     self._bridge.status_signal.emit("⏸ 已取消批量生成", "#f38ba8")
@@ -395,29 +412,44 @@ class GenerationMixin:
             total_generate_count = base_count
             parsed_raw_prompts   = [parsed_raw_prompts[0]] * base_count
 
+        # ── 角色一致性（人物保持）配置 ──
+        _current_page = getattr(self, "_current_page_id", "txt2img")
+        # ⚠️ 以前这里是硬编码 False/0.7：UI 上的「🪞 Reference-Only」勾选框
+        #    没有任何信号连接、滑块值也被忽略，导致整套 Reference-Only 是死功能。
+        use_reference_only = self._chk(getattr(self, 'chk_reference_only', None))
+        # 滑块 50~100 → 0.50~1.00
+        try:
+            _rf = self._ui_read(
+                lambda: self.scale_ref_fidelity.value(), 70) \
+                if hasattr(self, 'scale_ref_fidelity') else 70
+            ref_fidelity = max(0.0, min(1.0, float(_rf) / 100.0))
+        except Exception:
+            ref_fidelity = 0.7
+
+        # Reference-Only 与 Pose Transfer 互斥（UI 文案已声明，代码没落实）
+        if use_reference_only and self._chk(getattr(self, 'chk_pose_transfer', None)):
+            logger.warning("⚠️ Reference-Only 与 Pose Transfer 互斥，优先 Pose Transfer")
+            use_reference_only = False
+            self._bridge.status_signal.emit(
+                "⚠️ Reference-Only 与 Pose Transfer 互斥，已按 Pose Transfer 执行", "#fab387")
+        if use_reference_only:
+            logger.info(f"🪞 Reference-Only 已启用，参考强度={ref_fidelity:.2f}")
+
+        # ── 角色特征提取 ──
+        # 参考图来源：优先 IP-Adapter 角色图，其次图生图参考图。
+        # 以前只读 self.ai.ipa_ref_image —— 该属性在当前链路里基本不会被赋值，
+        # 于是"自动提取角色特征"实际上几乎从不触发。
         extracted_features = ""
-        ref_img = getattr(self.ai, 'ipa_ref_image', None)
+        ref_img = (getattr(self.ai, 'ipa_ref_image', None)
+                   or getattr(self, 'ipa_image_path', None)
+                   or getattr(self, 'ref_image_path', None))
         auto_extract = self._chk(getattr(self, 'chk_auto_features', None))
 
-        if ref_img is not None and auto_extract:
-
-            try:
-                from utils.prompt_enhancer import PromptEnhancer
-                enhancer = (PromptEnhancer.instance()
-                            if hasattr(PromptEnhancer, 'instance')
-                            else PromptEnhancer())
-
-                self._bridge.status_signal.emit(
-                    "🔍 正在分析参考图角色特征...", "#7ed957")
-
-                extracted_features = enhancer.extract_character_features(ref_img)
-                if extracted_features:
-                    logger.info(f"✨ 角色特征:\n   {extracted_features}")
-            except Exception as e:
-                logger.warning(f"⚠️ 特征提取失败(跳过): {e}")
-                extracted_features = ""
+        if ref_img is not None and auto_extract and _current_page in ("img2img", "txt2img"):
+            extracted_features = self._gt_extract_character_features(ref_img)
 
         # ── 翻译每个 prompt,并把特征拼到最前面 ──
+        # 注意顺序：先拼特征再查预算，因为特征串本身也吃 token 预算
         en_prompts = []
         for p in parsed_raw_prompts:
             en = self.translator.translate(p, mode=trans_mode) if p else ""
@@ -427,14 +459,30 @@ class GenerationMixin:
 
         if extracted_features:
             logger.info(f"📝 注入特征后第一条 prompt:\n   {en_prompts[0][:200]}...")
-        _current_page = getattr(self, "_current_page_id", "txt2img")
+
+        # ── 提示词长度诊断（仅报告，**不修改用户内容**）──
+        # 更正：实测本项目的 Compel 用 truncate_long_prompts=False，
+        # 超长提示词会**分块编码拼接**（85 token→154、355 token→385 都正常出图），
+        # 并没有 77 硬上限。所以这里只统计 token/块数供用户参考，
+        # 绝不删改提示词。hard_cap 保持 None（不截断）。
+        try:
+            from utils.prompt_budget import enforce
+            _rep = enforce(en_prompts[0], en_neg, tag="正向")
+            if _rep.untranslated_cjk or _rep.positive_chunks > 2:
+                self._bridge.status_signal.emit(
+                    f"📏 提示词 {_rep.positive_tokens} token"
+                    f"（{_rep.positive_chunks} 个编码块）"
+                    + ("，含未翻译中文建议用 AI 翻译" if _rep.untranslated_cjk else ""),
+                    "#fab387")
+        except Exception as _be:
+            logger.debug(f"[提示词诊断] 跳过: {_be}")
 
         # ── 返回 ctx ──
         return {
             # === 设备/模型 ===
             'device':            target_device,
             'model_name':        model_name,
-            'model_type':        model_type,   
+            'model_type':        model_type,
 
             # === 提示词 ===
             'raw_prompt':        raw_prompt,
@@ -453,6 +501,9 @@ class GenerationMixin:
             'cn_strength':       cn_strength,
             'pt_cn_strength':    pt_cn_strength,
             'total_count':       total_generate_count,
+            # 用户填的种子（-1 = 随机）。优先级低于批量的 _seed_override。
+            'seed': (self._spn(self.spin_seed)
+                     if getattr(self, 'spin_seed', None) is not None else -1),
 
             # === IP-Adapter ===
             'use_ipa':           False,
@@ -473,24 +524,80 @@ class GenerationMixin:
             ),
             'use_inpaint':       False,
 
-            # === 角色一致性 ===
+            # === 角色一致性（人物保持）===
             'extracted_features':  extracted_features,
-            'use_reference_only':  False,
-            'ref_fidelity':        0.7,
+            'use_reference_only':  use_reference_only,
+            'ref_fidelity':        ref_fidelity,
 
             # === 其他 ===
             'lora_meta_info':    [],
+            'lora_tags':         lora_tags,
         }
+
+    def _gt_extract_character_features(self, ref_img) -> str:
+        """提取参考图的角色特征（Danbooru 标签），带缓存。
+
+        为什么必须缓存：
+          · 提取要用 Qwen2-VL 档位模型（2B~7B），加载+推理在 8GB 卡上
+            是**分钟级**开销，以前每生成一张都会重跑一次；
+          · 参考图不变时结果必然相同。
+        缓存键 = 图片路径 + 文件 mtime/size（换图或改图自动失效）。
+        """
+        cache = getattr(self, "_char_feat_cache", None)
+        if cache is None:
+            cache = self._char_feat_cache = {}
+
+        key = None
+        if isinstance(ref_img, str):
+            try:
+                st = os.stat(ref_img)
+                key = (os.path.abspath(ref_img), int(st.st_mtime), st.st_size)
+            except OSError:
+                key = (os.path.abspath(ref_img), 0, 0)
+        if key is not None and key in cache:
+            logger.info(f"♻️ 复用缓存的角色特征: {cache[key][:80]}")
+            self._bridge.status_signal.emit("♻️ 角色特征已缓存（跳过 AI 分析）", "#7ed957")
+            return cache[key]
+
+        try:
+            from utils.prompt_enhancer import PromptEnhancer
+            enhancer = (PromptEnhancer.instance()
+                        if hasattr(PromptEnhancer, 'instance')
+                        else PromptEnhancer())
+            self._bridge.status_signal.emit(
+                "🔍 正在分析参考图角色特征（首次较慢，之后走缓存）...", "#7ed957")
+            feats = enhancer.extract_character_features(ref_img)
+            if feats:
+                logger.info(f"✨ 角色特征:\n   {feats}")
+                if key is not None:
+                    # 只留最近 4 张，避免长期驻留
+                    if len(cache) >= 4:
+                        cache.pop(next(iter(cache)))
+                    cache[key] = feats
+            return feats or ""
+        except Exception as e:
+            logger.warning(f"⚠️ 特征提取失败(跳过): {e}")
+            return ""
 
     def _gt_apply_prompt_enhance(self, raw_prompt):
         if not self._chk(getattr(self, 'chk_auto_enhance', None)):
             return raw_prompt
         try:
             from utils.prompt_enhancer import get_enhancer
+            # 跟随 UI 选择的模式（①严格翻译 / ②适当润色 / ③关键词帮写）。
+            # 旧实现写死 "positive"，等于用户选的模式对自动改写无效。
+            _mode = "strict"
+            try:
+                if hasattr(self, 'combo_enhance_mode'):
+                    _mode = self.combo_enhance_mode.currentData() or "strict"
+                else:
+                    _mode = getattr(self.config, "enhance_mode", "strict") or "strict"
+            except Exception:
+                pass
             enhancer = get_enhancer()
             enhancer.load()
             try:
-                new_prompt = enhancer.enhance(raw_prompt)
+                new_prompt = enhancer.enhance(raw_prompt, mode=_mode)
             finally:
                 try:
                     enhancer.unload()
@@ -500,7 +607,7 @@ class GenerationMixin:
                     pass
             if new_prompt and new_prompt.strip():
                 self._bridge.status_signal.emit(
-                    f"✨ 已智能改写: {new_prompt[:60]}...", "#b48ead")
+                    f"✨ 已改写({_mode}): {new_prompt[:60]}...", "#b48ead")
                 return new_prompt
         except Exception as e:
             logger.warning(f"⚠️ 智能改写失败: {e}")
@@ -509,6 +616,12 @@ class GenerationMixin:
     def _gt_load_model(self, ctx):
         self._bridge.status_signal.emit("🧠 正在加载底层大模型...", "#ffd700")
         logger.debug(f"🟢 step 9: 调用 ai.load_model({ctx['model_name']})")
+        # CLIP Skip 在 load_model 内部自动应用，这里先把 UI 意图同步给引擎
+        try:
+            self.ai.clip_skip = max(
+                0, int(getattr(self.config, "clip_skip", 0) or 0))
+        except Exception:
+            pass
         self.ai.load_model(ctx['model_name'])
 
     def _gt_setup_ipa(self, ctx):
@@ -576,6 +689,7 @@ class GenerationMixin:
 
         ctx['use_ipa']        = use_ipa
         ctx['ipa_pil_image']  = ipa_pil_image
+
         ctx['ipa_scale']      = ipa_scale
         ctx['ipa_variant']    = ipa_variant
         ctx['ipa_image_path'] = ipa_image_path
@@ -583,18 +697,214 @@ class GenerationMixin:
     def _gt_apply_loras(self, ctx):
         lora_config_list = []
         lora_meta_info   = []
+        # 先放提示词里的 <lora:> 标签（显式写在提示词里 = 用户当下意图，优先级更高）
+        for t in (ctx.get('lora_tags') or []):
+            lora_config_list.append((t["name"], float(t["weight"])))
+            lora_meta_info.append(f"{t['name']}:{t['weight']:.2f}")
+        tag_names = {n for n, _ in lora_config_list}
+
         if hasattr(self, 'combo_loras') and hasattr(self, 'scale_loras'):
             for i in range(min(len(self.combo_loras), len(self.scale_loras))):
                 lname   = self._cbo(self.combo_loras[i])
                 lweight = self._sld(self.scale_loras[i])
                 if lname and lname != "无":
+                    # 提示词标签里已有同名 LoRA → 跳过，避免重复挂载
+                    if os.path.basename(lname) in tag_names:
+                        logger.info(f"⏭️ LoRA {lname} 已由提示词标签指定，跳过槽位")
+                        continue
                     lora_config_list.append((lname, float(lweight)))
                     lora_meta_info.append(f"{lname}:{lweight:.2f}")
 
         if lora_config_list:
             self.ai.apply_multiple_loras(lora_config_list, sub_dir=None)
             logger.debug(f"🟢 LoRA 已应用: {lora_config_list}")
+        else:
+        # apply_multiple_loras 内部先 unload 再挂载；传空列表 = 卸载上一次的残留
+        # （原本缺 else，上一轮挂的 LoRA 会串到本轮没配 LoRA 的出图上）
+            self.ai.apply_multiple_loras([], sub_dir=None)
+            logger.debug("🧹 本轮无 LoRA，已清空残留")
+
         ctx['lora_meta_info'] = lora_meta_info
+
+    @staticmethod
+    def _analyze_init_image(img):
+        """诊断底图曝光/对比度/饱和度，返回 (issues列表, 统计dict)。
+
+        背景（实测）：一张 mean=2.7 的近全黑参考图当 img2img 底图，
+        输出也是近全黑（mean 7.9、非黑像素仅 3.6%）——模型把"黑"当成画面内容
+        继续画。旧代码对这种输入完全没有任何提示，用户只会觉得"软件坏了"。
+        """
+        import numpy as np
+        arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+        gray = arr.mean(axis=2)
+        stats = {
+            "mean": float(gray.mean()),
+            "std": float(gray.std()),
+            "p5": float(np.percentile(gray, 5)),
+            "p95": float(np.percentile(gray, 95)),
+            "sat": float((arr.max(axis=2) - arr.min(axis=2)).mean()),
+        }
+        issues = []
+        if stats["mean"] < 25:
+            issues.append(f"整体过暗（均值 {stats['mean']:.0f}/255）")
+        elif stats["mean"] > 235:
+            issues.append(f"整体过亮（均值 {stats['mean']:.0f}/255）")
+        if stats["std"] < 12:
+            issues.append(f"对比度极低（std {stats['std']:.0f}，几乎是纯色）")
+        if stats["sat"] < 4 and stats["std"] < 25:
+            issues.append("接近灰阶且低对比")
+        return issues, stats
+
+    @staticmethod
+    def _enhance_init_image(img):
+        """细节保留预处理：CLAHE 局部对比度增强。
+
+        为什么用 CLAHE 而不是全局拉伸：
+          img2img 在低 denoise 下会**原样保留**底图的模糊与灰雾，
+          全局对比度拉伸会把噪点一起放大；CLAHE 是分块自适应的，
+          能在不破坏整体色调的前提下把局部细节提出来，
+          让后续重绘有东西可"抓"。
+
+        保持 RGB 三通道一致处理（转到 LAB 只增强 L 通道），避免偏色。
+        """
+        try:
+            import cv2
+            import numpy as np
+            rgb = np.asarray(img.convert("RGB"))
+            lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+            l_ch, a_ch, b_ch = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l_eq = clahe.apply(l_ch)
+            out = cv2.cvtColor(cv2.merge((l_eq, a_ch, b_ch)),
+                               cv2.COLOR_LAB2RGB)
+            return Image.fromarray(out)
+        except Exception as e:
+            logger.debug(f"[init 预处理] CLAHE 失败，保持原图: {e}")
+            return img
+
+    def _prepare_init_image(self, img, tag=""):
+        """底图诊断 +（按需）细节预处理。返回 (处理后的图, 说明文本)。"""
+        issues, stats = self._analyze_init_image(img)
+        prefix = f"{tag} " if tag else ""
+        note = (f"{prefix}底图亮度={stats['mean']:.0f} 对比={stats['std']:.0f} "
+                f"饱和={stats['sat']:.0f}")
+
+        if not issues:
+            logger.info(f"✅ {note}（质量正常，未做预处理）")
+            return img, ""
+
+        warn = "、".join(issues)
+        # 是否启用预处理（可在设置里关掉）
+        do_enhance = True
+        try:
+            do_enhance = bool(getattr(self.config, "enhance_init_image", True))
+        except Exception:
+            pass
+
+        if not do_enhance:
+            logger.warning(f"⚠️ {note} → {warn}（预处理已关闭）")
+            return img, warn
+
+        enhanced = self._enhance_init_image(img)
+        new_issues, new_stats = self._analyze_init_image(enhanced)
+        logger.warning(
+            f"⚠️ {note} → {warn}；已做 CLAHE 细节增强 → "
+            f"亮度={new_stats['mean']:.0f} 对比={new_stats['std']:.0f}")
+
+        # 极端情况：增强后仍不适合做底图 → 明确建议提高 denoise
+        advice = ""
+        if new_stats["mean"] < 25 or new_stats["std"] < 12:
+            advice = "（底图质量过差，建议提高「重绘强度」或换一张参考图）"
+            logger.warning(f"⚠️ {advice}")
+
+        return enhanced, f"{warn}{advice}"
+
+    @staticmethod
+    def _fit_to_target(img, width: int, height: int):
+        """把图适配到 (width, height)，尽量不产生形变、也不产生黑边。
+
+        策略：
+          · 尺寸一致 → 原样返回
+          · 宽高比接近（裁剪损失 < 15%）→ 保持比例缩放到铺满后**居中裁剪**
+            （无黑边，观感最好，适合角色照）
+          · 差异较大 → 保持比例缩放 + **边缘延展填充**（不裁掉人物）
+
+        为什么不用黑边填充（实测对比，同一模型/种子/strength）：
+            黑边填充  → 输出 mean 97.8，非黑像素仅 66.8%
+            边缘延展  → 输出 mean 145.5，非黑像素 100%
+          硬黑边会被 diffusion 当成画面内容延续下去（黑边/暗角），
+          等于白白吃掉约 1/3 的画面。边缘延展（把最外圈像素向外拉伸）
+          既保住人物不裁切，又不引入硬边。
+        返回 (PIL.Image, 说明字符串)
+        """
+        if img.size == (width, height):
+            return img, "原尺寸"
+
+        sw, sh = img.size
+        if sw <= 0 or sh <= 0:
+            raise ValueError(f"参考图尺寸非法: {img.size}")
+
+        src_ar = sw / sh
+        dst_ar = width / height
+
+        # 对比两种适配方式会损失多少
+        if src_ar > dst_ar:
+            # 源更宽 → 铺满高度需裁掉两侧
+            scaled_w = int(round(height * src_ar))
+            loss = 1.0 - (width / scaled_w)
+        else:
+            # 源更高 → 铺满宽度需裁掉上下
+            scaled_h = int(round(width / src_ar))
+            loss = 1.0 - (height / scaled_h)
+
+        if loss < 0.15:
+            # 居中裁剪：先铺满，再裁中心
+            if src_ar > dst_ar:
+                new_size = (int(round(height * src_ar)), height)
+            else:
+                new_size = (width, int(round(width / src_ar)))
+            resized = img.resize(new_size, Image.Resampling.LANCZOS)
+            left = (resized.width - width) // 2
+            top = (resized.height - height) // 2
+            return (resized.crop((left, top, left + width, top + height)),
+                    f"比例接近，居中裁剪 -{loss*100:.0f}%")
+
+        # 保持比例 + 边缘延展填充（不丢人物、不引入黑边）
+        scale = min(width / sw, height / sh)
+        new_w = max(1, int(round(sw * scale)))
+        new_h = max(1, int(round(sh * scale)))
+        resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        pad_l = (width - new_w) // 2
+        pad_t = (height - new_h) // 2
+        pad_r = width - new_w - pad_l
+        pad_b = height - new_h - pad_t
+
+        canvas = Image.new("RGB", (width, height))
+        canvas.paste(resized, (pad_l, pad_t))
+        try:
+            # 左右：取最外一列像素横向拉伸
+            if pad_l > 0:
+                canvas.paste(resized.crop((0, 0, 1, new_h)).resize((pad_l, new_h)),
+                             (0, pad_t))
+            if pad_r > 0:
+                canvas.paste(resized.crop((new_w - 1, 0, new_w, new_h))
+                             .resize((pad_r, new_h)), (pad_l + new_w, pad_t))
+            # 上下：在已含左右延展的画面上取最外一行纵向拉伸
+            if pad_t > 0:
+                canvas.paste(canvas.crop((0, pad_t, width, pad_t + 1))
+                             .resize((width, pad_t)), (0, 0))
+            if pad_b > 0:
+                canvas.paste(canvas.crop((0, pad_t + new_h - 1, width,
+                                          pad_t + new_h)).resize((width, pad_b)),
+                             (0, pad_t + new_h))
+        except Exception as e:
+            # 延展失败就退回纯色边（至少不崩）
+            logger.debug(f"[fit] 边缘延展失败，退化为纯色边: {e}")
+            base = Image.new("RGB", (width, height), (128, 128, 128))
+            base.paste(resized, (pad_l, pad_t))
+            canvas = base
+        return canvas, f"比例差异大，保持比例+边缘延展（{sw}x{sh}→{new_w}x{new_h}）"
 
     def _gt_run_pose_transfer(self, ctx):
     # 🔧 必须先定义这两个变量
@@ -613,7 +923,7 @@ class GenerationMixin:
                     except Exception:
                         pass
                 ie.to(device="cuda", dtype=torch.float16)
-                logger.info(f"🔧 image_encoder → cuda / float16")
+                logger.info("🔧 image_encoder → cuda / float16")
         except Exception as e:
             logger.warning(f"⚠️ image_encoder 迁移失败: {e}")
 
@@ -657,7 +967,7 @@ class GenerationMixin:
             ok = self.ai.prepare_ip_adapter(variant="plus")
             if not ok:
                 raise RuntimeError("Pose Transfer 模式需要 IP-Adapter,但加载失败")
-            ctx['ipa_scale']   = 0.9  
+            ctx['ipa_scale']   = 0.9
             ctx['use_ipa']     = True
             ctx['ipa_variant'] = "plus"
             self.ai.set_ip_adapter_scale(ctx['ipa_scale'])
@@ -746,8 +1056,8 @@ class GenerationMixin:
         2. 支持 Compel 长提示词 (>77 tokens)
         """
         call_kwargs = self._adapt_call(pipe, ctx, call_kwargs)
-        if "state" in call_kwargs:         
-            return pipe(**call_kwargs) 
+        if "state" in call_kwargs:
+            return pipe(**call_kwargs)
         unet_has_ipa = (
             pipe is not None
             and getattr(pipe, 'unet', None) is not None
@@ -770,13 +1080,13 @@ class GenerationMixin:
                     pipe.set_ip_adapter_scale(ctx.get('ipa_scale', 0.6))
                 except Exception:
                     pass
-  
+
         if call_kwargs.get('prompt'):
             try:
                 embeds = self.ai.encode_prompt(
                     call_kwargs['prompt'],
                     call_kwargs.get('negative_prompt') or "",
-                    pipe=pipe, 
+                    pipe=pipe,
                 )
                 if embeds and embeds.get('prompt_embeds') is not None:
                     call_kwargs.pop('prompt', None)
@@ -793,16 +1103,16 @@ class GenerationMixin:
 
         try:
             output = pipe(**call_kwargs)
-        
+
             # 恢复 IPA scale (供下次调用)
             if unet_has_ipa and ctx.get('use_ipa'):
                 try:
                     pipe.set_ip_adapter_scale(ctx['ipa_scale'])
                 except Exception:
                     pass
-        
+
             return output
-        
+
         except InterruptedError:
             raise
         except Exception as e:
@@ -824,7 +1134,15 @@ class GenerationMixin:
         else:
             base_kwargs = self.ai.encode_prompt(ctx['en_prompts'][0], ctx['en_neg'])
             if not base_kwargs or base_kwargs.get('prompt_embeds') is None:
-                logger.warning("⚠️ Compel 未生效，回退原始提示词（会截断到 77 token）")
+                _prof = getattr(self.ai, 'arch_profile', None)
+                if getattr(_prof, 'prompt_mode', None) != "compel":
+                    # 非 Compel 架构（Anima/Cosmos 等）本就走原始提示词，
+                    # 这是设计如此，不是异常 —— 不能每次都告警吓用户。
+                    logger.info("ℹ️ 当前架构不使用 Compel，提示词交由管线内部编码")
+                else:
+                    logger.warning(
+                        "⚠️ Compel 未生效，回退为由管线内部编码提示词"
+                        "（超过 77 token 的部分会被截断）")
                 base_kwargs = {"prompt": ctx['en_prompts'][0],
                                "negative_prompt": ctx['en_neg']}
 
@@ -866,7 +1184,15 @@ class GenerationMixin:
             logger.debug(f"🟢 [{i+1}/{ctx['total_count']}] 开始")
             self._bridge.progress_signal.emit(i, ctx['total_count'])
 
-            current_seed = random.randint(1, 2_147_483_647)
+            # 种子优先级：批量覆盖(_seed_override) > 用户填的 spin_seed(>=0) > 随机。
+            # 以前 spin_seed 全项目无人读取，填了也永远随机。
+            _base = getattr(self, "_seed_override", None)
+            if _base is not None:
+                current_seed = _base + i
+            else:
+                _fixed = ctx.get('seed', -1)
+                current_seed = (_fixed + i) if _fixed is not None and _fixed >= 0 \
+                    else random.randint(1, 2_147_483_647)
             self._bridge.status_signal.emit(
                 f"🔥 第 {i+1}/{ctx['total_count']} 张 (Seed: {current_seed}) ...",
                 "#00ffff")
@@ -913,15 +1239,17 @@ class GenerationMixin:
             if pe is not None:
                 logger.info(f"✅ Compel 生效，embeds {tuple(pe.shape)}")
             else:
+                embed_kwargs = self.ai.encode_prompt(en_prompt, en_neg)
                 pe = embed_kwargs.get('prompt_embeds') if embed_kwargs else None
                 if pe is not None:
                     logger.info(f"✅ Compel 生效，embeds {tuple(pe.shape)}")
                 elif getattr(self.ai, 'arch_profile', None) is not None \
-                     and getattr(self.ai.arch_profile, 'prompt_mode', None) != "compel":
-                    # 非 Compel 架构，正常回退原始提示词，不告警
+                     and getattr(self.ai, 'arch_profile', None).prompt_mode != "compel":
                     embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
                 else:
-                    logger.warning("⚠️ Compel 未生效，回退原始提示词（会截断到 77 token）")
+                    logger.warning(
+                        "⚠️ Compel 未生效，回退为由管线内部编码提示词"
+                        "（超过 77 token 的部分会被截断）")
                     embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
 
         # ETA 回调
@@ -966,28 +1294,51 @@ class GenerationMixin:
         init_path = ctx.get('init_image_path')
         if init_path and os.path.exists(init_path):
             try:
-                from PIL import Image
                 init_img = Image.open(init_path).convert("RGB")
-                # 缩放到目标尺寸
-                if init_img.size != (ctx['width'], ctx['height']):
-                    init_img = init_img.resize(
-                        (ctx['width'], ctx['height']), 
-                        Image.Resampling.LANCZOS
-                    )
+                # ── 先诊断底图质量并按需做细节增强 ──
+                # 近全黑的底图会产出近全黑的结果，旧代码对此毫无提示。
+                init_img, _q_warn = self._prepare_init_image(
+                    init_img, tag=os.path.basename(init_path))
+                if _q_warn:
+                    self._bridge.status_signal.emit(
+                        f"⚠️ 参考图质量问题：{_q_warn}", "#fab387")
+                # ⚠️ 不能直接 resize：宽高比不一致时会把人物/脸拉伸变形，
+                # 而"像不像同一个人"恰恰最怕形变（低 denoise 下形变会被保留）。
+                # 比例接近 → 居中裁剪；差异大 → 保持比例 + 边缘延展填充。
+                init_img, how = self._fit_to_target(
+                    init_img, ctx['width'], ctx['height'])
                 ctx['init_image'] = init_img
                 ctx['use_img2img'] = True
+                ctx['init_fit'] = how
                 logger.info(
                     f"✅ 图生图模式: {os.path.basename(init_path)} | "
-                    f"强度={ctx['strength']:.2f}"
+                    f"强度={ctx['strength']:.2f} | 适配={how}"
                 )
             except Exception as e:
                 logger.error(f"❌ 加载底图失败: {e}")
                 ctx['use_img2img'] = False
+                # 以前是静默降级成纯文生图：用户以为在做图生图，
+                # 结果参考图完全没参与，还找不到原因。
+                self._bridge.status_signal.emit(
+                    f"⚠️ 参考图加载失败，已降级为文生图：{os.path.basename(init_path)}",
+                    "#f38ba8")
         else:
+            if init_path:
+                logger.warning(f"⚠️ 参考图路径不存在: {init_path}")
+                self._bridge.status_signal.emit(
+                    "⚠️ 参考图文件不存在，已降级为文生图", "#f38ba8")
             ctx['use_img2img'] = False
 
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
+
+        # ── FreeU 细节增强 ──
+        _use_freeu = self._chk(getattr(self, 'chk_freeu', None))
+        if _use_freeu and self.ai.freeu_supported():
+            self.ai.enable_freeu()
+            logger.info("✨ FreeU 已启用（本次生成）")
+        elif _use_freeu:
+            logger.info("⏭️ FreeU 已勾选但当前架构不支持，跳过")
 
         with torch.inference_mode():
             # ── 阶段 1: 基础图像生成 ──
@@ -1018,20 +1369,43 @@ class GenerationMixin:
 
             # ── 阶段 2: Hires.fix ──
             if self._chk(getattr(self, 'chk_hires', None)):
+                # ⚠️ 不是所有架构都有标准 img2img 管线：
+                # Anima（ModularPipeline/Cosmos DiT）等架构的 img2img_pipe 是 None，
+                # 旧代码不判空就直接调用 → `TypeError: 'NoneType' object is not callable`，
+                # 而且是在**基础图像已经生成之后**才失败，整张图白出。
+                _i2i = getattr(self.ai, 'img2img_pipe', None)
+                _prof = getattr(self.ai, 'arch_profile', None)
+                _pmode = getattr(_prof, 'prompt_mode', None)
                 if ctx['use_ipa']:
                     self._bridge.status_signal.emit(
                         "⚠️ IP-Adapter 模式跳过 Hires.fix", "#fab387")
+                elif _i2i is None:
+                    self._bridge.status_signal.emit(
+                        f"⚠️ 当前架构（{getattr(self.ai, 'current_arch_id', '?')}）"
+                        f"无标准 img2img 管线，已跳过 Hires.fix（基础图仍会保存）",
+                        "#f9e2af")
+                    logger.warning(
+                        "⏭️ Hires.fix 跳过：img2img_pipe 为 None"
+                        f"（arch={getattr(self.ai, 'current_arch_id', '?')}, "
+                        f"prompt_mode={_pmode}）")
+                elif _pmode not in (None, "compel"):
+                    # 非 Compel 架构的 Hires 需要 PipelineState 适配，暂不冒险
+                    self._bridge.status_signal.emit(
+                        f"⚠️ {getattr(self.ai, 'current_arch_id', '?')} 架构暂不支持 "
+                        f"Hires.fix，已跳过（基础图仍会保存）", "#f9e2af")
+                    logger.warning(f"⏭️ Hires.fix 跳过：prompt_mode={_pmode}")
                 else:
                     self._bridge.status_signal.emit(
                         "✨ 阶段 2: Hires.fix...", "#ff1493")
                     with performance_timer("Hires.fix"):
-                        hires_str = self._sld(getattr(self, 'scale_hires', None))
-                        hires_kwargs = {k: v for k, v in kwargs.items()
-                                        if k not in ('width','height','ip_adapter_image')}
-                        image = self._gt_safe_pipe_call(
-                            self.ai.img2img_pipe, ctx,
-                            **hires_kwargs, image=image, strength=hires_str
-                        ).images[0]
+                     hires_str = self._sld(getattr(self, 'scale_hires', None))
+                     hires_kwargs = {k: v for k, v in kwargs.items()
+                                     if k not in ('width','height','ip_adapter_image')}
+                     with self.ai.freeu_disabled():
+                         image = self._gt_safe_pipe_call(
+                             _i2i, ctx,
+                             **hires_kwargs, image=image, strength=hires_str
+                         ).images[0]
 
             # ── 阶段 3: ADetailer 脸部 ──
             if self._chk(getattr(self, 'chk_use_adetailer', None)):
@@ -1039,20 +1413,21 @@ class GenerationMixin:
                     "✨ 阶段 3: ADetailer 脸部精修...", "#17a2b8")
                 face_target = self._cbo(getattr(self, 'combo_ad_target', None)) or "现实脸部"
                 face_str    = self._sld(getattr(self, 'scale_adetailer_strength', None))
-    
+
                 # 🔧 ADetailer 前临时禁用 IPA (避免污染)
-   
+
                 saved_scale, has_ipa = self._adetailer_disable_ipa()
                 had_tiling = self._adetailer_disable_vae_tiling()
                 try:
-                    with performance_timer("ADetailer 脸部"):
-                        image = process_adetailer(
-                            image, self.ai.inpaint_pipe,
-                            en_prompt, en_neg,
-                            strength=face_str, target=face_target)
+                     with performance_timer("ADetailer 脸部"):
+                         with self.ai.freeu_disabled():
+                             image = process_adetailer(
+                                 image, self.ai.inpaint_pipe,
+                                 en_prompt, en_neg,
+                                 strength=face_str, target=face_target)
                 finally:
-                    self._adetailer_restore_vae_tiling(had_tiling)
-                    self._adetailer_restore_ipa(saved_scale, has_ipa)
+                     self._adetailer_restore_vae_tiling(had_tiling)
+                     self._adetailer_restore_ipa(saved_scale, has_ipa)
 
             # ── 阶段 4: ADetailer 手部 ──
             if self._chk(getattr(self, 'chk_use_ad_hand', None)):
@@ -1062,21 +1437,23 @@ class GenerationMixin:
                 hand_str    = self._sld(getattr(self, 'scale_ad_hand', None))
                 blend_ratio = self._sld(getattr(self, 'scale_ad_hand_blend', None))
                 blend_ratio = max(0.0, min(1.0, blend_ratio if blend_ratio > 0 else 0.65))
-    
+
                 # 🔧 ADetailer 前临时禁用 IPA
                 saved_scale, has_ipa = self._adetailer_disable_ipa()
                 had_tiling = self._adetailer_disable_vae_tiling()
                 try:
-                    with performance_timer("ADetailer 手部"):
-                        original_image = image.copy()
-                        repaired_image = process_adetailer(
-                            image, self.ai.inpaint_pipe,
-                            en_prompt, en_neg,
-                            strength=hand_str, target=hand_target)
-                        image = Image.blend(original_image, repaired_image, alpha=blend_ratio)
+                     with performance_timer("ADetailer 手部"):
+                         original_image = image.copy()
+                         with self.ai.freeu_disabled():
+                             repaired_image = process_adetailer(
+                                 image, self.ai.inpaint_pipe,
+                                 en_prompt, en_neg,
+                                 strength=hand_str, target=hand_target)
+                         image = self._gt_region_blend(
+                             original_image, repaired_image, blend_ratio)
                 finally:
-                    self._adetailer_restore_vae_tiling(had_tiling)
-                    self._adetailer_restore_ipa(saved_scale, has_ipa)
+                     self._adetailer_restore_vae_tiling(had_tiling)
+                     self._adetailer_restore_ipa(saved_scale, has_ipa)
 
         # 确保 RGB
         if not isinstance(image, Image.Image):
@@ -1091,10 +1468,40 @@ class GenerationMixin:
 
         return image
 
+    def _gt_region_blend(self, base_img, rep_img, ratio):
+        """只在两图真正不同的区域做软边混合。
+        整图 Image.blend 会把未修复区域一起降质，且尺寸不一致时直接抛错。"""
+        import cv2
+        import numpy as np
+
+        base = np.asarray(base_img.convert("RGB"), dtype=np.float32)
+        rep  = np.asarray(rep_img.convert("RGB"), dtype=np.float32)
+
+        if rep.shape[:2] != base.shape[:2]:
+            rep = np.asarray(
+                Image.fromarray(rep.astype(np.uint8)).resize(
+                    (base.shape[1], base.shape[0]),
+                    Image.Resampling.LANCZOS),
+                dtype=np.float32)
+
+        diff = np.abs(rep - base).max(axis=2)
+        active = (diff > 6).astype(np.uint8) * 255
+        if active.max() == 0:
+            return base_img          # 修复没改动任何像素，原样返回
+
+        active = cv2.dilate(active, np.ones((9, 9), np.uint8), iterations=1)
+        sigma = max(4.0, min(base.shape[:2]) * 0.01)
+        alpha = cv2.GaussianBlur(active, (0, 0), sigmaX=sigma).astype(np.float32) / 255.0
+        alpha *= max(0.0, min(1.0, ratio))
+
+        a = alpha[..., None]
+        return Image.fromarray(
+            np.clip(rep * a + base * (1.0 - a), 0, 255).astype(np.uint8))
+
+
     def _gt_run_base_pipe(self, ctx, kwargs):
         """根据上下文选择合适的 pipeline 调用,统一走 _gt_safe_pipe_call。"""
         use_pose          = ctx['use_pose']
-        use_img2img       = ctx['use_img2img']
         use_inpaint       = ctx['use_inpaint']
         use_reference     = ctx.get('use_reference_only', False)
         skip_img2img      = ctx.get('skip_img2img', False)
@@ -1113,21 +1520,23 @@ class GenerationMixin:
             ip_kwargs['ip_adapter_image'] = ref_image
 
         output = None
+        composite = None
 
         # ── 路径 0: Reference-Only (单图角色一致性最强方案) ──
-        if use_reference and ref_image is not None and not use_pose and not use_inpaint:
+        if (use_reference and ref_image is not None
+            and not use_pose and not use_inpaint and not use_img2img):
             ref_pipe = getattr(self.ai, 'reference_pipe', None)
             if ref_pipe is None:
                 logger.info("⏳ 首次使用 Reference-Only,正在准备...")
                 self.ai.prepare_reference_only()
                 ref_pipe = self.ai.reference_pipe
-        
+
             # Reference-Only 不接受 ip_adapter_image 等参数,得过滤
-            ref_kwargs = {k: v for k, v in kwargs.items() 
+            ref_kwargs = {k: v for k, v in kwargs.items()
                           if k in ('prompt', 'negative_prompt', 'num_inference_steps',
                                    'guidance_scale', 'width', 'height', 'generator',
                                    'prompt_embeds', 'negative_prompt_embeds')}
-        
+
             logger.info(f"🪞 [Reference-Only] fidelity={ref_fidelity:.2f}")
             output = ref_pipe(
                 ref_image=ref_image,
@@ -1148,10 +1557,12 @@ class GenerationMixin:
 
         # ── 路径 2: Inpaint ──
         elif use_inpaint and inpaint_img is not None and inpaint_mask is not None:
+            mask_hard, mask_soft = self._gt_make_inpaint_masks(inpaint_mask)
+            composite = (inpaint_img, mask_soft)
             output = self._gt_safe_pipe_call(
                 self.ai.inpaint_pipe, ctx,
                 **kwargs, **ip_kwargs,
-                image=inpaint_img, mask_image=inpaint_mask, strength=strength,
+                image=inpaint_img, mask_image=mask_hard, strength=strength,
             )
 
         # ── 路径 3: 跳过 img2img (Pose Transfer 已用 CN) ──
@@ -1172,14 +1583,72 @@ class GenerationMixin:
             output = self._gt_safe_pipe_call(
                 self.ai.txt2img_pipe, ctx, **kwargs, **ip_kwargs)
 
-        # ── 统一提取 image ──
+         # ── 统一提取 image ──
         if output is None:
             raise RuntimeError("pipeline 返回 None")
         if hasattr(output, 'images'):
-            return output.images[0]
-        if isinstance(output, (list, tuple)):
-            return output[0]
-        return output
+            img = output.images[0]
+        elif isinstance(output, (list, tuple)):
+            img = output[0]
+        else:
+            img = output
+
+        if composite is not None and img is not None:
+            img = self._gt_pixel_composite(img, composite[0], composite[1])
+        return img
+
+    def _gt_make_inpaint_masks(self, mask_img, grow=5, feather=None):
+        """返回 (hard, soft)。
+        hard — 扩张后的掩码，交给 pipeline（多覆盖一圈硬边）
+        soft — float32 [0,1] alpha，解码后在像素空间做软边合成
+        """
+        import cv2
+        import numpy as np
+        from PIL import Image
+
+        if isinstance(mask_img, Image.Image):
+            m = np.array(mask_img.convert("L"))
+        else:
+            m = np.asarray(mask_img)
+            if m.ndim == 3:
+                m = m[..., 0]
+            if m.dtype != np.uint8:
+                m = (m > 0.5).astype(np.uint8) * 255 if m.max() <= 1 else m.astype(np.uint8)
+
+        hard = cv2.dilate(m, np.ones((grow, grow), np.uint8), iterations=1) if grow > 1 else m
+
+        # 羽化半径随图大小走：512 图约 4px，1024 图约 8px
+        if feather is None:
+            feather = max(3.0, min(m.shape) * 0.008)
+        soft = cv2.GaussianBlur(hard, (0, 0), sigmaX=feather)
+
+        return Image.fromarray(hard, mode="L"), soft.astype(np.float32) / 255.0
+
+    def _gt_pixel_composite(self, gen_img, base_img, alpha):
+        """把那生成图按羽化 alpha 贴回原图。
+        潜空间线性插值会让 VAE 的非线性解码产生接缝、色偏和远端退化，
+        解码后这一步才是唯一能真正消掉硬边的位置。"""
+        import cv2
+        import numpy as np
+        from PIL import Image
+
+        base = np.asarray(base_img.convert("RGB"), dtype=np.float32)
+        gen = np.asarray(gen_img.convert("RGB"), dtype=np.float32)
+
+        if gen.shape[:2] != base.shape[:2]:
+            gen = np.asarray(
+                Image.fromarray(gen.astype(np.uint8)).resize(
+                    (base.shape[1], base.shape[0]), Image.LANCZOS),
+                dtype=np.float32)
+
+        if alpha.shape[:2] != base.shape[:2]:
+            alpha = cv2.resize(alpha, (base.shape[1], base.shape[0]),
+                               interpolation=cv2.INTER_LINEAR)
+
+        a = alpha[..., None]
+        return Image.fromarray(
+            np.clip(gen * a + base * (1.0 - a), 0, 255).astype(np.uint8))
+
 
     def _adapt_call(self, pipe, ctx, kwargs):
         arch_id = getattr(self.ai, 'current_arch_id', '')
@@ -1302,6 +1771,14 @@ class GenerationMixin:
     def _gt_cleanup(self):
         logger.info("🏁 [generation_task] 结束")
         self.is_generating = False
+        # 清掉批量任务留下的种子覆盖，否则批量跑完后手动生成会一直沿用
+        # 最后一张图的 seed（表现为"种子被锁死"）
+        self._seed_override = None
+        # 生图结束后关闭 FreeU（避免显存多占）
+        try:
+            self.ai.disable_freeu()
+        except Exception:
+            pass
         try:
             gc.collect()
             if torch.cuda.is_available():
@@ -1320,7 +1797,7 @@ class GenerationMixin:
         inpaint_pipe = self.ai.inpaint_pipe
         has_ipa = False
         saved_scale = None
-    
+
         try:
             for proc in inpaint_pipe.unet.attn_processors.values():
                 if 'IPAdapter' in type(proc).__name__:
@@ -1328,7 +1805,7 @@ class GenerationMixin:
                     break
         except Exception:
             pass
-    
+
         if has_ipa:
             try:
                 saved_scale = getattr(self.ai, '_ipa_scale', 0.7)
@@ -1336,23 +1813,32 @@ class GenerationMixin:
                 logger.info(f"  🔧 [ADetailer] 临时禁用 IPA (saved scale={saved_scale:.2f})")
             except Exception as e:
                 logger.warning(f"  ⚠️ [ADetailer] 禁用 IPA 失败: {e}")
-    
+
         return saved_scale, has_ipa
 
     def _adetailer_disable_vae_tiling(self):
+        """ADetailer 需要整图解码，临时关掉 VAE tiling。
+
+        注意：diffusers 0.40 的 Pipeline 上没有 disable_vae_tiling()，
+        只有 pipe.vae.disable_tiling()，故走 VRAMManager 的能力探测。
+        """
+        from utils.vram_manager import VRAMManager
         pipe = getattr(self.ai, 'inpaint_pipe', None)
-        if pipe and hasattr(pipe, 'vae'):
-            had = getattr(pipe.vae, '_tiling', False)
-            if had:
-                pipe.disable_vae_tiling()
-            return had
-        return False
+        if pipe is None:
+            return False
+        vae = getattr(pipe, "vae", None)
+        had = bool(getattr(vae, "_tiling", False) or getattr(vae, "use_tiling", False))
+        if had:
+            VRAMManager._set_vae_option(pipe, "tiling", False)
+        return had
 
     def _adetailer_restore_vae_tiling(self, had):
-        if had:
-            pipe = getattr(self.ai, 'inpaint_pipe', None)
-            if pipe:
-                pipe.enable_vae_tiling()
+        if not had:
+            return
+        from utils.vram_manager import VRAMManager
+        pipe = getattr(self.ai, 'inpaint_pipe', None)
+        if pipe is not None:
+            VRAMManager._set_vae_option(pipe, "tiling", True)
 
     def _adetailer_restore_ipa(self, saved_scale, has_ipa):
         """ADetailer 跑完后恢复 IPA scale"""
@@ -1381,7 +1867,7 @@ class GenerationMixin:
     def on_generation_step(self, pipe, step_index, timestep, callback_kwargs):
         if getattr(self, 'cancel_flag', False):
             raise InterruptedError("用户中断")
-    
+
         try:
             enable = (
                 hasattr(self, "chk_use_preview")
@@ -1397,19 +1883,19 @@ class GenerationMixin:
                 else 10
             )
             step_now = step_index + 1
-        
+
             if step_now % interval != 0:
                 return callback_kwargs
-        
+
             latents = callback_kwargs.get("latents")
-        
+
             if latents is None:
                 return callback_kwargs
-        
+
             import torch
             from PIL import Image
             import numpy as np
-        
+
             with torch.no_grad():
                 scale = getattr(pipe.vae.config, "scaling_factor", 0.18215)
                 lat = latents / scale
@@ -1418,23 +1904,24 @@ class GenerationMixin:
                 img = img.cpu().permute(0, 2, 3, 1).float().numpy()[0]
                 img = (img * 255).astype(np.uint8)
                 pil = Image.fromarray(img)
-            
-            
+
+
                 logger.info(f"[PREVIEW-5] 准备发图 size={pil.size}")
 
                 try:
-                    import os, tempfile
+                    import os
+                    import tempfile
                     if not hasattr(self, "_preview_tmp_dir"):
                         self._preview_tmp_dir = os.path.join(
                             tempfile.gettempdir(), "ai_preview"
                         )
                         os.makedirs(self._preview_tmp_dir, exist_ok=True)
-    
+
                     tmp_path = os.path.join(
                         self._preview_tmp_dir, "live_preview.png"
                     )
                     pil.save(tmp_path, "PNG")
-    
+
                     if hasattr(self, "_bridge"):
                         self._bridge.live_preview_signal.emit(tmp_path)
                         logger.info(f"[PREVIEW-6] live_preview_signal 已发送: {tmp_path}")
@@ -1446,7 +1933,7 @@ class GenerationMixin:
             import traceback
             logger.error(f"❌ [PREVIEW-EXC] {e}")
             traceback.print_exc()
-    
+
         return callback_kwargs
 
     # ==================================================================
@@ -1835,7 +2322,9 @@ class GenerationMixin:
                 # 非 Compel 架构（raw/flux/anima），正常回退原始提示词，不告警
                 embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
             else:
-                logger.warning("⚠️ Compel 未生效，回退原始提示词（会截断到 77 token）")
+                logger.warning(
+                    "⚠️ Compel 未生效，回退为由管线内部编码提示词"
+                    "（超过 77 token 的部分会被截断）")
                 embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
 
             up_steps = 25

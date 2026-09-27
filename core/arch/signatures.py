@@ -61,6 +61,28 @@ _DIT_HIDDEN_HINT = {
     6144: "DiT GQA（hidden=6144）",
 }
 
+def _cross_attn_dim(shape) -> tuple[int, int]:
+    """从 LoRA down/A 权重形状里取 hidden 维度。
+
+    两种格式：
+      kernel (kohya)  lora_down.weight / lora_up.weight : [rank, hidden]
+      diffusers       .lora_A.weight / .lora_B.weight   : [rank, hidden]
+    两种都是 [rank, hidden]，rank 通常 4~256，hidden 是 768/1024/2048。
+
+    ⚠️ 旧代码取 shp[-1] 拿到的是 **rank**（4/8/16/…），
+    所以 _DIM_TO_ARCH 基本永不命中，lora_sd15/sd21/sdxl 三个分支是死代码。
+    这里同时看两个轴，只要有一轴落在已知集合里就采用它（更稳，
+    也兼容个别导出工具把转置权重写成 [hidden, rank] 的情况）。
+    """
+    dims = [int(v) for v in shape[:2]]
+    for d in dims:
+        if d in _DIM_TO_ARCH:
+            return d, dims.index(d)
+    # 都不在已知集合：取较大的一轴作为 hidden（rank 一定远小于 hidden）
+    idx = 0 if dims[0] >= dims[1] else 1
+    return dims[idx], idx
+
+
 def _lora_arch(shapes: dict[str, list[int]]) -> tuple[str, str]:
     ks = list(shapes)
 
@@ -104,7 +126,7 @@ def _lora_arch(shapes: dict[str, list[int]]) -> tuple[str, str]:
         if not any(f in k for f in _XATTN_FRAGS):
             continue
         if len(shp) >= 2:
-            dim = int(shp[-1])
+            dim, _axis = _cross_attn_dim(shp)
             arch = _DIM_TO_ARCH.get(dim)
             if arch:
                 return arch, f"cross-attn 维度 {dim}（{k.split('.')[0][:40]}）"

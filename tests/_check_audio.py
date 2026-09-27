@@ -1,5 +1,6 @@
 """Check if video files have audio streams and test ffmpeg merge"""
-import os, sys, subprocess
+import os
+import subprocess
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 import imageio_ffmpeg
@@ -28,7 +29,7 @@ for f in os.listdir(wav_dir):
         size = os.path.getsize(path)
         print(f'  {f}: {size} bytes')
         if size > 0:
-            print(f'    Non-empty wav found! Testing merge...')
+            print('    Non-empty wav found! Testing merge...')
             out = video.replace('.mp4', '_testvoiced.mp4')
             cmd = [ffmpeg, '-y', '-i', video, '-i', path,
                    '-map', '0:v:0', '-map', '1:a:0',

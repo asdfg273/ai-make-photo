@@ -5,7 +5,7 @@
 #  硬约束：所有属性名与原代码完全一致；页面禁止重建同名控件
 # ============================================================
 import logging
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
+from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QFormLayout,
                              QLabel, QPushButton, QComboBox, QCheckBox,
                              QTextEdit, QSpinBox, QGroupBox, QProgressBar,
                              QSizePolicy)
@@ -155,10 +155,31 @@ def build_core(host, layout: QVBoxLayout) -> None:
 
     host.btn_enhance_prompt = QPushButton("✨ 智能改写")
     host.btn_enhance_prompt.setToolTip(
-        "把自然语言描述自动转换为 AI 画图标准提示词\n"
-        "模型档位可在下方选择，首次使用会自动下载")
+        "按下方「改写模式」把输入整理成 AI 画图标准提示词。\n"
+        "三种模式：\n"
+        "  ① 严格翻译 —— 忠实转换，不增不减，完全不改变你的原意\n"
+        "  ② 适当润色 —— 修语法/统一用词/规范化排序，不新增内容\n"
+        "  ③ 关键词帮写 —— 只给几个关键词，帮你扩写成完整提示词\n"
+        "首次使用会自动下载所选档位的模型")
     _wire(host, host.btn_enhance_prompt.clicked, "on_enhance_prompt")
     prompt_btn_row.addWidget(host.btn_enhance_prompt)
+
+    # ─── 改写模式选择（①严格翻译 / ②适当润色 / ③关键词帮写）───
+    host.combo_enhance_mode = QComboBox()
+    host.combo_enhance_mode.addItem("① 严格翻译", "strict")
+    host.combo_enhance_mode.addItem("② 适当润色", "polish")
+    host.combo_enhance_mode.addItem("③ 关键词帮写", "keywords")
+    host.combo_enhance_mode.setToolTip(
+        "① 严格翻译：把中文/混合语言忠实转成英文 Danbooru 标签，\n"
+        "   不新增、不删除、不改写，适合你已经写好提示词的场景。\n\n"
+        "② 适当润色：修语法、统一用词、按标准顺序重排，\n"
+        "   但不会凭空添加你没写过的内容。\n\n"
+        "③ 关键词帮写：你只给几个关键词（比如「樱花 少女」），\n"
+        "   由 AI 扩写成含服装/姿势/构图/光线/背景的完整提示词。")
+    host.combo_enhance_mode.setMinimumContentsLength(6)
+    host.combo_enhance_mode.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    prompt_btn_row.addWidget(host.combo_enhance_mode)
 
     host.btn_vision_prompt = QPushButton("📷 识图生成")
     host.btn_vision_prompt.setToolTip(
@@ -257,11 +278,22 @@ def build_core(host, layout: QVBoxLayout) -> None:
     gpa.addRow("CFG Scale:", host.scale_cfg)
 
     host.combo_res = QComboBox()
+    # ⚠️ 分辨率是全局单例（切页不重造），所以这里要同时覆盖文生图与图生图需求。
+    # 图生图/局部重绘最常见的诉求是"和参考图同比例"，因此补齐常见竖构图与方图，
+    # 避免用户只能选到 1:1 之外的横构图而被迫形变（见 _fit_to_target 的说明）。
     host.combo_res.addItems([
         "512x512", "512x768", "768x512", "768x768",
-        "1024x1024", "832x1216", "1216x832"
+        "640x960", "960x640",
+        "768x1024", "1024x768",
+        "832x1216", "1216x832",
+        "1024x1024", "1024x1536", "1536x1024",
     ])
     host.combo_res.setCurrentText("512x768")
+    host.combo_res.setToolTip(
+        "生成分辨率。\n"
+        "• 图生图建议选与参考图相近的比例（会按比例适配，不做拉伸）\n"
+        "• SD1.5 建议短边 ≤768；SDXL 建议短边 ≥1024\n"
+        "• 竖构图（512x768 / 832x1216）适合人物立绘")
     gpa.addRow("分辨率:", host.combo_res)
 
     # 兼容隐藏字段（不加入布局，与旧行为一致）

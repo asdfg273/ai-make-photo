@@ -5,7 +5,6 @@ GPT-SoVITS 最小合成测试
 import torchaudio
 import soundfile as sf
 import torch
-import numpy as np
 
 def _patched_load(filepath, *args, **kwargs):
     """用 soundfile 替代 torchaudio.load,避免 torchcodec 依赖"""
@@ -78,7 +77,7 @@ REF_WAV = ROOT / "assets" / "voices" / "default_female_ja.wav"
 REF_TEXT = "こんにちは、今日はいい天気ですね。散歩に行きませんか。"
 TARGET_TEXT = "初めまして、私はアイです。よろしくお願いします。"
 
-print(f"\n🎙️ 合成中 ...")
+print("\n🎙️ 合成中 ...")
 print(f"   参考音频: {REF_WAV.name}")
 print(f"   目标文本: {TARGET_TEXT}")
 
@@ -101,7 +100,6 @@ for item in gen:
     sr, audio = item
 
 # ========== 保存 ==========
-import soundfile as sf
 OUT = ROOT / "output" / "test_sovits.wav"
 OUT.parent.mkdir(exist_ok=True)
 sf.write(str(OUT), audio, sr)

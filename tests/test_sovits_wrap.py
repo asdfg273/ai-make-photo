@@ -17,4 +17,4 @@ synth_once(
 
 print("\n✅ 全部完成")
 from utils.sovits_tts import release_tts
-release_tts() 
+release_tts()

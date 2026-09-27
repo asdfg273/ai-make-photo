@@ -37,7 +37,7 @@ GLOBAL_WIDGETS = [
     "combo_adetailer_model", "combo_ad_target", "combo_ad_hand",
     "chk_enable_xy", "combo_x_type", "combo_y_type",
     "entry_x_vals", "entry_y_vals",
-    "chk_use_tiled", "spin_tiled_w", "spin_tiled_h",
+    "chk_freeu", "chk_use_tiled", "spin_tiled_w", "spin_tiled_h",
     "spin_tile_overlap", "combo_tile_size", "btn_run_tiled",
     "chk_use_ipa", "combo_ipa_variant", "spin_ipa_scale", "lbl_ipa_image",
     "chk_use_preview", "spin_preview_interval",

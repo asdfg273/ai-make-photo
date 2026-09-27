@@ -1,6 +1,7 @@
 # scripts/smoke_ui.py — v6 外壳冒烟：无模型加载起壳，3 秒后自动退出
 # 用法: venv/Scripts/python.exe scripts/smoke_ui.py [--hold]（--hold 不自动退出，人工走查）
-import os, sys
+import os
+import sys
 os.environ.setdefault("AI_STUDIO_UI", "v2")
 os.environ.setdefault("QT_QPA_PLATFORM", "windows" if "--hold" in sys.argv else "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -4,10 +4,7 @@
 Phase 1: ChatTTS (中文)
 Phase 2: GPT-SoVITS (中日 + 克隆) [预留接口]
 """
-from utils.chattts_patch import apply_chattts_patch
-import os
 import torch
-import numpy as np
 from pathlib import Path
 from datetime import datetime
 import logging
@@ -39,6 +36,22 @@ class TTSEngine:
         self._chattts = None
         self._sovits = None  # Phase 2
 
+    @staticmethod
+    def _ui_parent():
+        """下载确认弹窗的父窗口；拿不到就返回 None（退化为只提示不下载）。"""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is None:
+                return None
+            w = app.activeWindow()
+            if w is not None:
+                return w
+            ws = app.topLevelWidgets()
+            return ws[0] if ws else None
+        except Exception:
+            return None
+
     # ============================================================
     #  ChatTTS
     # ============================================================
@@ -49,12 +62,18 @@ class TTSEngine:
 
         model_dir = PROJECT_ROOT / "models" / "tts" / "ChatTTS"
         if not (model_dir / "asset" / "GPT.pt").is_file():
-            logger.info("📥 ChatTTS 缺失,开始自动下载...")
-            from utils.model_downloader import install
-            install("chattts")
+            # 不静默下载 1.1GB：告知体积/来源，由用户确认。
+            # parent 为 None 时只提示不下载（后台线程下这是预期行为）。
+            from utils.model_downloader import confirm_and_install
+            confirm_and_install(
+                "chattts", "语音配音需要 ChatTTS 模型",
+                parent=self._ui_parent())
 
         if not (model_dir / "asset" / "GPT.pt").is_file():
-            raise RuntimeError("❌ ChatTTS 模型下载失败")
+            raise RuntimeError(
+                "❌ ChatTTS 模型缺失。请自行下载到 models/tts/ChatTTS/，"
+                "或在扩展市场下载，或运行：\n"
+                "python -m utils.model_downloader install chattts")
 
         logger.info("🎙️ 加载 ChatTTS...")
         import ChatTTS
@@ -132,4 +151,4 @@ class TTSEngine:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    
+
