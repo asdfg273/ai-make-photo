@@ -355,6 +355,33 @@ def to_pnginfo(meta: dict) -> PngInfo:
     return info
 
 
+def enrich_metadata(meta: dict, model_path: str = "") -> dict:
+    """补全通用字段：模型哈希 + 依赖版本 + 水印说明。
+
+    工作流路径（nodes/image_nodes.py 的 SaveImage）是自己拼元数据的，
+    不像引导式界面那样走 `build_metadata()`，于是 **model_hash 和版本号
+    会缺**（实测出来是 unknown）。这里提供同一个补全入口，两条路径共用，
+    避免又出现"两套元数据、字段不一致"的老问题。
+    """
+    if not isinstance(meta, dict):
+        return meta
+
+    mp = model_path or meta.get("model_path") or ""
+    if mp and meta.get("model_hash") in (None, "", "unknown"):
+        d = file_sha256(mp)
+        meta["model_hash"] = d
+        meta["model_hash_short"] = d[:10] if d != "unknown" else "unknown"
+
+    try:
+        from utils.version import collect_versions
+        for k, v in collect_versions().items():
+            meta.setdefault(f"version_{k}", v)
+    except Exception as e:
+        logger.debug(f"版本信息采集失败（忽略）: {e}")
+
+    return meta
+
+
 def save_image(host, image, save_path: str, meta: dict | None = None):
     """带元数据（+水印）保存。返回最终保存路径。
 
@@ -371,6 +398,13 @@ def save_image(host, image, save_path: str, meta: dict | None = None):
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     ext = os.path.splitext(save_path)[1].lower()
 
+    # 补全通用字段（模型哈希/版本）—— 工作流路径与引导式路径共用
+    try:
+        meta = enrich_metadata(dict(meta) if meta else {},
+                              (meta or {}).get("model_path", "")) or meta
+    except Exception as e:
+        logger.debug(f"元数据补全失败（忽略）: {e}")
+
     try:
         if ext == ".png":
             pnginfo = to_pnginfo(meta) if meta else None
@@ -381,7 +415,14 @@ def save_image(host, image, save_path: str, meta: dict | None = None):
                 image.save(save_path, format="PNG", optimize=False,
                            compress_level=4)
         else:
-            fmt = ext.lstrip(".").upper() or "PNG"
+            # ⚠️ 扩展名不能直接当 PIL 格式名：`.jpg` → "JPG" 不是合法格式，
+            # PIL 抛异常后会被下面的 except 降级成 image.save(path)，
+            # **元数据就悄悄丢了**（节点侧实测到过）。
+            _EXT_FMT = {"jpg": "JPEG", "jpeg": "JPEG", "webp": "WEBP",
+                        "bmp": "BMP", "tif": "TIFF", "tiff": "TIFF",
+                        "png": "PNG"}
+            fmt = _EXT_FMT.get(ext.lstrip(".").lower(),
+                               ext.lstrip(".").upper() or "PNG")
             image.save(save_path, format=fmt, quality=95)
         return save_path
     except Exception as e:

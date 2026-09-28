@@ -48,7 +48,10 @@
 - **X/Y 矩阵生成**：批量参数对比测试
 - **Hires.fix**：高清修复放大
 - **完整出图元数据**：每张图都写入 40+ 项生成参数（含模型 SHA256、LoRA、ControlNet、Hires、ADetailer、依赖版本），并附带 A1111 兼容参数串，见 2.4
-- **水印**：支持文字 / 自定义图片水印，位置、透明度、大小可调，见 2.5
+- **水印**：支持文字 / 自定义图片水印，位置、透明度、大小可调，见 2.6
+- **工作流引擎 + 节点编辑器**：简易模式的操作会自动编译成一张工作流图，
+  高级用户可在画布上增删节点、连线、改参数并直接运行；21 个内置节点，
+  见 2.5（菜单栏 → 🧩 工作流）
 - **图像管理**：自动保存、历史记录、图片预览
 - **视频管理**：视频预览、历史画廊、双击播放
 - **v6.0 工作台**：统一媒体画廊（图片/视频切换）、底部胶片条单击回填参数、修前/修后对比滑条（文生图+图生图）、显存/内存常驻监控、设置中心（可改快捷键与默认值）、AI 回译对比（翻译→回译校验防幻觉）
@@ -75,7 +78,219 @@
 - 同时写入 A1111 兼容的 `parameters` 文本块，WebUI / Civitai 可直接识别。
 - 任何一个字段取不到都会写成 `unknown`，**元数据采集失败绝不影响出图**。
 
-### 2.5 水印
+### 2.5 工作流引擎与节点编辑器
+
+简易模式与高级模式**共享同一个执行引擎**：你在界面上点的每一步，
+都会被编译成一张工作流图；高级用户看到的、能改的就是这张图。
+
+#### 两种模式的关系
+
+```
+界面操作                          自动生成的工作流图
+文生图 → 选模型 → 提示词                  LoadCheckpoint
+   → 开 LoRA            ──编译──▶        → LoadLoRA
+   → 开 ControlNet                       → TextEncode / NegativeTextEncode
+   → 开高清修复                           → Sampler → VAEDecode
+   → 开 ADetailer                        → HiresFix → ADetailer → SaveImage
+```
+
+编译逻辑在 `workflow/builder.py`，它**复用 `_gt_prepare_context()`**——
+也就是界面上那套参数解析规则（提示词解析/翻译、LoRA 标签、ControlNet 力度、
+尺寸、种子…）只有一份。否则又是"两套规则、迟早不一致"。
+
+#### 入口在哪（菜单栏 → 🧩 工作流）
+
+| 菜单项 | 快捷键 | 作用 |
+|--------|--------|------|
+| 🧩 打开工作流编辑器… | `Ctrl+W` | 打开空的节点编辑器 |
+| ✨ 用当前界面设置生成流程图 | — | 把当前设置编译成图并打开编辑器 |
+| ▶️ **用工作流引擎生成** | `Ctrl+Shift+W` | 编译并**立即执行**（走 workflow 引擎） |
+| ✅ 检查当前工作流 | — | 只做校验 + 资源清单，不执行 |
+| 📂 打开工作流目录 | — | 打开 `workflows/`（保存的 JSON 都在这里） |
+
+编辑器内工具栏：新建 / 打开 / 保存 / 另存为 · 从当前界面生成 / 载入界面设置 ·
+校验 / 资源清单 / **运行** (`Ctrl+R`) / **只跑选中节点** (`Ctrl+Shift+R`) /
+取消 / 清空状态 / 删除选中 / 适应窗口 · 显存策略下拉。
+
+#### 用代码调用（不经过界面）
+
+```python
+from workflow import builder
+from workflow.executor import run_workflow
+
+# 1) 把当前界面状态编译成图
+wf = builder.build_from_ui(win)          # win = 主窗口（提供 ai / config）
+
+# 2) 跑它（返回 dict：ok / states / outputs / cached / failed_node / error）
+res = run_workflow(wf, host=win)
+print(res["summary"] if "summary" in res else res["ok"], res["outputs"])
+
+# 3) 只重跑某个节点（其余用缓存）
+from workflow.executor import Executor, make_context
+ex = Executor(make_context(host=win, ai=win.ai))
+ex.run(wf, only=["saveImage_1"])
+```
+
+也可以完全脱离界面跑（`host=None`，输出落 `photo/`）：
+
+```python
+from workflow.schema import Workflow, Node
+from workflow.executor import run_workflow
+
+wf = Workflow(name="无头文生图")
+wf.add(Node("model_1", "LoadCheckpoint", {},
+            {"path": "meinamix_v12Final.safetensors"}))
+wf.add(Node("prompt_1", "TextEncode", {}, {"text": "1girl, cat ears"}))
+wf.add(Node("neg_1", "NegativeTextEncode", {}, {"text": "lowres"}))
+wf.add(Node("sampler_1", "Sampler", {},
+            {"steps": 28, "cfg": 7.0, "seed": 123, "width": 512, "height": 768}))
+wf.add(Node("decode_1", "VAEDecode", {}))
+wf.add(Node("save_1", "SaveImage", {}, {"filename_prefix": "wf_"}))
+wf.connect("model_1", "model", "prompt_1", "model")
+wf.connect("model_1", "model", "neg_1", "model")
+wf.connect("model_1", "model", "sampler_1", "model")
+wf.connect("prompt_1", "conditioning", "sampler_1", "positive")
+wf.connect("neg_1", "conditioning", "sampler_1", "negative")
+wf.connect("model_1", "model", "decode_1", "model")
+wf.connect("sampler_1", "latent", "decode_1", "latent")
+wf.connect("decode_1", "image", "save_1", "image")
+
+res = run_workflow(wf)        # preset="auto" 会按显存自动选档
+```
+
+#### 目录结构
+
+```
+workflow/            执行引擎
+├── schema.py            节点协议（端口类型 / NodeSpec / ResourceRequirement）
+├── values.py            端口上流动的具体值（ModelRef / Conditioning / Latent…）
+├── registry.py          节点注册表（@node 装饰器）
+├── graph.py             拓扑排序 + 运行前校验
+├── executor.py          执行器
+├── memory_policy.py     能力配置驱动的显存策略
+├── cache.py             节点级缓存（"只重跑某节点"的基础）
+├── resource_manager.py  资源清单（只读本地，不联网）
+├── adapters.py          模型族适配器（SD15/SDXL/Anima/SD3/Flux/Video）
+├── serializers.py       JSON 保存/加载/版本迁移
+└── builder.py           界面状态 → 工作流图
+
+nodes/               节点实现（21 个）
+├── model_nodes.py       LoadCheckpoint / LoadVAE / LoadLoRA
+├── text_nodes.py        TextEncode / NegativeTextEncode
+├── sampling_nodes.py    Sampler / VAEEncode / VAEDecode
+├── image_nodes.py       LoadImage / ImageResize / ImageCrop / MaskCreate / Inpaint / SaveImage
+├── control_nodes.py     ControlNetPreprocess / ControlNetApply
+├── adapter_nodes.py     IPAdapterApply
+├── detailer_nodes.py    ADetailer
+├── upscale_nodes.py     HiresFix / Upscale
+└── video_nodes.py       VideoFrameBatch
+
+ui/workflow_editor/  节点编辑器
+├── canvas.py            画布：节点/端口/连线，类型检查，状态着色
+├── palette.py           节点库（从注册表自动生成，带搜索）
+├── param_panel.py       参数面板（从 ParamSpec 自动生成控件）
+└── window.py            编辑器窗口 + 运行线程
+
+workflows/           工作流 JSON（保存/加载）
+```
+
+#### 端口类型与连线规则
+
+`MODEL` `VAE` `TEXT_COND` `IMAGE` `LATENT` `MASK` `CONTROL_IMAGE` `LORA`
+`SCHEDULER` `NUMBER` `BOOLEAN` `METADATA`（另有 `ANY` 表示不校验的透传口）
+
+- **类型不兼容直接拒绝**，不会自动转换。最常见的一条：
+  `LATENT` 和 `IMAGE` 不互通，**必须显式经过 `VAEDecode` / `VAEEncode`**。
+- 一个输入口只接一条线（再连会替换旧的）。
+- 必填输入既没连线也没默认值 → 校验阶段就报错，不会跑到一半才崩。
+
+#### 显存策略（能力配置，不是显卡名字）
+
+执行器不再"看显卡型号"决定是否 offload，而是**汇总各节点的资源声明**
+（`requires` / `estimated_vram_mb` / `supports_cpu_offload` / `supports_tiled`）
+再叠加设备能力选档：
+
+| 预设 | 适用 | 行为 |
+|------|------|------|
+| 节省显存 | 6~8GB | CPU offload + 分块，缓存小 |
+| 平衡模式 | 8~16GB | 优先速度与稳定 |
+| 高性能 | 16GB+ | bf16、不 offload、缓存更小、batch 4 |
+| 自定义 | — | 手动指定 |
+
+> 阈值按**名义容量**取值：标称 8GB 的卡实际报 7.93GiB，所以分界放在 7.0，
+> 保证"8GB 卡"落在平衡档而不是节省档。
+
+#### 工作流 JSON 格式
+
+```json
+{
+  "schema_version": 1,
+  "name": "示例流程",
+  "nodes": [
+    {"id": "model_1",  "type": "LoadCheckpoint", "inputs": {"path": "a.safetensors"}},
+    {"id": "prompt_1", "type": "TextEncode",     "inputs": {"text": "portrait"}},
+    {"id": "sampler_1","type": "Sampler",        "inputs": {"steps": 28, "cfg": 6.5, "seed": 123}}
+  ],
+  "links": [
+    ["model_1", "model", "sampler_1", "model"],
+    ["prompt_1", "conditioning", "sampler_1", "positive"]
+  ]
+}
+```
+
+- 节点参数写在 `"inputs"` 里即可（加载时会按节点声明自动归位到参数），
+  这是对外的约定格式；内部会区分"连线"与"参数"。
+- 连线也冗余存在 `links` 里，外部工具可直接读。
+- 加载**不会**因为一个未知节点类型就整份作废：未知节点保留在图中待修复。
+- `schema_version` 用于将来迁移；高于程序支持的版本会告警但尽力加载。
+- 画布坐标存在 `metadata.ui_positions`，不污染节点参数。
+
+#### 加一个新节点（这就是"加功能只需加节点"）
+
+在 `nodes/` 下任意模块里写一个函数即可，**界面零改动**：
+
+```python
+from workflow.registry import node
+from workflow.schema import DataType, ParamSpec, PortSpec, ResourceRequirement
+
+@node("MyNode", category="图像",
+      description="一句话说明",
+      inputs={"image": PortSpec(DataType.IMAGE, "输入图")},
+      outputs={"image": PortSpec(DataType.IMAGE, "输出图")},
+      params={"strength": ParamSpec("float", default=0.5, label="强度",
+                                    minimum=0.0, maximum=1.0, step=0.05)},
+      resources=ResourceRequirement(requires=("cuda",), estimated_vram_mb=800,
+                                    supports_cpu_offload=True, supports_tiled=True))
+def run_my_node(ctx, node, inputs):
+    img = inputs.get("image")          # 取输入
+    v = float(node.params.get("strength", 0.5))
+    ctx.check_cancel()                 # 长操作里检查取消
+    ctx.status("处理中…")               # 用户可见进度
+    return {"image": img}              # 键名必须与 outputs 一致
+```
+
+- 参数控件（滑块/下拉/勾选/文本框）由 `ParamSpec` **自动生成**，带上下限。
+- `resources` 决定显存策略与资源清单，`asset:<key>` 会自动映射到扩展市场的下载入口。
+- 重依赖（torch/diffusers）在函数**内部** import，避免拖慢界面启动。
+
+#### 已实现与暂未做
+
+**已实现**：图结构与校验、执行器（缓存 / 取消 / 逐节点状态 / 失败定位 /
+只重跑某节点）、能力配置化显存策略、资源清单、模型族适配器、JSON 读写与版本号、
+21 个节点、基础节点编辑器、简易模式自动生成图。
+
+**暂未做**（按优先级）：
+1. 把 `start_generation()` 的旧生成路径**逐步**迁到节点（目前是并行通路，
+   视频/批处理/XY 矩阵仍走原实现）；
+2. 区域提示词、节点循环、分块放大、参考图组合；
+3. ControlNet 的 lineart / softedge / tile / segmentation 权重映射
+   （`ControlNetPreprocess` 已能预处理这几种，但 `prepare_controlnet`
+   目前只认 openpose / canny / depth，接 `ControlNetApply` 会明确报错）；
+4. 用户自定义节点 / 插件机制（**刻意最后做**：任意 Python 节点会让调试、
+   显存管理与错误定位迅速失控）；
+5. ComfyUI 工作流格式兼容。
+
+### 2.6 水印
 
 「输出设置 → 💧 水印」中启用：
 

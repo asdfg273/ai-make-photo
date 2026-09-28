@@ -15,6 +15,20 @@ from ui.contracts import install_aliases, check_contract, apply_degradation
 logger = logging.getLogger(__name__)
 
 
+def _describe_chain(wf) -> str:
+    """把工作流按执行顺序写成一行「A → B → C」，给弹窗与日志用。"""
+    try:
+        from workflow import graph as _G
+        types = []
+        for nid in _G.topo_sort(wf):
+            n = wf.node(nid)
+            if n is not None:
+                types.append(n.type)
+        return " → ".join(types) or "(空)"
+    except Exception:
+        return " → ".join(n.type for n in wf.nodes) or "(空)"
+
+
 class ShellMixin:
     """替代 UIBuilderMixin 的 setup_ui 实现。业务 mixin 零改动。"""
 
@@ -806,6 +820,35 @@ class ShellMixin:
         act_refresh.triggered.connect(self._refresh_extension_count)
         m_tool.addAction(act_refresh)
 
+        # ---------- 工作流（节点编辑 / 用引擎生成）----------
+        m_wf = mb.addMenu("🧩 工作流")
+        a_wf_edit = QAction("🧩 打开工作流编辑器…", self)
+        a_wf_edit.setShortcut("Ctrl+W")
+        a_wf_edit.setToolTip("可视化节点编辑器：看/改这张「界面自动生成的流程图」")
+        a_wf_edit.triggered.connect(self._open_workflow_editor)
+        m_wf.addAction(a_wf_edit)
+
+        a_wf_gen = QAction("✨ 用当前界面设置生成流程图", self)
+        a_wf_gen.setToolTip("把当前模型/提示词/LoRA/高清/修脸等设置编译成工作流并打开编辑器")
+        a_wf_gen.triggered.connect(self._open_workflow_from_ui)
+        m_wf.addAction(a_wf_gen)
+        m_wf.addSeparator()
+
+        a_wf_run = QAction("▶️ 用工作流引擎生成", self)
+        a_wf_run.setShortcut("Ctrl+Shift+W")
+        a_wf_run.setToolTip("按当前界面设置生成工作流并**立即执行**（走 workflow 引擎）")
+        a_wf_run.triggered.connect(self._run_workflow_from_ui)
+        m_wf.addAction(a_wf_run)
+
+        a_wf_check = QAction("✅ 检查当前工作流", self)
+        a_wf_check.triggered.connect(self._check_workflow_from_ui)
+        m_wf.addAction(a_wf_check)
+        m_wf.addSeparator()
+
+        a_wf_dir = QAction("📂 打开工作流目录", self)
+        a_wf_dir.triggered.connect(self._open_workflow_dir)
+        m_wf.addAction(a_wf_dir)
+
         m_memory = mb.addMenu("🧹 内存")
         a_release = QAction("释放内存", self)
         a_release.triggered.connect(self.on_unload_models)
@@ -883,6 +926,109 @@ class ShellMixin:
             traceback.print_exc()
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "错误", f"打开扩展市场失败:\n{e}")
+
+    # ==================================================================
+    #  工作流（节点编辑器 / 用引擎生成）
+    # ==================================================================
+    def _open_workflow_editor(self):
+        """打开节点编辑器（不带入当前界面设置）。"""
+        try:
+            from ui.workflow_editor import open_editor
+            self._workflow_editor_win = open_editor(host=self, parent=None)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "错误", f"打开工作流编辑器失败:\n{e}")
+
+    def _open_workflow_from_ui(self):
+        """把当前界面设置编译成工作流图并打开编辑器。"""
+        try:
+            from ui.workflow_editor import open_editor
+            win = open_editor(host=self, parent=None)
+            win.on_build_from_ui()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "错误", f"生成工作流失败:\n{e}")
+
+    def _workflow_from_ui_or_warn(self):
+        """编译当前界面 → Workflow；失败时弹窗并返回 None。"""
+        from PyQt6.QtWidgets import QMessageBox
+        try:
+            from workflow import builder
+            return builder.build_from_ui(self)
+        except Exception as e:
+            QMessageBox.warning(
+                self, "无法生成工作流",
+                f"{type(e).__name__}: {e}\n\n"
+                "请确认模型列表已加载（等主界面显示「系统就绪」后再试）。")
+            return None
+
+    def _check_workflow_from_ui(self):
+        """只做校验 + 资源清单，不执行。"""
+        from PyQt6.QtWidgets import QMessageBox
+        wf = self._workflow_from_ui_or_warn()
+        if wf is None:
+            return
+        try:
+            from workflow import graph as _G, resource_manager
+            issues = _G.validate(wf)
+            errs = [i for i in issues if i.level == "error"]
+            rep = resource_manager.summary(wf)
+            head = ("✅ 校验通过" if not errs
+                    else f"❌ 校验未通过（{len(errs)} 个错误）")
+            body = "\n".join(f"· {i}" for i in (errs or issues)[:10])
+            QMessageBox.information(
+                self, "🧩 当前工作流",
+                f"{head}\n\n节点链：\n{_describe_chain(wf)}\n\n"
+                + (f"问题：\n{body}\n\n" if body else "")
+                + rep["text"])
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"检查失败:\n{e}")
+
+    def _run_workflow_from_ui(self):
+        """按当前界面设置生成工作流并立即执行（在工作线程里跑）。"""
+        from PyQt6.QtWidgets import QMessageBox
+        if getattr(self, "is_generating", False):
+            QMessageBox.information(self, "正在生成",
+                                    "当前已有生成任务在跑，请等它结束。")
+            return
+        if getattr(self, "ai", None) is None:
+            QMessageBox.warning(self, "引擎未就绪",
+                                "AI 引擎还在预热，请稍后再试。")
+            return
+        wf = self._workflow_from_ui_or_warn()
+        if wf is None:
+            return
+        try:
+            from ui.workflow_editor import open_editor
+            win = open_editor(host=self, parent=None)
+            win.scene.load_workflow(wf)
+            win._log(f"▶️ 由主界面触发执行：{_describe_chain(wf)}")
+            win.on_run()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "错误", f"执行工作流失败:\n{e}")
+
+    def _open_workflow_dir(self):
+        import os
+        import subprocess
+        import sys
+        try:
+            from workflow import serializers
+            d = serializers.workflows_dir()
+            if sys.platform.startswith("win"):
+                os.startfile(os.path.abspath(d))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", d])
+            else:
+                subprocess.Popen(["xdg-open", d])
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "无法打开目录", str(e))
 
     def _open_output_folder(self):
         import subprocess

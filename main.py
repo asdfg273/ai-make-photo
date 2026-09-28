@@ -360,18 +360,28 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             return
         preset = PROMPT_PRESETS[name]
 
+        # ⚠️ 必须在改动任何控件**之前**备份：↩️「还原」按钮依赖 _preset_backup。
+        # 以前这里从不调用 _snapshot_current_params()，_preset_backup 永远是
+        # None，还原按钮只会提示"没有可还原的快照"。
+        try:
+            self._snapshot_current_params()
+        except Exception as e:
+            logger.warning(f"[preset] 备份当前参数失败（还原按钮将不可用）: {e}")
+
         before_snap = {k: self._get_widget_value(k)
                        for k in self._CONTROL_LABELS.keys()}
         self._preset_before_snap = before_snap
 
+        # ⚠️ 提示词是**替换**，不是追加。
+        # 预设是一整套场景/画质配置（正负提示词都是完整的），旧代码写的是
+        #     merged = preset["p"] + ", " + 当前文本
+        # 于是每点一次预设就把上一份提示词再叠一遍：点两次"高清细节"会得到
+        # "高清细节…, 高清细节…, 我原来的词"，越点越长且互相冲突。
+        # 旧文本已由上面的快照备份，点 ↩️ 可还原。
         if preset.get("p"):
-            cur = self.txt_prompt.toPlainText().strip()
-            merged = (preset["p"] + (", " + cur if cur else "")).strip(", ")
-            self.txt_prompt.setPlainText(merged)
+            self.txt_prompt.setPlainText(str(preset["p"]).strip())
         if preset.get("n"):
-            cur = self.txt_neg.toPlainText().strip()
-            merged = (preset["n"] + (", " + cur if cur else "")).strip(", ")
-            self.txt_neg.setPlainText(merged)
+            self.txt_neg.setPlainText(str(preset["n"]).strip())
 
         params = preset.get("params", {})
         if "steps"   in params: self._safe_set_int  ("spin_steps",    params["steps"])
@@ -430,7 +440,8 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             try: self._update_preset_badge(changed, [])
             except: pass
         self._set_status(
-            f"🎯 已套用「{name}」· {changed} 项参数变化",
+            f"🎯 已套用「{name}」· {changed} 项参数变化"
+            f"（提示词已替换，点 ↩️ 可还原）",
             "#a6e3a1" if changed else "#fab387"
         )
         logger.info(f"🎯 套用预设 [{name}] - {changed} 项变化")
