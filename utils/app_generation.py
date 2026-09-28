@@ -8,11 +8,11 @@ import time
 import torch
 
 from PIL import Image, ImageDraw, ImageFont
-from PIL.PngImagePlugin import PngInfo
+# PngInfo 不再在这里用：元数据统一由 utils/image_metadata.py 构建
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from utils.app_utils       import  parse_dynamic_prompt
-from utils.paths import OUTPUT_DIR
+# 不在这里 import OUTPUT_DIR：输出目录统一走 self._output_dir()
 from utils.system_utils    import (performance_timer,
                                    logger)
 from utils.image_processor import make_comic_strip, process_adetailer
@@ -64,6 +64,23 @@ class _UiInvoker(QObject):
 
 # ============================================================
 class GenerationMixin:
+
+    def _output_dir(self) -> str:
+        """当前输出目录（优先用户在设置里选的，回落 photo/）。
+
+        ⚠️ 以前主出图、XY 网格、漫画、放大这些保存点都直接用常量
+        `OUTPUT_DIR`，于是设置里的「输出目录」对**主出图路径完全无效** ——
+        只有编辑器归档和批量生成读配置，两套实现各走各的：
+        图写进 photo/，画廊读 photo/，而 batch_runner 却盯着 outputs/，
+        新图检测全部落空。现在统一走 utils.paths.resolve_output_dir，
+        全局只有一个出口。
+        """
+        try:
+            from utils.paths import host_output_dir
+            return host_output_dir(self)
+        except Exception:
+            from utils.paths import OUTPUT_DIR
+            return OUTPUT_DIR
 
     def _init_gen_bridge(self):
         self._bridge = _GenBridge()
@@ -1692,49 +1709,16 @@ class GenerationMixin:
 
     def _gt_save_image(self, image, ctx, i, current_seed):
         """成功返回 save_path,失败返回 None。"""
-        # 元数据
-        meta = None
+        # 元数据：唯一实现在 utils/image_metadata.py（以前这里手写 16 个键，
+        # 与 _save_with_meta 那套各写各的，字段完整度不一致）
         try:
-            from PIL.PngImagePlugin import PngInfo
-            meta = PngInfo()
-            def _add(key, val):
-                try:
-                    s = "" if val is None else str(val)
-                    if len(s) > 8000: s = s[:8000] + "...(truncated)"
-                    meta.add_text(key, s)
-                except Exception as e:
-                    logger.warning(f"⚠️ 元数据 [{key}] 写入失败: {e}")
-
-            _add("prompt",      ctx['parsed_raw_prompts'][i])
-            _add("negative",    ctx['raw_neg'])
-            _add("en_prompt",   ctx['en_prompts'][i])
-            _add("en_negative", ctx['en_neg'])
-            _add("model",       ctx['model_name'])
-            _add("sampler",     ctx['sampler_name'])
-            _add("steps",       ctx['steps'])
-            _add("cfg",         ctx['cfg'])
-            _add("size",        f"{ctx['width']}x{ctx['height']}")
-            _add("seed",        current_seed)
-            _add("lora",        ",".join(ctx['lora_meta_info']))
-            _add("use_ipa",     bool(ctx['use_ipa']))
-            if ctx['use_ipa']:
-                _add("ipa_scale",   f"{ctx['ipa_scale']:.2f}")
-                _add("ipa_variant", ctx['ipa_variant'])
-            _add("use_pose",      bool(ctx['use_pose']))
-            _add("cn_strength",   f"{ctx['cn_strength']:.2f}")
-            _add("pose_transfer", bool(ctx['pose_transfer_used']))
-            _add("timestamp",     datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-            a1111 = (
-                f"{ctx['en_prompts'][i]}\n"
-                f"Negative prompt: {ctx['en_neg']}\n"
-                f"Steps: {ctx['steps']}, Sampler: {ctx['sampler_name']}, "
-                f"CFG scale: {ctx['cfg']}, Seed: {current_seed}, "
-                f"Size: {ctx['width']}x{ctx['height']}, Model: {ctx['model_name']}"
-            )
-            _add("parameters", a1111)
+            from utils.image_metadata import build_metadata
+            meta = build_metadata(self, ctx, current_seed, image=image,
+                                  kind=ctx.get('workflow_kind', 'txt2img'),
+                                  index=i,
+                                  total=int(ctx.get('total_count', 1) or 1))
         except Exception as e:
-            logger.warning(f"⚠️ 构建 PngInfo 失败: {e}")
+            logger.warning(f"⚠️ 构建元数据失败（仍会保存图片）: {e}")
             meta = None
 
         # 文件名
@@ -1742,16 +1726,15 @@ class GenerationMixin:
         safe_model = "".join(c if c.isalnum() or c in "._-" else "_"
                              for c in (ctx['model_name'] or "model"))[:40]
         filename = f"{ts}_{safe_model}_{i+1:02d}.png"
-        save_path = os.path.join(OUTPUT_DIR, filename)
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        _od = self._output_dir()
+        save_path = os.path.join(_od, filename)
+        os.makedirs(_od, exist_ok=True)
 
         try:
-            if meta is not None:
-                image.save(save_path, format="PNG", pnginfo=meta,
-                           optimize=False, compress_level=4)
-            else:
-                image.save(save_path, format="PNG", optimize=False, compress_level=4)
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
+            # 统一保存入口：内部会加水印 + 写元数据，失败自动降级
+            from utils.image_metadata import save_image
+            ok = save_image(self, image, save_path, meta)
+            if ok and os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
                 logger.info(f"💾 已保存: {save_path} "
                       f"({os.path.getsize(save_path)//1024} KB)")
                 return save_path
@@ -1939,38 +1922,50 @@ class GenerationMixin:
     # ==================================================================
     #  保存图片 + 写入参数元数据 (WebUI 兼容) (A-3)
     # ==================================================================
-    def _save_with_meta(self, img, save_path: str, meta: dict):
-        """将图片写入磁盘,并在 PNG 中嵌入 'parameters' 文本块。"""
+    def _save_with_meta(self, img, save_path: str, meta: dict,
+                        watermark: bool = True):
+        """保存图片并写入完整元数据（XY 网格 / 放大 / 大图共用）。
+
+        `meta` 可以是：
+          · `build_metadata()` 产出的完整 dict —— 走统一实现，字段齐全；
+          · 旧的窄字段 dict（XY 网格会传 pixel/axis 等自有键）——
+            自动补上缺失的通用字段后同样走统一实现。
+
+        以前这里只拼一个 `parameters` 文本块、**没有独立键**，而且用
+        `neg` 而主保存用 `negative`，两边键名都不一致，XY 图读不全。
+        """
+        from utils.image_metadata import save_image
+
+        if not isinstance(meta, dict):
+            meta = {}
+        # 补齐通用字段（缺失就填 unknown），保证各入口元数据结构一致
+        full = dict(meta)
+        for k in ("prompt", "prompt_final", "negative", "negative_final",
+                  "model", "model_hash", "sampler", "scheduler", "steps",
+                  "cfg", "seed", "size"):
+            full.setdefault(k, meta.get("en_prompt", "unknown")
+                            if k == "prompt_final" else "unknown")
         try:
-            ext = os.path.splitext(save_path)[1].lower()
-            if ext == ".png":
-                pnginfo = PngInfo()
-                params_text = (
-                    f"{meta.get('prompt','')}\n"
-                    f"Negative prompt: {meta.get('neg','')}\n"
-                    f"Steps: {meta.get('steps','')}, "
-                    f"Sampler: {meta.get('sampler','')}, "
-                    f"CFG scale: {meta.get('cfg','')}, "
-                    f"Seed: {meta.get('seed','')}, "
-                    f"Size: {meta.get('width','')}x{meta.get('height','')}, "
-                    f"Model: {meta.get('model','')}"
-                )
-                # 若有 LoRA 追加
-                lora = meta.get('lora')
-                if lora:
-                    if isinstance(lora, (list, tuple)):
-                        lora = ",".join(lora)
-                    params_text += f", LoRAs: {lora}"
-                pnginfo.add_text("parameters", params_text)
-                img.save(save_path, pnginfo=pnginfo)
-            else:
-                img.save(save_path, quality=95)
+            host_meta = self  # 水印配置在 host.config 上
+            if watermark:
+                return save_image(host_meta, img, save_path, full)
+            # 显式不要水印（如 XY 诊断网格）时临时关掉
+            cfg = getattr(self, "config", None)
+            if cfg is None:
+                return save_image(host_meta, img, save_path, full)
+            prev = getattr(cfg, "watermark_enabled", False)
+            try:
+                cfg.watermark_enabled = False
+                return save_image(host_meta, img, save_path, full)
+            finally:
+                cfg.watermark_enabled = prev
         except Exception as e:
+            logger.warning(f"⚠️ 元数据写入失败，降级保存: {e}")
             try:
                 img.save(save_path)
             except Exception:
                 pass
-            logger.warning(f"⚠️ 元数据写入失败: {e}")
+            return save_path
 
     # ==================================================================
     #  X/Y 矩阵
@@ -2066,13 +2061,17 @@ class GenerationMixin:
             grid_img = self._compose_xy_grid(
                 cell_images, x_vals, y_vals, x_type, y_type)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            save_path = os.path.join(OUTPUT_DIR, f"xy_grid_{ts}.png")
+            _od = self._output_dir()
+            os.makedirs(_od, exist_ok=True)
+            save_path = os.path.join(_od, f"xy_grid_{ts}.png")
 
             if meta:
                 grid_meta = dict(meta)
                 grid_meta["seed"] = f"xy_{x_type}_{y_type}"
-                self._save_with_meta(grid_img, save_path, grid_meta)
+                # XY 网格是**诊断矩阵**（用来比较参数），打水印会干扰观察，
+                # 所以这里显式不加；正常出图与放大图都会加。
+                self._save_with_meta(grid_img, save_path, grid_meta,
+                                     watermark=False)
             else:
                 grid_img.save(save_path)
 
@@ -2165,8 +2164,9 @@ class GenerationMixin:
             self._bridge.status_signal.emit(
                 "🖼 正在拼合分镜连环画...", "#ffd700")
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
-            save_path = os.path.join(OUTPUT_DIR, f"comic_{ts}.png")
+            _od = self._output_dir()
+            os.makedirs(_od, exist_ok=True)
+            save_path = os.path.join(_od, f"comic_{ts}.png")
             comic = make_comic_strip(image_list)
             comic.save(save_path)   # 先保存,再 emit 预览（避免预览读到不存在的文件）
             self.last_generated_path = save_path
@@ -2365,8 +2365,9 @@ class GenerationMixin:
                 img = self.ai.img2img_pipe(**kwargs).images[0]
 
             ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_path = os.path.join(OUTPUT_DIR, f"upscale_{ts}.png")
-            os.makedirs(OUTPUT_DIR, exist_ok=True)
+            _od      = self._output_dir()
+            out_path = os.path.join(_od, f"upscale_{ts}.png")
+            os.makedirs(_od, exist_ok=True)
 
             meta = {
                 "prompt":    raw_prompt,

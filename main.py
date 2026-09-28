@@ -336,7 +336,8 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         self.combo_device.setCurrentIndex(idx if idx >= 0 else 0)
 
         if hasattr(self, 'gallery'):
-            self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
+            from utils.paths import host_output_dir
+            self.gallery.reload_from_dir(host_output_dir(self), limit=80)
             self.gallery.image_selected.connect(self._on_gallery_pick)
 
     # ==========================================================
@@ -436,7 +437,10 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 
     def read_png_info(self, path: str = None):
         if not path:
-            start_dir = OUTPUT_DIR if os.path.exists(OUTPUT_DIR) else BASE_DIR
+            # 起始目录跟随用户设置的输出目录（以前写死 photo/）
+            from utils.paths import host_output_dir
+            _od = host_output_dir(self)
+            start_dir = _od if os.path.exists(_od) else BASE_DIR
             path, _ = QFileDialog.getOpenFileName(
                 self, "选择 PNG 文件", start_dir, "PNG (*.png)")
             if not path:
@@ -531,6 +535,21 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 
             self.config.output_format = self.combo_img_format.currentText()
             self.config.output_dir    = self.combo_output_dir.currentText()
+
+            # ── 水印 ──
+            if hasattr(self, 'chk_watermark'):
+                self.config.watermark_enabled = self.chk_watermark.isChecked()
+            if hasattr(self, 'edit_watermark_text'):
+                self.config.watermark_text = self.edit_watermark_text.text().strip()
+            if hasattr(self, 'combo_watermark_pos'):
+                self.config.watermark_position = self.combo_watermark_pos.currentText()
+            if hasattr(self, 'scale_watermark_opacity'):
+                self.config.watermark_opacity = \
+                    self.scale_watermark_opacity.float_value()
+            if hasattr(self, 'scale_watermark_size'):
+                self.config.watermark_scale = \
+                    self.scale_watermark_size.float_value()
+            # watermark_image 由选择/清除按钮即时写入，这里不覆盖
 
             if hasattr(self, 'combo_device'):
                 self.config.device_preference = self.combo_device.currentText()
@@ -908,8 +927,9 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 # ============================================================
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setApplicationName("AI 绘画工作站")
-    app.setApplicationVersion("6.0")
+    from utils.version import APP_NAME, APP_VERSION
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(APP_VERSION)
     if os.environ.get("AI_STUDIO_UI") == "old":
         from ui.design_tokens import DARK_STYLE   # 旧界面回退（对比测试用）
         app.setStyleSheet(DARK_STYLE)

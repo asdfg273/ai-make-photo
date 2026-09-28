@@ -9,7 +9,9 @@ from PIL import Image
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtCore import Qt,pyqtSlot,QMetaObject, Q_ARG, QTimer
-from utils.paths import OUTPUT_DIR
+# 输出目录统一从 utils.paths 取（不要再硬编码 OUTPUT_DIR —— 那会让
+# 主出图与 tiled 放大/临时文件写到两个不同的目录）
+from utils.paths import host_output_dir
 
 import logging
 logger = logging.getLogger(__name__)
@@ -162,9 +164,40 @@ class EventMixin:
                 max(0, min(2, int(getattr(cfg, 'default_trans_mode', 2)))))
 
         # ── 输出目录 ─────────────────────────────────────────
+        # 显示**解析后**的真实目录：配置里可能是历史占位值 "outputs/"
+        # （实际会被 resolve_output_dir 当成未设置），直接显示它会让
+        # 用户以为输出去了 outputs/，而实际写进 photo/。
         if hasattr(self, 'combo_output_dir'):
-            self.combo_output_dir.setCurrentText(
-                getattr(cfg, 'output_dir', 'outputs/'))
+            try:
+                from utils.paths import resolve_output_dir
+                self.combo_output_dir.setCurrentText(
+                    str(resolve_output_dir(cfg)))
+            except Exception:
+                self.combo_output_dir.setCurrentText(
+                    getattr(cfg, 'output_dir', 'outputs/'))
+
+        # ── 水印 ─────────────────────────────────────────────
+        try:
+            if hasattr(self, 'chk_watermark'):
+                self.chk_watermark.setChecked(
+                    bool(getattr(cfg, 'watermark_enabled', False)))
+            if hasattr(self, 'edit_watermark_text'):
+                self.edit_watermark_text.setText(
+                    getattr(cfg, 'watermark_text', '') or '')
+            if hasattr(self, 'combo_watermark_pos'):
+                pos = getattr(cfg, 'watermark_position', '右下') or '右下'
+                idx = self.combo_watermark_pos.findText(pos)
+                self.combo_watermark_pos.setCurrentIndex(idx if idx >= 0 else 0)
+            if hasattr(self, 'scale_watermark_opacity'):
+                self.scale_watermark_opacity.setValue(
+                    float(getattr(cfg, 'watermark_opacity', 0.6)))
+            if hasattr(self, 'scale_watermark_size'):
+                self.scale_watermark_size.setValue(
+                    float(getattr(cfg, 'watermark_scale', 1.0)))
+            self._refresh_watermark_label(
+                getattr(cfg, 'watermark_image', '') or '')
+        except Exception as e:
+            logger.warning(f"⚠️ 水印设置回填失败: {e}")
 
     @pyqtSlot()
     def refresh_models(self):
@@ -358,9 +391,9 @@ class EventMixin:
         self._update_ref_thumb()
 
     def cleanup_temp_files(self, verbose=True):
-        """清理 outputs/temp 下的 inpaint 中转文件,并清空内存引用"""
+        """清理 <输出目录>/temp 下的 inpaint 中转文件,并清空内存引用"""
         try:
-            temp_dir = os.path.join(OUTPUT_DIR, "temp")
+            temp_dir = os.path.join(host_output_dir(self), "temp")
             if not os.path.isdir(temp_dir):
                 return
 
@@ -395,6 +428,63 @@ class EventMixin:
         except Exception as e:
             if verbose:
                 logger.warning(f"⚠️ cleanup_temp_files 异常: {e}")
+
+    # ------------------------------------------------------------
+    #  水印
+    # ------------------------------------------------------------
+    def _refresh_watermark_label(self, path: str = ""):
+        lbl = getattr(self, "lbl_watermark_image", None)
+        if lbl is None:
+            return
+        if path and os.path.exists(path):
+            lbl.setText(os.path.basename(path))
+            lbl.setToolTip(path)
+            lbl.setStyleSheet("color:#a6e3a1;")
+        else:
+            lbl.setText("未选择")
+            lbl.setToolTip("")
+            lbl.setStyleSheet("color:#7f849c;")
+
+    def _pick_watermark_image(self):
+        """选择自定义图片水印（PNG/JPG，建议带透明通道）。"""
+        from PyQt6.QtWidgets import QFileDialog
+        start = ""
+        try:
+            start = os.path.dirname(getattr(self.config, "watermark_image", "") or "")
+        except Exception:
+            start = ""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择水印图片", start,
+            "图片 (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if not path:
+            return
+        try:
+            # 立刻校验能不能打开，别等到出图时才发现是坏文件
+            from PIL import Image
+            with Image.open(path) as im:
+                im.verify()
+        except Exception as e:
+            QMessageBox.warning(self, "水印图片无法读取",
+                                f"这个文件打不开：\n{path}\n\n{e}")
+            return
+        try:
+            self.config.watermark_image = path
+            self.config.save()
+        except Exception as e:
+            logger.warning(f"⚠️ 保存水印设置失败: {e}")
+        self._refresh_watermark_label(path)
+        if hasattr(self, "chk_watermark"):
+            self.chk_watermark.setChecked(True)
+        self._set_status(f"💧 已设置图片水印: {os.path.basename(path)}", "#a6e3a1")
+
+    def _clear_watermark_image(self):
+        try:
+            self.config.watermark_image = ""
+            self.config.save()
+        except Exception as e:
+            logger.warning(f"⚠️ 清除水印设置失败: {e}")
+        self._refresh_watermark_label("")
+        self._set_status("💧 已清除图片水印", "#89dceb")
 
     def load_pose_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -490,11 +580,10 @@ class EventMixin:
 
     def _send_editor_to_inpaint(self, edited_pil_img, mask_pil_img):
         """编辑器「发送到局部重绘」回调:挂参考图+遮罩,不归档画廊"""
-        os.makedirs(os.path.join(OUTPUT_DIR, "temp"), exist_ok=True)
-        ref_path  = os.path.abspath(
-            os.path.join(OUTPUT_DIR, "temp", "inpaint_ref.png"))
-        mask_path = os.path.abspath(
-            os.path.join(OUTPUT_DIR, "temp", "inpaint_mask.png"))
+        _tmp = os.path.join(host_output_dir(self), "temp")
+        os.makedirs(_tmp, exist_ok=True)
+        ref_path  = os.path.abspath(os.path.join(_tmp, "inpaint_ref.png"))
+        mask_path = os.path.abspath(os.path.join(_tmp, "inpaint_mask.png"))
         edited_pil_img.save(ref_path)
         mask_pil_img.save(mask_path)
 
@@ -547,18 +636,16 @@ class EventMixin:
         # ---- 保存回调 ----
         def on_editor_saved(edited_pil_img, mask_pil_img):
             logger.info("[EDITOR] ▶ on_editor_saved 被触发")
-            os.makedirs(os.path.join(OUTPUT_DIR, "temp"), exist_ok=True)
-            ref_path  = os.path.abspath(
-                os.path.join(OUTPUT_DIR, "temp", "inpaint_ref.png"))
-            mask_path = os.path.abspath(
-                os.path.join(OUTPUT_DIR, "temp", "inpaint_mask.png"))
+            _tmp = os.path.join(host_output_dir(self), "temp")
+            os.makedirs(_tmp, exist_ok=True)
+            ref_path  = os.path.abspath(os.path.join(_tmp, "inpaint_ref.png"))
+            mask_path = os.path.abspath(os.path.join(_tmp, "inpaint_mask.png"))
             edited_pil_img.save(ref_path)
             mask_pil_img.save(mask_path)
 
-            # 归档到 photo/ 画廊,与 open_gallery_to_edit 保持一致
+            # 归档到当前输出目录（跟随用户设置），与画廊读取路径一致
             try:
-                from utils.paths import resolve_output_dir
-                photo_dir = str(resolve_output_dir(self.config))
+                photo_dir = host_output_dir(self)
                 os.makedirs(photo_dir, exist_ok=True)
                 timestamp = datetime.datetime.now().strftime("%H%M%S")
                 archive_path = os.path.join(photo_dir, f"pro_edited_{timestamp}.png")
@@ -621,8 +708,7 @@ class EventMixin:
     def open_gallery_to_edit(self):
         logger.debug(f"[DEBUG] open_gallery_to_edit 被调用, 来自文件: {__file__}")
 
-        from utils.paths import resolve_output_dir
-        photo_dir = str(resolve_output_dir(self.config))
+        photo_dir = host_output_dir(self)
         os.makedirs(photo_dir, exist_ok=True)
 
         file_path, _ = QFileDialog.getOpenFileName(
@@ -644,8 +730,8 @@ class EventMixin:
         def on_editor_saved(edited_pil_img: Image.Image, mask_pil_img: Image.Image):
             logger.info("[EDITOR] ▶ on_editor_saved 被触发")
             try:
-                from utils.paths import resolve_output_dir
-                output_base = resolve_output_dir(self.config)
+                from pathlib import Path
+                output_base = Path(host_output_dir(self))
 
                 temp_dir = output_base / "temp"
                 temp_dir.mkdir(parents=True, exist_ok=True)
@@ -1134,7 +1220,6 @@ class EventMixin:
 
     def run_tiled_diffusion(self):
         from utils.tiled_diffusion import tiled_img2img
-        from utils.paths import OUTPUT_DIR
         from PIL import Image
         import os
         import glob
@@ -1142,10 +1227,14 @@ class EventMixin:
         import traceback
         import datetime
 
+        # 跟随用户设置的输出目录（以前硬编码 photo/，改目录后这里就找不到图、
+        # 也把结果写到别处去了）
+        _od = host_output_dir(self)
+
         # ---- 1. 找最后一张图 ----
         last_path = getattr(self, "last_generated_path", None)
         if not last_path or not os.path.exists(last_path):
-            pngs = glob.glob(os.path.join(OUTPUT_DIR, "*.png"))
+            pngs = glob.glob(os.path.join(_od, "*.png"))
             if not pngs:
                 self._set_status("⚠️ 没有可用的图，请先生成一张", "#f9e2af")
                 return
@@ -1214,7 +1303,7 @@ class EventMixin:
                 )
 
                 ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                out_path = os.path.join(OUTPUT_DIR, f"{ts}_tiled_{target_w}x{target_h}.png")
+                out_path = os.path.join(_od, f"{ts}_tiled_{target_w}x{target_h}.png")
                 result.save(out_path)
 
                 self._bridge.image_signal.emit(result)

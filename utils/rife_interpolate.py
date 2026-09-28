@@ -33,6 +33,12 @@ def _work_dir():
       · 不用 tempfile.mkdtemp：它创建的目录在部分受限环境下会被 ACL 锁死
         （连在里面新建文件都 Permission denied）。改用 makedirs + 唯一后缀。
     插帧会产生成百上千张 PNG，统一放项目 photo/ 下的临时目录，退出时尽力清理。
+
+    ⚠️ 这里**故意不跟随**设置里的「输出目录」：
+      它是一次性中间帧（可能上千张），塞进用户自己选的输出目录只会造成
+      污染；photo/ 是本程序自己的工作区，放这里更合适。
+      同理 photo/videos/ 也是固定位置（视频有自己的目录约定）。
+      所以本文件出现的 OUTPUT_DIR 不是漏改，是刻意为之。
     """
     from utils.paths import OUTPUT_DIR
     import uuid

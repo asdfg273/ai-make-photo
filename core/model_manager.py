@@ -55,6 +55,7 @@ class ModelManager(metaclass=SingletonMeta):
         self.dtype  = torch.float16 if self.device == "cuda" else torch.float32
 
         self.current_model_name = None
+        self.current_model_path = None
         self.current_lora_name  = None
         self.is_sdxl            = False
         self.is_vpred = False
@@ -386,6 +387,7 @@ class ModelManager(metaclass=SingletonMeta):
             # ===== torch.compile 加速 UNet（暂时禁用：Windows 多 GPU 环境不兼容） =====
             #对于多 GPU 用户，torch.compile 会导致 UNet 共享失败，报错：
             #如果你在 Windows 上使用多 GPU，建议暂时禁用 torch.compile，或者升级到 PyTorch 2.1+。当然没有多 GPU 的用户可以尝试开启，首次推理会慢 30-60 秒，之后会快很多。
+            #当然这个可能只是我的电脑的问题，其他人可能没事。总之先禁用，等 PyTorch 2.1+ 再启用。或者有大佬改成多 GPU 也能共享的方式也行。
             # try:
             #     import torch
             #     if torch.__version__ >= "2.0":
@@ -415,6 +417,9 @@ class ModelManager(metaclass=SingletonMeta):
             self.controlnet_pipe = None
             self.current_cn_type  = None
             self.current_model_name = model_name
+            # 出图元数据要记录底模的**真实磁盘路径 + 哈希**，以前只存了
+            # 文件名，事后无法确认到底用的哪个文件（同名不同版很常见）。
+            self.current_model_path = model_path
             self.current_lora_name  = None
             self._compel_cache.clear()
             self.compel_txt2img = self.compel_img2img = self.compel_controlnet = None
@@ -472,6 +477,7 @@ class ModelManager(metaclass=SingletonMeta):
             self.arch_profile = None
             self.is_flux = self.is_sd3 = self.is_sdxl = False
             self.current_model_name = None
+            self.current_model_path = None
             raise Exception(f"模型加载失败: {str(e)}") from e
 
     # ------------------------------------------------------------

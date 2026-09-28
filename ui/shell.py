@@ -200,8 +200,8 @@ class ShellMixin:
             from PyQt6.QtCore import QTimer
             def _reload():
                 try:
-                    from utils.paths import OUTPUT_DIR
-                    self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
+                    from utils.paths import host_output_dir
+                    self.gallery.reload_from_dir(host_output_dir(self), limit=80)
                 except Exception as e:
                     logger.warning(f"画廊刷新失败: {e}")
             QTimer.singleShot(100, _reload)
@@ -888,7 +888,8 @@ class ShellMixin:
         import subprocess
         import sys
         import os
-        from utils.paths import OUTPUT_DIR
+        from utils.paths import host_output_dir
+        OUTPUT_DIR = host_output_dir(self)
         if not os.path.exists(OUTPUT_DIR):
             os.makedirs(OUTPUT_DIR, exist_ok=True)
         try:

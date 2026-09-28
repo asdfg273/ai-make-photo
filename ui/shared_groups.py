@@ -280,13 +280,65 @@ def _build_advanced(host) -> CollapsibleSection:
     go = QFormLayout(grp_out)
     host.combo_output_dir = QComboBox()
     host.combo_output_dir.setEditable(True)
-    host.combo_output_dir.addItem("outputs/")
+    # 默认显示真实目录（photo/），不再用占位值 "outputs/"：
+    # 那个值既与实际目录不符，又会被回写进配置，造成"设置不生效"的观感。
+    from utils.paths import default_output_dir
+    host.combo_output_dir.addItem(default_output_dir())
     go.addRow("输出目录:", host.combo_output_dir)
 
     host.combo_img_format = QComboBox()
     host.combo_img_format.addItems(["PNG", "JPEG", "WEBP"])
     go.addRow("图片格式:", host.combo_img_format)
     layout.addWidget(grp_out)
+
+    # ---------- 水印 ----------
+    grp_wm = QGroupBox("💧 水印")
+    gw = QFormLayout(grp_wm)
+
+    host.chk_watermark = QCheckBox("给生成图加水印")
+    host.chk_watermark.setToolTip(
+        "启用水印后，所有生成图（含放大/大图）都会加上水印。\n"
+        "XY 参数矩阵是诊断图，不会加水印。")
+    gw.addRow(host.chk_watermark)
+
+    host.edit_watermark_text = QLineEdit()
+    host.edit_watermark_text.setPlaceholderText("文字水印，例如：© 我的名字")
+    gw.addRow("文字:", host.edit_watermark_text)
+
+    wm_row = QHBoxLayout()
+    host.btn_watermark_image = QPushButton("选择图片…")
+    host.btn_watermark_image.setToolTip(
+        "选择 PNG/JPG 作为图片水印（建议带透明通道）。\n"
+        "同时配置了文字和图片时，优先使用图片；图片读取失败会自动退回文字。")
+    _wire(host, host.btn_watermark_image.clicked, "_pick_watermark_image")
+    host.lbl_watermark_image = QLabel("未选择")
+    host.lbl_watermark_image.setStyleSheet("color:#7f849c;")
+    host.btn_watermark_clear = QPushButton("清除")
+    _wire(host, host.btn_watermark_clear.clicked, "_clear_watermark_image")
+    wm_row.addWidget(host.btn_watermark_image)
+    wm_row.addWidget(host.lbl_watermark_image, 1)
+    wm_row.addWidget(host.btn_watermark_clear)
+    wm_wrap = QWidget()
+    wm_wrap.setLayout(wm_row)
+    gw.addRow("图片:", wm_wrap)
+
+    host.combo_watermark_pos = QComboBox()
+    from utils.watermark import POSITIONS
+    host.combo_watermark_pos.addItems(list(POSITIONS))
+    gw.addRow("位置:", host.combo_watermark_pos)
+
+    host.scale_watermark_opacity = FloatSlider(0.05, 1.0, 0.05, 0.6)
+    gw.addRow("透明度:", host.scale_watermark_opacity)
+
+    host.scale_watermark_size = FloatSlider(0.3, 3.0, 0.1, 1.0)
+    gw.addRow("大小:", host.scale_watermark_size)
+
+    host.lbl_watermark_hint = QLabel(
+        "提示：水印会烧进位图，导出后无法移除，建议保留一份无水印原图。")
+    host.lbl_watermark_hint.setWordWrap(True)
+    host.lbl_watermark_hint.setStyleSheet("color:#7f849c; font-size:11px;")
+    gw.addRow(host.lbl_watermark_hint)
+    layout.addWidget(grp_wm)
 
     host.btn_read_png = QPushButton("📥 读取 PNG 中的生成参数")
     _wire(host, host.btn_read_png.clicked, "read_png_info")

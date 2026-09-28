@@ -35,11 +35,25 @@ def _safe_name(s: str, fallback: str = "role") -> str:
     return s[:48] or fallback
 
 
-def resolve_output_dir() -> Path:
-    """统一走 utils.paths.resolve_output_dir（全项目唯一实现）。"""
+def resolve_output_dir(config=None) -> Path:
+    """统一走 utils.paths.resolve_output_dir（全项目唯一实现）。
+
+    ⚠️ 以前这里调用 `_rod()` **不传 config**，于是永远返回默认的 photo/，
+    用户在「设置」里改的输出目录对批量生成完全无效：
+    `_out_dir` 指向错误目录 → `rglob("*.png")` 快照/新文件检测全部落空，
+    批量出图的成功判定与归档都会错，还会白扫一遍整个 photo/ 树。
+
+    没显式传 config 时自行从 AppConfig 读一份（load 很轻，且调用点很少）。
+    """
     try:
         from utils.paths import resolve_output_dir as _rod
-        return Path(_rod())
+        if config is None:
+            try:
+                from core.config_manager import AppConfig
+                config = AppConfig.load()
+            except Exception:
+                config = None      # 读配置失败就退回默认目录，不阻断批量
+        return Path(_rod(config))
     except Exception:
         from utils.paths import OUTPUT_DIR as _O
         return Path(_O)

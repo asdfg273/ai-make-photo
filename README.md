@@ -47,9 +47,51 @@
 - **AI 提示词改写**：自动将自然语言转换为专业提示词
 - **X/Y 矩阵生成**：批量参数对比测试
 - **Hires.fix**：高清修复放大
+- **完整出图元数据**：每张图都写入 40+ 项生成参数（含模型 SHA256、LoRA、ControlNet、Hires、ADetailer、依赖版本），并附带 A1111 兼容参数串，见 2.4
+- **水印**：支持文字 / 自定义图片水印，位置、透明度、大小可调，见 2.5
 - **图像管理**：自动保存、历史记录、图片预览
 - **视频管理**：视频预览、历史画廊、双击播放
 - **v6.0 工作台**：统一媒体画廊（图片/视频切换）、底部胶片条单击回填参数、修前/修后对比滑条（文生图+图生图）、显存/内存常驻监控、设置中心（可改快捷键与默认值）、AI 回译对比（翻译→回译校验防幻觉）
+
+### 2.4 出图元数据
+
+每张输出图都会在 PNG 里写入完整元数据，方便复现、归档与排查。
+实现集中在 `utils/image_metadata.py`（全项目唯一入口）。
+
+| 类别 | 字段 |
+|------|------|
+| 提示词 | `prompt`（原始，含中文）、`prompt_final`（实际送模型的最终提示词）、`negative`、`negative_final`、`prompt_mode`、`clip_skip` |
+| 模型 | `model`、`model_path`（真实磁盘路径）、`model_hash`（SHA256）、`architecture`、`vpred`、`zero_snr` |
+| LoRA | `loras`（名称+权重）、`lora_count`、`lora_tags` |
+| 条件控制 | `controlnet_type`、`controlnet_weight`、`pose_transfer_used`、`ip_adapter_variant`、`ip_adapter_weight` |
+| 采样 | `sampler`、`scheduler`（调度器类名）、`steps`、`cfg`、`seed`、`width`、`height`、`size`、`batch_index`、`batch_total` |
+| Hires.fix | `hires_enabled`、`hires_scale`、`hires_denoise`、`hires_upscaler`、`hires_size` |
+| ADetailer | `adetailer_enabled`、`adetailer_face_strength`、`adetailer_hand`、`adetailer_hand_strength`、`adetailer_hand_blend` |
+| 版本 | `version_app`、`version_diffusers`、`version_torch`、`version_transformers`、`version_python`、`version_cuda`、`version_gpu` |
+| 其它 | `watermark`、`workflow`、`timestamp` |
+
+- **模型哈希**按「路径+大小+修改时间」缓存到 `models_cache/file_hashes.json`，
+  同一个底模只算一次（否则每张图都要重读 2~7GB，保存会卡好几秒）。
+- 同时写入 A1111 兼容的 `parameters` 文本块，WebUI / Civitai 可直接识别。
+- 任何一个字段取不到都会写成 `unknown`，**元数据采集失败绝不影响出图**。
+
+### 2.5 水印
+
+「输出设置 → 💧 水印」中启用：
+
+| 选项 | 说明 |
+|------|------|
+| 文字 | 任意文本，带描边（深浅背景下都清晰） |
+| 图片 | 选择 PNG/JPG（建议带透明通道），会按画面宽度自适应缩放 |
+| 位置 | 右下 / 左下 / 右上 / 左上 / 居中 / 平铺 |
+| 透明度 | 0.05 ~ 1.0 |
+| 大小 | 0.3 ~ 3.0 倍 |
+
+- 同时配置文字与图片时**图片优先**；图片读取失败自动退回文字，两者都无效则不加。
+- 水印在**统一保存入口**施加：主出图、放大、大图都会加；
+  **XY 参数矩阵是诊断图，故意不加**（加会干扰参数对比）。
+- 水印是**烧进位图**的，导出后无法移除 —— 建议保留一份无水印原图。
+- 水印失败只记 warning 并保存原图，绝不让出图失败。
 
 ---
 

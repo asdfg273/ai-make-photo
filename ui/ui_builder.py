@@ -89,8 +89,8 @@ class UIBuilderMixin:
 
         # 启动时回填画廊
         try:
-            from utils.paths import OUTPUT_DIR
-            self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
+            from utils.paths import host_output_dir
+            self.gallery.reload_from_dir(host_output_dir(self), limit=80)
         except Exception as e:
             logger.warning(f"⚠️ 画廊初始化失败: {e}")
 
@@ -149,9 +149,10 @@ class UIBuilderMixin:
                 self.stop_video()
                 self.right_stacked.setCurrentIndex(0)
                 try:
-                    from utils.paths import OUTPUT_DIR
+                    from utils.paths import host_output_dir
                     if hasattr(self, 'gallery'):
-                        self.gallery.reload_from_dir(OUTPUT_DIR, limit=80)
+                        self.gallery.reload_from_dir(
+                            host_output_dir(self), limit=80)
                 except Exception as e:
                     logger.warning(f"⚠️ 画廊刷新失败: {e}")
             else:
@@ -1461,7 +1462,9 @@ class UIBuilderMixin:
         go = QFormLayout(grp_out)
         self.combo_output_dir = QComboBox()
         self.combo_output_dir.setEditable(True)
-        self.combo_output_dir.addItem("outputs/")
+        # 默认显示真实目录（photo/），不再用与实际不符的占位值 "outputs/"
+        from utils.paths import default_output_dir
+        self.combo_output_dir.addItem(default_output_dir())
         go.addRow("输出目录:", self.combo_output_dir)
 
         self.combo_img_format = QComboBox()
@@ -2420,7 +2423,8 @@ class UIBuilderMixin:
 
     def _open_output_folder(self):
         import subprocess
-        from utils.paths import OUTPUT_DIR
+        from utils.paths import host_output_dir
+        OUTPUT_DIR = host_output_dir(self)
         if not os.path.exists(OUTPUT_DIR):
             os.makedirs(OUTPUT_DIR, exist_ok=True)
         try:

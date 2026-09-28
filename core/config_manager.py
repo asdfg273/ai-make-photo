@@ -81,6 +81,16 @@ class AppConfig:
     output_format: str = "PNG"
     output_dir: str = "outputs/"
 
+    # ── 水印 ──────────────────────────────────────────────
+    # 文字与图片可同时配置；都有时**图片优先**（图片水印通常更正式），
+    # 图片加载失败会自动退回文字。位置可选右下/左下/右上/左上/居中/平铺。
+    watermark_enabled: bool = False
+    watermark_text: str = ""
+    watermark_image: str = ""            # 自定义图片水印路径
+    watermark_position: str = "右下"
+    watermark_opacity: float = 0.6       # 0.02 ~ 1.0
+    watermark_scale: float = 1.0         # 0.2 ~ 5.0
+
     # 历史记录
     recent_models: List[str] = field(default_factory=list)
     recent_prompts: List[str] = field(default_factory=list)

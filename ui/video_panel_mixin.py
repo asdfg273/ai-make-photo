@@ -694,8 +694,8 @@ class VideoPanelMixin:
         gallery = getattr(self, 'gallery', None)
         if gallery is not None:
             try:
-                from utils.paths import OUTPUT_DIR
-                gallery.reload_from_dir(OUTPUT_DIR, limit=80)
+                from utils.paths import host_output_dir
+                gallery.reload_from_dir(host_output_dir(self), limit=80)
             except Exception as e:
                 logger.warning(f'⚠️ 画廊刷新失败: {e}')
         # 旧 video_list 已隐藏（v6 统一画廊），不再填缩略图
