@@ -840,7 +840,8 @@ class ShellMixin:
         a_wf_run.triggered.connect(self._run_workflow_from_ui)
         m_wf.addAction(a_wf_run)
 
-        a_wf_check = QAction("✅ 检查当前工作流", self)
+        a_wf_check = QAction("🩺 预检当前工作流", self)
+        a_wf_check.setToolTip("运行前预检：模型/LoRA/VAE/ControlNet/显存/输出目录/依赖")
         a_wf_check.triggered.connect(self._check_workflow_from_ui)
         m_wf.addAction(a_wf_check)
         m_wf.addSeparator()
@@ -967,26 +968,21 @@ class ShellMixin:
             return None
 
     def _check_workflow_from_ui(self):
-        """只做校验 + 资源清单，不执行。"""
+        """预检当前界面会生成的工作流：不执行，只报错误/警告/提示。"""
         from PyQt6.QtWidgets import QMessageBox
         wf = self._workflow_from_ui_or_warn()
         if wf is None:
             return
         try:
-            from workflow import graph as _G, resource_manager
-            issues = _G.validate(wf)
-            errs = [i for i in issues if i.level == "error"]
-            rep = resource_manager.summary(wf)
-            head = ("✅ 校验通过" if not errs
-                    else f"❌ 校验未通过（{len(errs)} 个错误）")
-            body = "\n".join(f"· {i}" for i in (errs or issues)[:10])
-            QMessageBox.information(
-                self, "🧩 当前工作流",
-                f"{head}\n\n节点链：\n{_describe_chain(wf)}\n\n"
-                + (f"问题：\n{body}\n\n" if body else "")
-                + rep["text"])
+            from workflow.preflight import run_preflight
+            res = run_preflight(wf, host=self, ai=getattr(self, "ai", None))
+            text = (f"节点链：\n{_describe_chain(wf)}\n\n" + res.to_text())
+            if res.errors:
+                QMessageBox.warning(self, "🩺 预检未通过", text)
+            else:
+                QMessageBox.information(self, "🩺 预检结果", text)
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"检查失败:\n{e}")
+            QMessageBox.critical(self, "错误", f"预检失败:\n{e}")
 
     def _run_workflow_from_ui(self):
         """按当前界面设置生成工作流并立即执行（在工作线程里跑）。"""

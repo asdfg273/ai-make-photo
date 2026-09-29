@@ -61,7 +61,31 @@ class AppConfig:
     use_hires: bool = False
     hires_denoise: float = 0.45
 
+    # ── 高清修复方式与顺序 ──────────────────────────────────
+    # hires_mode:
+    #   "auto"   跟随显存自动选（<10GB → 分块）
+    #   "latent" 整图 latent 放大 + 一次 img2img（快，但显存吃紧）
+    #   "tiled"  分块重绘 + 边缘融合（8GB 卡推荐，能出 2K~4K）
+    # hires_order:
+    #   "hires_first"    基础图 → 高清 → 修脸（先提清晰度再修脸，脸更锐）
+    #   "adetailer_first" 基础图 → 修脸 → 高清（先修脸再放大，脸更自然但可能被二次模糊）
+    # 两种顺序对人脸效果不同，交给用户决定。
+    hires_mode: str = "auto"
+    hires_order: str = "hires_first"
+    # 分块参数（hires_mode="tiled" 时生效）
+    hires_tile_size: int = 640
+    hires_tile_overlap: int = 48
+
     freeu_enabled: bool = False
+
+    # ── 区域提示词 / 局部重绘 ──────────────────────────────
+    # 每个区域是一个 dict（与 core.regional.Region 字段一致）：
+    #   {"name","prompt","negative","weight","shape","rect","mask_path",
+    #    "color","enabled","feather","controlnet","adetailer"}
+    # rect 是**归一化**的 (x0,y0,x1,y1)；shape="mask" 时用 mask_path 的黑白图。
+    # 生成时按区域逐个做蒙版重绘（权重=该区域重绘强度）。
+    use_regions: bool = False
+    regions: List[dict] = field(default_factory=list)
 
     # CLIP Skip：0=关闭（用最后一层）, 1=倒数第二层（社区常说 CLIP skip 2）
     # 动漫向底模（Pony/Illustrious/NoobAI/多数 SD1.5 二次元）多在倒数第二层

@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import math
 
+from workflow import adapters as adapters_mod
 from workflow.registry import node
 from workflow.schema import (DataType, ParamSpec, PortSpec,
                              ResourceRequirement)
@@ -183,13 +184,14 @@ def run_hires_fix(ctx, node, inputs):
     if adapter is None:
         raise RuntimeError("模型没有适配器，无法确定 img2img 调用方式")
     if not getattr(adapter.caps, "hires", True):
-        raise RuntimeError(
-            f"{model.arch_id} 架构不支持 Hires.fix（适配器声明 hires=False）")
+        raise adapters_mod.UnsupportedFeatureError(
+            "高清修复", model.arch_id)
 
     pipe = adapter.pipe(model, "img2img")
     if pipe is None:
-        raise RuntimeError(
-            f"{model.arch_id} 架构没有可用的 img2img 管线，无法执行 Hires.fix")
+        raise adapters_mod.UnsupportedFeatureError(
+            "高清修复", model.arch_id,
+            "该架构没有可用的 img2img 管线")
 
     scale = float(node.params.get("scale", "2.0"))
     denoise = float(node.params.get("denoise", 0.45))

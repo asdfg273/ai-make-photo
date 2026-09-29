@@ -173,6 +173,41 @@ def _build_advanced(host) -> CollapsibleSection:
     gh.addRow(host.lbl_ad_hand_blend, host.scale_ad_hand_blend)
     layout.addWidget(grp_hand)
 
+    # ---------- 🎯 区域提示词 ----------
+    # 复杂画面想分别控制"脸/衣服/背景"时用。这里只放一个开关 + 入口按钮，
+    # 具体在图上拖框的操作用独立对话框（普通用户不需要懂工作流）。
+    grp_region = QGroupBox("🎯 区域提示词 / 局部重绘")
+    gr = QFormLayout(grp_region)
+
+    host.chk_use_regions = QCheckBox("启用区域提示词")
+    host.chk_use_regions.setToolTip(
+        "生成后按区域逐个局部重绘：每个区域可以用自己的提示词、\n"
+        "局部负面词和权重（权重=该区域重绘强度）\n"
+        "适合：脸部/衣服/背景分别描述，或局部改某一块")
+    gr.addRow(host.chk_use_regions)
+
+    region_row = QHBoxLayout()
+    host.btn_edit_regions = QPushButton("🎯 编辑区域…")
+    host.btn_edit_regions.setToolTip(
+        "在画布上拖出矩形区域，每个区域写自己的提示词\n"
+        "也可以导入黑白蒙版图做不规则区域")
+    # 用 _wire 而不是 host.method.connect：宿主缺方法时只告警不崩
+    # （页面隔离 / 契约测试的 MiniApp 桩就是这种情况）
+    _wire(host, host.btn_edit_regions.clicked, "open_region_editor")
+    region_row.addWidget(host.btn_edit_regions, 1)
+
+    host.btn_clear_regions = QPushButton("🗑 清空")
+    host.btn_clear_regions.setToolTip("清空所有区域")
+    _wire(host, host.btn_clear_regions.clicked, "clear_regions")
+    region_row.addWidget(host.btn_clear_regions)
+    gr.addRow(region_row)
+
+    host.lbl_regions_summary = QLabel("（未设置区域）")
+    host.lbl_regions_summary.setWordWrap(True)
+    host.lbl_regions_summary.setStyleSheet("color:#7f849c; font-size:11px;")
+    gr.addRow(host.lbl_regions_summary)
+    layout.addWidget(grp_region)
+
     # ---------- FreeU ----------
     host.chk_freeu = QCheckBox("✨ FreeU 细节增强")
     host.chk_freeu.setToolTip(
@@ -223,6 +258,24 @@ def _build_advanced(host) -> CollapsibleSection:
     host.combo_hires_upscaler.addItems([
         "Latent", "ESRGAN_4x", "R-ESRGAN 4x+", "SwinIR"])
     ghr.addRow("Upscaler:", host.combo_hires_upscaler)
+
+    # 高清方式：8GB 卡整图 img2img 很容易爆显存，分块是更实际的选择
+    host.combo_hires_mode = QComboBox()
+    host.combo_hires_mode.addItems(["自动", "整图 (快)", "分块 (省显存)"])
+    host.combo_hires_mode.setToolTip(
+        "整图：latent 放大后一次性重绘，速度快但显存吃紧\n"
+        "分块：切成小块逐块重绘再融合，8GB 卡也能出 2K~4K\n"
+        "自动：按显存决定（<10GB 用分块）")
+    ghr.addRow("高清方式:", host.combo_hires_mode)
+
+    # 顺序：先高清还是先修脸，对人脸效果不同
+    host.combo_hires_order = QComboBox()
+    host.combo_hires_order.addItems(["先高清后修脸", "先修脸后高清"])
+    host.combo_hires_order.setToolTip(
+        "先高清后修脸：放大后再修脸，脸更锐利清晰\n"
+        "先修脸后高清：先修好脸再放大，脸更自然（放大时可能被二次柔化）\n"
+        "两种顺序效果不同，按需要选")
+    ghr.addRow("高清/修脸顺序:", host.combo_hires_order)
     layout.addWidget(grp_hr)
 
     # ---------- 大图生成 ----------

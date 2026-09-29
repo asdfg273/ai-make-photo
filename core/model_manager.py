@@ -248,6 +248,30 @@ class ModelManager(metaclass=SingletonMeta):
         cls_name = type(sched).__name__
         return "FlowMatch" in cls_name or "RectifiedFlow" in cls_name
 
+    # ------------------------------------------------------------------
+    #  统一能力描述（模型加载后生成）
+    # ------------------------------------------------------------------
+    @property
+    def capabilities(self):
+        """当前模型的能力描述（`workflow.adapters.ModelCapabilities`）。
+
+        界面与节点都该问它"能不能做某事"，而不是判断模型名：
+            if ai.capabilities.supports_controlnet: ...
+            ai.capabilities.require("hires_fix")   # 不支持就抛明确的异常
+
+        没加载模型时返回 None —— 调用方要自己处理"还没加载"这种情况，
+        不要在这里编一个默认能力出来（那样会掩盖真正的问题）。
+        """
+        arch = getattr(self, "current_arch_id", None)
+        if not arch:
+            return None
+        try:
+            from workflow import adapters
+            return adapters.capabilities_for(arch)
+        except Exception as e:
+            logger.debug(f"能力描述生成失败（arch={arch}）: {e}")
+            return None
+
     def load_model(self, model_name):
         import warnings
         warnings.filterwarnings("ignore", message=".*kept in float32.*")

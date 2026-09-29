@@ -33,11 +33,11 @@ logger = logging.getLogger(__name__)
              "metadata": PortSpec(DataType.METADATA, "信息")},
     params={
         "path": ParamSpec("str", default="", label="模型",
-                          help="models/ 下的文件名，或绝对路径"),
+                          source="checkpoints",
+                          help="models/ 下的文件名，或绝对路径；"
+                               "界面会列出本地已下载的底模供下拉选择"),
         "clip_skip": ParamSpec("int", default=0, label="CLIP Skip",
                                minimum=0, maximum=12),
-        "sampler": ParamSpec("str", default="", label="采样器",
-                             help="留空则不改变当前采样器"),
     },
     resources=ResourceRequirement(requires=("cuda", "model"),
                                   estimated_vram_mb=6400,
@@ -75,12 +75,13 @@ def run_load_checkpoint(ctx, node, inputs):
                 logger.info(f"ℹ️ CLIP Skip 不适用: {why}")
         except Exception as e:
             logger.warning(f"⚠️ CLIP Skip 应用失败（忽略）: {e}")
+    # ⚠️ 这里**不再**切换采样器：采样器是 Sampler 节点的参数，不属于"加载底模"。
+    # 老工作流里残留的 `sampler` 参数会被忽略（不再生效），避免两个地方都能改
+    # 采样器、还互相覆盖。
     sampler = (node.params.get("sampler") or "").strip()
     if sampler:
-        try:
-            ai.switch_sampler(sampler)
-        except Exception as e:
-            logger.warning(f"⚠️ 采样器切换失败（忽略）: {e}")
+        logger.info("ℹ️ LoadCheckpoint 上的 sampler 参数已废弃，"
+                    "采样器请在 Sampler 节点里设置（本次忽略）")
 
     model = ModelRef(
         name=getattr(ai, "current_model_name", name) or name,
@@ -92,10 +93,17 @@ def run_load_checkpoint(ctx, node, inputs):
         scheduler=getattr(ai.txt2img_pipe, "scheduler", None),
         is_sdxl=bool(getattr(ai, "is_sdxl", False)),
         clip_skip=cs, dtype=getattr(ai, "dtype", None), loaded=True,
-        meta={"sampler": sampler})
+        meta={"capabilities": adapters_mod.capabilities_for(arch).to_dict()})
+    caps = adapters_mod.capabilities_for(arch)
     meta = {"model": model.name, "model_path": model.path,
-            "architecture": arch, "adapter": adapter.describe()}
+            "architecture": arch, "adapter": adapter.describe(),
+            "capabilities": caps.to_dict()}
     ctx.metadata.update(meta)
+    # 把能力描述挂到上下文，供后续节点直接判断能力（而不是判断模型名）
+    try:
+        ctx.capabilities = caps
+    except Exception:
+        pass
 
     vae = VaeRef(name=os.path.basename(model.path or "vae"), path=model.path,
                  vae=model.vae)
@@ -111,7 +119,10 @@ def run_load_checkpoint(ctx, node, inputs):
     outputs={"model": PortSpec(DataType.MODEL, "模型"),
              "vae": PortSpec(DataType.VAE, "VAE")},
     params={"path": ParamSpec("str", default="", label="VAE 文件",
-                              help="models/ 或 weights/ 下的文件名")},
+                              source="vae",
+                              help="models/ 或 weights/ 下的文件名，"
+                                   "也可以直接填绝对路径；"
+                                   "界面会列出本地 VAE 供下拉选择")},
     resources=ResourceRequirement(requires=("model",),
                                   estimated_vram_mb=300,
                                   supports_cpu_offload=True),
@@ -171,13 +182,25 @@ def run_load_vae(ctx, node, inputs):
              "lora": PortSpec(DataType.LORA, "LoRA"),
              "metadata": PortSpec(DataType.METADATA, "信息")},
     params={
-        "lora_1": ParamSpec("str", default="", label="LoRA 1"),
+        "lora_1": ParamSpec("str", default="", label="LoRA 1",
+                            source="loras",
+                            help="loras/ 下的文件名（可含子目录），"
+                                 "也可以填绝对路径；"
+                                 "界面会列出本地 LoRA 供下拉选择"),
         "weight_1": ParamSpec("float", default=0.8, label="权重 1",
                               minimum=-2.0, maximum=2.0, step=0.05),
-        "lora_2": ParamSpec("str", default="", label="LoRA 2"),
+        "lora_2": ParamSpec("str", default="", label="LoRA 2",
+                            source="loras",
+                            help="loras/ 下的文件名（可含子目录），"
+                                 "也可以填绝对路径；"
+                                 "界面会列出本地 LoRA 供下拉选择"),
         "weight_2": ParamSpec("float", default=0.8, label="权重 2",
                               minimum=-2.0, maximum=2.0, step=0.05),
-        "lora_3": ParamSpec("str", default="", label="LoRA 3"),
+        "lora_3": ParamSpec("str", default="", label="LoRA 3",
+                            source="loras",
+                            help="loras/ 下的文件名（可含子目录），"
+                                 "也可以填绝对路径；"
+                                 "界面会列出本地 LoRA 供下拉选择"),
         "weight_3": ParamSpec("float", default=0.8, label="权重 3",
                               minimum=-2.0, maximum=2.0, step=0.05),
     },

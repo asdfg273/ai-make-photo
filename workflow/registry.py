@@ -30,7 +30,10 @@ BUILTIN_NODE_MODULES = (
     "nodes.control_nodes",
     "nodes.adapter_nodes",
     "nodes.detailer_nodes",
+    "nodes.regional_nodes",
     "nodes.upscale_nodes",
+    "nodes.tile_nodes",
+    "nodes.postprocess_nodes",
     "nodes.video_nodes",
 )
 

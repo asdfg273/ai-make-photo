@@ -29,11 +29,30 @@ from workflow.schema import DataType, Node, Workflow, types_compatible
 
 logger = logging.getLogger(__name__)
 
-NODE_W = 190
+NODE_W = 236
 PORT_R = 5.0
 HEADER_H = 26.0
 ROW_H = 20.0
 PAD = 8.0
+INLINE_H = 22          # 内嵌参数控件高度
+PARAM_LABEL_W = 76     # 卡片内参数标签占的宽度
+PREVIEW_SIZE = 104     # 卡片内图片预览的边长
+
+# 内嵌控件配色（跟随主题的暗色，避免默认白底在深色画布上刺眼）
+_INLINE_QSS = """
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background:#1e1e2e; color:#cdd6f4; border:1px solid #45475a;
+    border-radius:3px; padding:1px 4px; font-size:11px;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    border:1px solid #89b4fa;
+}
+QComboBox::drop-down { width:14px; border:0; }
+QComboBox QAbstractItemView {
+    background:#1e1e2e; color:#cdd6f4; selection-background-color:#45475a;
+}
+QCheckBox { color:#cdd6f4; font-size:11px; }
+"""
 
 # 各状态配色
 STATUS_COLORS = {
@@ -53,11 +72,51 @@ TYPE_COLORS = {
     DataType.CONTROL_IMAGE: "#94e2d5", DataType.LORA: "#f5c2e7",
     DataType.SCHEDULER: "#b4befe", DataType.NUMBER: "#89dceb",
     DataType.BOOLEAN: "#89dceb", DataType.METADATA: "#7f849c",
+    DataType.REGIONS: "#f38ba8",
 }
 
 
 def _type_color(t: DataType) -> str:
     return TYPE_COLORS.get(t, "#9399b2")
+
+
+# ---- 缩略图缓存：同一个路径不重复解码（画布重绘很频繁）----
+_THUMB_CACHE: dict = {}
+_THUMB_ORDER: list = []
+_THUMB_MAX = 64
+
+
+def load_thumbnail(path: str, size: int = PREVIEW_SIZE):
+    """把图片读成小缩略图；失败返回 (None, 原因)。带 LRU 缓存。"""
+    if not path:
+        return None, ""
+    key = (str(path), size)
+    if key in _THUMB_CACHE:
+        return _THUMB_CACHE[key]
+    result = (None, "")
+    try:
+        import os
+        if not os.path.isfile(path):
+            result = (None, "文件不存在")
+        else:
+            from PIL import Image
+            from PyQt6.QtGui import QImage, QPixmap
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((size, size), Image.LANCZOS)
+                data = im.tobytes("raw", "RGB")
+                qimg = QImage(data, im.width, im.height, im.width * 3,
+                              QImage.Format.Format_RGB888)
+                result = (QPixmap.fromImage(qimg.copy()), "")
+    except Exception as e:
+        logger.debug(f"缩略图加载失败 {path}: {e}")
+        result = (None, str(e)[:40])
+    _THUMB_CACHE[key] = result
+    _THUMB_ORDER.append(key)
+    while len(_THUMB_ORDER) > _THUMB_MAX:
+        old = _THUMB_ORDER.pop(0)
+        _THUMB_CACHE.pop(old, None)
+    return result
 
 
 # ======================================================================
@@ -111,6 +170,16 @@ class NodeItem(QGraphicsItem):
         self.cached = False
         self.ports_in: dict[str, PortItem] = {}
         self.ports_out: dict[str, PortItem] = {}
+        # 内嵌参数控件（QGraphicsProxyWidget 承载真实 Qt 控件）
+        self.param_widgets: dict[str, object] = {}
+        self.param_proxies: list = []
+        self.param_rows: list = []
+        self._param_base_y = 0.0
+        # 卡片内图片预览：参考图（来自路径）或运行后节点自己产出的图
+        self.preview_pixmap = None
+        self.preview_note = ""
+        self._preview_param = ""
+        self._preview_h = 0.0
         self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsMovable
                       | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
                       | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
@@ -125,7 +194,8 @@ class NodeItem(QGraphicsItem):
         n_in = len(self.spec.inputs)
         n_out = len(self.spec.outputs)
         rows = max(n_in, n_out, 1)
-        self.h = HEADER_H + rows * ROW_H + PAD
+        self._ports_h = HEADER_H + rows * ROW_H + PAD
+        self.h = self._ports_h
 
         for i, (name, ps) in enumerate(self.spec.inputs.items()):
             p = PortItem(self, name, ps.type, is_output=False)
@@ -135,6 +205,260 @@ class NodeItem(QGraphicsItem):
             p = PortItem(self, name, ps.type, is_output=True)
             p.setPos(NODE_W, HEADER_H + i * ROW_H + ROW_H / 2)
             self.ports_out[name] = p
+
+    # ------------------------------------------------------------------
+    #  内嵌参数：把参数做进节点卡片里，用户不用来回看右侧面板
+    # ------------------------------------------------------------------
+    def build_param_widgets(self, node: "Node", on_change) -> None:
+        """为每个参数建一个紧凑控件，直接嵌进卡片。
+
+        `on_change(param_name, value)` 由场景层接上，用于写回数据层。
+        长文本（text）在卡片里用单行输入框（省空间），完整多行编辑仍在右侧面板。
+        """
+        from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox,
+                                     QGraphicsProxyWidget, QLineEdit,
+                                     QSpinBox)
+
+        self.param_widgets.clear()
+        self.param_proxies = []
+        self.param_rows = []
+
+        # ---- 图片预览区（图生图/参考图节点用）----
+        # 规则：参数里带 source="images" 的节点（LoadImage）→ 按路径直接出缩略图；
+        # 其余节点等运行完由 set_preview_image() 填。这样"加了参考图就能在
+        # 模块里看到图"，不用去猜路径填对没有。
+        self._preview_param = ""
+        for nm, pspec in self.spec.params.items():
+            if getattr(pspec, "source", "") == "images":
+                self._preview_param = nm
+                break
+        self._preview_h = (PREVIEW_SIZE + 6) if self._preview_param else 0.0
+        if self._preview_param:
+            self.refresh_preview_from_path(
+                node.params.get(self._preview_param, ""))
+
+        if not self.spec.params:
+            self.h = self._ports_h + self._preview_h
+            return
+
+        y = self._ports_h + self._preview_h + 4
+        for name, pspec in self.spec.params.items():
+            label = (pspec.label or name)
+            self.param_rows.append((name, label, y))
+            cur = node.params.get(name, pspec.default)
+            w = None
+            try:
+                if pspec.kind == "bool":
+                    w = QCheckBox()
+                    w.setChecked(bool(cur))
+                    w.toggled.connect(
+                        lambda v, n=name: on_change(n, bool(v)))
+                elif pspec.kind in ("int", "seed"):
+                    w = QSpinBox()
+                    lo = int(pspec.minimum) if pspec.minimum is not None else (
+                        -1 if pspec.kind == "seed" else -10 ** 9)
+                    hi = int(pspec.maximum) if pspec.maximum is not None else (
+                        2_147_483_647 if pspec.kind == "seed" else 10 ** 9)
+                    w.setRange(lo, hi)
+                    w.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+                    if pspec.kind == "seed":
+                        w.setSpecialValueText("随机")
+                    try:
+                        w.setValue(int(cur))
+                    except Exception:
+                        w.setValue(lo)
+                    w.valueChanged.connect(
+                        lambda v, n=name: on_change(n, int(v)))
+                elif pspec.kind == "float":
+                    w = QDoubleSpinBox()
+                    w.setDecimals(3)
+                    w.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+                    lo = float(pspec.minimum) if pspec.minimum is not None else -1e9
+                    hi = float(pspec.maximum) if pspec.maximum is not None else 1e9
+                    w.setRange(lo, hi)
+                    if pspec.step:
+                        w.setSingleStep(float(pspec.step))
+                    try:
+                        w.setValue(float(cur))
+                    except Exception:
+                        w.setValue(lo)
+                    w.valueChanged.connect(
+                        lambda v, n=name: on_change(n, float(v)))
+                elif pspec.kind == "choice":
+                    w = QComboBox()
+                    w.addItems([str(c) for c in pspec.choices])
+                    i = w.findText("" if cur is None else str(cur))
+                    w.setCurrentIndex(i if i >= 0 else 0)
+                    w.currentTextChanged.connect(
+                        lambda v, n=name: on_change(n, str(v)))
+                elif pspec.source:
+                    # ★ 本地文件参数（底模 / LoRA / VAE / 图片）→ 下拉框，
+                    #   用户从**已下载的本地文件**里选，不用手打文件名。
+                    #   仍然可编辑，方便填绝对路径或还没进目录的文件。
+                    w = QComboBox()
+                    w.setEditable(True)
+                    w.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+                    opts = []
+                    try:
+                        from ui.workflow_editor import param_sources
+                        opts = param_sources.options_for(pspec.source)
+                    except Exception as e:
+                        logger.debug(f"参数选项加载失败 {pspec.source}: {e}")
+                    w.addItem("")
+                    w.addItems(opts)
+                    i = w.findText("" if cur is None else str(cur))
+                    if i >= 0:
+                        w.setCurrentIndex(i)
+                    else:
+                        w.setEditText("" if cur is None else str(cur))
+                    w.currentTextChanged.connect(
+                        lambda v, n=name: on_change(n, str(v)))
+                    src_label = ""
+                    try:
+                        from ui.workflow_editor import param_sources
+                        src_label = param_sources.describe(pspec.source)
+                    except Exception:
+                        pass
+                    w.setToolTip(
+                        f"{label}：{src_label}共 {len(opts)} 个可选\n"
+                        f"（也可直接粘贴绝对路径）"
+                        + (f"\n{pspec.help}" if pspec.help else ""))
+                else:
+                    w = QLineEdit()
+                    w.setText("" if cur is None else str(cur))
+                    w.textChanged.connect(
+                        lambda v, n=name: on_change(n, str(v)))
+            except Exception as e:
+                logger.warning(f"内嵌控件创建失败 {self.ntype}.{name}: {e}")
+                w = None
+
+            self.param_widgets[name] = w
+            if w is None:
+                continue
+
+            if not pspec.source:
+                w.setToolTip(f"{label}"
+                             + (f"\n{pspec.help}" if pspec.help else ""))
+            w.setStyleSheet(_INLINE_QSS)
+            w.setFixedHeight(INLINE_H)
+            proxy = QGraphicsProxyWidget(self)
+            proxy.setWidget(w)
+            proxy.setPos(PARAM_LABEL_W, y)
+            proxy.resize(NODE_W - PARAM_LABEL_W - PAD, INLINE_H)
+            self.param_proxies.append(proxy)
+            y += INLINE_H + 2
+
+        self.h = y + PAD
+
+    # ------------------------------------------------------------------
+    #  图片预览
+    # ------------------------------------------------------------------
+    def refresh_preview_from_path(self, path: str) -> None:
+        """参考图路径变化 → 重新出缩略图（LoadImage 这类节点）。"""
+        pix, err = load_thumbnail(path or "")
+        self.preview_pixmap = pix
+        if not path:
+            self.preview_note = "未选择参考图"
+        elif pix is None:
+            self.preview_note = err or "无法读取"
+        else:
+            self.preview_note = ""
+        self.update()
+
+    def set_preview_image(self, image, note: str = "") -> None:
+        """运行后把节点产出的图渲染进卡片（缩略图，避免占内存）。"""
+        pix = None
+        try:
+            from PyQt6.QtGui import QImage, QPixmap
+            from PIL import Image
+            if isinstance(image, Image.Image):
+                im = image.convert("RGB")
+                im.thumbnail((PREVIEW_SIZE, PREVIEW_SIZE), Image.LANCZOS)
+                data = im.tobytes("raw", "RGB")
+                qimg = QImage(data, im.width, im.height, im.width * 3,
+                              QImage.Format.Format_RGB888)
+                pix = QPixmap.fromImage(qimg.copy())
+            elif isinstance(image, str) and image:
+                pix, err = load_thumbnail(image)
+                if pix is None:
+                    note = note or err
+        except Exception as e:
+            logger.debug(f"节点预览失败 {self.node_id}: {e}")
+            note = note or str(e)[:40]
+        self.preview_pixmap = pix
+        self.preview_note = note if pix is None else ""
+        if self._preview_param == "" and pix is not None:
+            self._preview_h = PREVIEW_SIZE + 6
+        self.update()
+
+    def clear_preview_image(self) -> None:
+        if self._preview_param:
+            return          # 参考图节点由路径驱动，不清
+        self.preview_pixmap = None
+        self.preview_note = ""
+        self._preview_h = 0.0
+        self.update()
+
+    def _paint_preview(self, painter: QPainter, top: float) -> None:
+        """在卡片里画一块预览区（图 + 说明）。"""
+        box = QRectF(PAD, top + 2, NODE_W - PAD * 2, PREVIEW_SIZE)
+        painter.setBrush(QBrush(QColor("#181825")))
+        painter.setPen(QPen(QColor("#313244"), 1))
+        painter.drawRoundedRect(box, 4, 4)
+
+        if self.preview_pixmap is not None and not self.preview_pixmap.isNull():
+            pm = self.preview_pixmap
+            # 等比缩放居中放进去
+            scaled = pm.scaled(
+                int(box.width()) - 4, int(box.height()) - 4,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            painter.drawPixmap(
+                int(box.x() + (box.width() - scaled.width()) / 2),
+                int(box.y() + (box.height() - scaled.height()) / 2),
+                scaled)
+            if self.preview_note:
+                painter.setPen(QPen(QColor("#f9e2af")))
+                f = QFont()
+                f.setPointSize(7)
+                painter.setFont(f)
+                painter.drawText(box.adjusted(3, 0, -3, -2),
+                                 int(Qt.AlignmentFlag.AlignBottom
+                                     | Qt.AlignmentFlag.AlignHCenter),
+                                 self.preview_note)
+        else:
+            painter.setPen(QPen(QColor("#6c7086")))
+            f = QFont()
+            f.setPointSize(8)
+            painter.setFont(f)
+            painter.drawText(box,
+                             int(Qt.AlignmentFlag.AlignCenter),
+                             self.preview_note or "（无预览）")
+
+    def set_param_widget(self, name: str, value) -> None:
+        w = self.param_widgets.get(name)
+        if w is None:
+            return
+        w.blockSignals(True)
+        try:
+            from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox,
+                                         QLineEdit, QSpinBox)
+            if isinstance(w, QCheckBox):
+                w.setChecked(bool(value))
+            elif isinstance(w, QSpinBox):
+                w.setValue(int(value))
+            elif isinstance(w, QDoubleSpinBox):
+                w.setValue(float(value))
+            elif isinstance(w, QComboBox):
+                i = w.findText(str(value))
+                if i >= 0:
+                    w.setCurrentIndex(i)
+            elif isinstance(w, QLineEdit):
+                w.setText("" if value is None else str(value))
+        except Exception as e:
+            logger.debug(f"同步参数控件失败 {name}: {e}")
+        finally:
+            w.blockSignals(False)
 
     def boundingRect(self) -> QRectF:
         return QRectF(-2, -2, NODE_W + 4, self.h + 4)
@@ -185,6 +509,26 @@ class NodeItem(QGraphicsItem):
             painter.drawText(QRectF(NODE_W / 2, y, NODE_W / 2 - PAD - 8, ROW_H),
                              int(Qt.AlignmentFlag.AlignVCenter
                                  | Qt.AlignmentFlag.AlignRight), name)
+
+        # ---- 内嵌参数区：分隔线 + 每行左侧标签 ----
+        if self._preview_h:
+            self._paint_preview(painter, self._ports_h)
+        if self.param_rows:
+            sep_y = self._ports_h + 1
+            painter.setPen(QPen(QColor("#45475a"), 1))
+            painter.drawLine(QPointF(PAD, sep_y), QPointF(NODE_W - PAD, sep_y))
+            f3 = QFont()
+            f3.setPointSize(8)
+            painter.setFont(f3)
+            painter.setPen(QPen(QColor("#9399b2")))
+            for _name, plabel, py in self.param_rows:
+                painter.drawText(
+                    QRectF(PAD, py, PARAM_LABEL_W - PAD - 4, INLINE_H),
+                    int(Qt.AlignmentFlag.AlignVCenter
+                        | Qt.AlignmentFlag.AlignLeft),
+                    painter.fontMetrics().elidedText(
+                        plabel, Qt.TextElideMode.ElideRight,
+                        int(PARAM_LABEL_W - PAD - 6)))
 
         if self.error:
             painter.setPen(QPen(QColor("#f38ba8")))
@@ -251,6 +595,7 @@ class GraphScene(QGraphicsScene):
     graphChanged = pyqtSignal()
     nodeSelected = pyqtSignal(str)          # node_id，"" 表示取消选择
     statusMessage = pyqtSignal(str)
+    paramChanged = pyqtSignal(str, str, object)   # node_id, param, value
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -273,8 +618,11 @@ class GraphScene(QGraphicsScene):
                 logger.warning(f"跳过未注册节点 {n.id} ({n.type})")
                 continue
             item = NodeItem(n.id, n.type)
+            # 参数控件要在算高度**之前**建好，否则节点框会按没有参数的高度画
+            item.build_param_widgets(
+                n, lambda name, val, nid=n.id: self._on_param_edit(nid, name, val))
             pos = positions.get(n.id)
-            if pos:
+            if pos is not None:
                 item.setPos(float(pos[0]), float(pos[1]))
             else:
                 item.setPos(auto_x, auto_y)
@@ -287,6 +635,41 @@ class GraphScene(QGraphicsScene):
         # 先摆好再连线
         for (src, sp, dst, dp) in wf.links:
             self._make_link(src, sp, dst, dp)
+
+    def _on_param_edit(self, node_id: str, name: str, value):
+        """卡片内控件被改动 → 写回数据层。"""
+        node = self.wf.node(node_id)
+        if node is None:
+            return
+        node.params[name] = value
+        self._maybe_refresh_preview(node_id, name, value)
+        self.paramChanged.emit(node_id, name, value)
+
+    def set_node_param(self, node_id: str, name: str, value):
+        """外部（右侧面板）改动 → 写回数据层并同步卡片内控件。"""
+        node = self.wf.node(node_id)
+        if node is None:
+            return
+        node.params[name] = value
+        item = self.node_items.get(node_id)
+        if item is not None:
+            item.set_param_widget(name, value)
+        self._maybe_refresh_preview(node_id, name, value)
+
+    def _maybe_refresh_preview(self, node_id: str, name: str, value):
+        """改的是参考图路径 → 立刻重画卡片里的预览图。"""
+        item = self.node_items.get(node_id)
+        if item is None or not item._preview_param:
+            return
+        if name == item._preview_param:
+            item.refresh_preview_from_path(str(value or ""))
+
+    def push_previews(self, images: dict):
+        """运行结束后把每个节点产出的图渲染进它的卡片。"""
+        for nid, img in (images or {}).items():
+            item = self.node_items.get(nid)
+            if item is not None:
+                item.set_preview_image(img)
 
     def clear_items(self):
         self._link_src = None
@@ -326,8 +709,10 @@ class GraphScene(QGraphicsScene):
         nid = self._unique_id(ntype)
         spec = registry.get(ntype)
         params = dict(spec.param_defaults())
-        self.wf.nodes.append(Node(nid, ntype, {}, params))
+        node = self.wf.add(Node(nid, ntype, {}, params))
         item = NodeItem(nid, ntype)
+        item.build_param_widgets(
+            node, lambda name, val, _nid=nid: self._on_param_edit(_nid, name, val))
         item.setPos(pos if pos is not None else QPointF(60, 60))
         self.addItem(item)
         self.node_items[nid] = item

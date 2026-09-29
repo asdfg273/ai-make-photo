@@ -41,6 +41,10 @@ class DataType(str, Enum):
     NUMBER = "NUMBER"
     BOOLEAN = "BOOLEAN"
     METADATA = "METADATA"
+    # 区域提示词：一串 `core.regional.Region`（区域定义）。
+    # 它不适合塞进 METADATA：METADATA 是"给人看的信息汇总"，
+    # 而 REGIONS 是**要参与校验的强类型数据**（连错端口必须在运行前报出来）。
+    REGIONS = "REGIONS"
     # 组合类型：SAMPLER 的输出既可能是 LATENT 也可能是 IMAGE，
     # 用 ANY 表示"不参与类型校验"的透传口（如元数据汇聚）。
     ANY = "ANY"
@@ -85,6 +89,12 @@ class ParamSpec:
     step: Optional[float] = None
     choices: tuple = ()
     help: str = ""
+    # 选项来源："" | "checkpoints" | "loras" | "vae" | "images"
+    # 给界面用的提示：非空表示这个参数是"用户机器上的本地文件"，界面可以
+    # 用它（见 ui/workflow_editor/param_sources.py）列出候选、渲染成下拉框，
+    # 免得用户自己背文件名；空字符串 = 自由文本，界面不做任何提示。
+    # 只影响界面呈现，不参与 coerce / 执行语义，放最后以便向后兼容。
+    source: str = ""
 
     def coerce(self, value):
         """把值转成该参数类型的规范形式；越界抛 ValueError。

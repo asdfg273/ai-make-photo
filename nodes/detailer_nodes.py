@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 
+from workflow import adapters as adapters_mod
 from workflow.registry import node
 from workflow.schema import (DataType, ParamSpec, PortSpec,
                              ResourceRequirement)
@@ -96,13 +97,14 @@ def run_adetailer(ctx, node, inputs):
     if adapter is None:
         raise RuntimeError("模型没有适配器，无法确定 inpaint 调用方式")
     if not getattr(adapter.caps, "adetailer", True):
-        raise RuntimeError(
-            f"{model.arch_id} 架构不支持 ADetailer（适配器声明 adetailer=False）")
+        raise adapters_mod.UnsupportedFeatureError(
+            "ADetailer(修脸/修手)", model.arch_id)
 
     inpaint_pipe = adapter.pipe(model, "inpaint")
     if inpaint_pipe is None:
-        raise RuntimeError(
-            f"{model.arch_id} 架构没有可用的 inpaint 管线，无法执行 ADetailer")
+        raise adapters_mod.UnsupportedFeatureError(
+            "ADetailer(修脸/修手)", model.arch_id,
+            "该架构没有可用的 inpaint 管线")
 
     target = str(node.params.get("target", "二次元脸部") or "二次元脸部").strip()
     strength = float(node.params.get("strength", 0.35))

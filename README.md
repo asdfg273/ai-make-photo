@@ -50,7 +50,7 @@
 - **完整出图元数据**：每张图都写入 40+ 项生成参数（含模型 SHA256、LoRA、ControlNet、Hires、ADetailer、依赖版本），并附带 A1111 兼容参数串，见 2.4
 - **水印**：支持文字 / 自定义图片水印，位置、透明度、大小可调，见 2.6
 - **工作流引擎 + 节点编辑器**：简易模式的操作会自动编译成一张工作流图，
-  高级用户可在画布上增删节点、连线、改参数并直接运行；21 个内置节点，
+  高级用户可在画布上增删节点、连线、改参数并直接运行；30 个内置节点，
   见 2.5（菜单栏 → 🧩 工作流）
 - **图像管理**：自动保存、历史记录、图片预览
 - **视频管理**：视频预览、历史画廊、双击播放
@@ -105,12 +105,450 @@
 | 🧩 打开工作流编辑器… | `Ctrl+W` | 打开空的节点编辑器 |
 | ✨ 用当前界面设置生成流程图 | — | 把当前设置编译成图并打开编辑器 |
 | ▶️ **用工作流引擎生成** | `Ctrl+Shift+W` | 编译并**立即执行**（走 workflow 引擎） |
-| ✅ 检查当前工作流 | — | 只做校验 + 资源清单，不执行 |
+| 🩺 预检当前工作流 | — | 运行前预检：模型 / LoRA / VAE / ControlNet / 显存 / 输出目录 / 依赖 |
 | 📂 打开工作流目录 | — | 打开 `workflows/`（保存的 JSON 都在这里） |
 
 编辑器内工具栏：新建 / 打开 / 保存 / 另存为 · 从当前界面生成 / 载入界面设置 ·
-校验 / 资源清单 / **运行** (`Ctrl+R`) / **只跑选中节点** (`Ctrl+Shift+R`) /
-取消 / 清空状态 / 删除选中 / 适应窗口 · 显存策略下拉。
+校验 / **预检** (`Ctrl+P`) / 资源清单 / **运行** (`Ctrl+R`) /
+**只跑选中节点** (`Ctrl+Shift+R`) / 取消 / 清空状态 / 删除选中 / 适应窗口 ·
+显存策略下拉。
+
+#### 参数直接在节点卡片上改
+
+参数**内嵌在节点卡片里**（不用来回看右侧面板），用户视线不用移动：
+
+```
+┌─────────────────────────────┐
+│ Sampler                     │
+├─────────────────────────────┤
+│ 步数      [ 28          ]   │
+│ CFG       [ 7.000       ]   │
+│ 种子      [ 随机        ]   │
+│ 宽        [ 512         ]   │
+│ 高        [ 768         ]   │
+│ 采样器    [ Euler a   ▾ ]   │
+└─────────────────────────────┘
+```
+
+- 短参数（数字 / 开关 / 下拉）在卡片内直接编辑，改完立即写回工作流数据。
+- **长文本参数**（提示词）卡片内是单行框，完整多行编辑仍在右侧面板；
+  两边**双向同步**，不会出现"改了这边那边没变"。
+- 右侧面板保留：节点说明、**输入端口连到了哪里**、**资源声明**
+  （显存峰值 / 是否支持 offload / 分块 / 依赖）。
+
+#### 本地文件用下拉框选，不用手打文件名
+
+模型 / LoRA / VAE / 参考图这类参数会**扫描本地已下载的文件**做成可编辑下拉框
+（`ui/workflow_editor/param_sources.py`），从列表里选即可；也仍可直接粘贴绝对路径。
+
+| 参数 | 下拉内容 | 本机实测 |
+|------|---------|---------|
+| `LoadCheckpoint.path` | 本地底模（各架构汇总） | 10 个 |
+| `LoadLoRA.lora_1~3` | 本地 LoRA（含子目录） | 14 个 |
+| `LoadVAE.path` | 本地 VAE | 3 个 |
+| `LoadImage.path` | 最近生成的图片（最新优先） | 40 个 |
+
+节点作者只需在 `ParamSpec` 上声明 `source="checkpoints"|"loras"|"vae"|"images"`，
+界面自动出现下拉框。
+
+#### 参考图/产出图直接在卡片里渲染
+
+图生图、ControlNet、IP-Adapter 这类节点，选了参考图后**卡片里立刻显示缩略图**，
+不用去猜路径填对没有；运行结束后每个节点还会把**自己产出的图**渲染回卡片，
+一眼能看出哪一步出了问题（哪一步图糊了、哪一步颜色跑了）。
+
+- 参考图：由 `LoadImage` 的路径参数驱动，选完立即出图；路径无效时卡片里显示原因
+  （"文件不存在"），而不是静默空白。
+- 产出图：执行器把每个节点的 IMAGE 输出一并返回（`res["images"]`），
+  编辑器转成缩略图塞进对应节点。
+- 缩略图一律压到 104px 并带 LRU 缓存，不会因为画布频繁重绘而反复解码大图。
+
+#### 后处理节点（加噪 / 模糊 / 锐化 / 调色 / 色调分离）
+
+`nodes/postprocess_nodes.py`，5 个纯 CPU/PIL 节点，显存占用为 0
+（`ResourceRequirement(requires=())`），可以直接串在出图后面：
+
+| 节点 | 参数 |
+|------|------|
+| `ImageNoise` | 噪点强度、类型（高斯/均匀/盐椒）、种子、单色噪点 |
+| `ImageBlur` | 半径、类型（高斯/方框/径向） |
+| `ImageSharpen` | 强度、半径、锐化百分比、阈值（USM） |
+| `ColorAdjust` | 亮度、对比度、饱和度、锐度 |
+| `ImagePosterize` | 保留位数、模式（色调分离/阈值/反相） |
+
+实测效果对比（每个节点真的有效果，含径向模糊与阈值）：
+
+![后处理节点效果对比](postprocess_nodes_preview.png)
+
+保证：不改动上游图（返回新对象，`amount=0` / 全默认参数时与原图逐字节一致）、
+尺寸不变、`ImageNoise` 固定种子可复现（`seed=-1` 为随机）。
+
+#### 分块高清修复（TiledHiresFix）— 8GB 卡也能出 2K/4K
+
+整图高清（`HiresFix`）是"latent 放大 → 一次性重绘"，显存吃紧；
+放大到 2K 在 8GB 卡上非常容易爆显存或疯狂换页。
+`TiledHiresFix` 走分块路线：
+
+```
+基础生成 → 放大图像 → 切成小块 → 逐块重绘细节 → 加权融合拼接 → （可选）ADetailer
+```
+
+参数（**你要求的 6 项全都有**）：
+
+| 参数 | 说明 | 8GB 建议 |
+|------|------|---------|
+| `scale` | 放大倍率 1.0~4.0 | 2.0 |
+| `tile_size` | 分块尺寸 | **640**（或 512） |
+| `overlap` | 重叠像素 | **48**（32~64） |
+| `denoise` | 重绘强度 | **0.35**（0.25~0.45） |
+| `upscale_method` | 放大方式 Lanczos / Bicubic / Nearest | Lanczos |
+| `blend` | 边缘融合：羽化 / 线性 / 硬切 | 羽化 |
+| `color_correct` | 块间色彩对齐（消除色差接缝） | 开 |
+| `vram_mode` | 显存模式：自动 / 省显存 / 平衡 / 高性能 | 自动 |
+| `max_tiles` | 安全阀：预计块数超限直接报错，不跑到一半 OOM | 0 |
+
+**铺块几何是严格保证的**（我自己重算复核过，8 种尺寸全过）：
+
+| 图尺寸 | 块/重叠 | 块数 | 漏像素 | 越界 |
+|--------|--------|-----|-------|------|
+| 1024×1024 | 512 / 64 | 9 | 0 | 无 |
+| 1920×1080 | 640 / 64 | 8 | 0 | 无 |
+| 2048×2048 | 512 / 64 | 25 | 0 | 无 |
+| 500×500 | 640 / 48 | 1 | 0 | 无 |
+| 733×457 | 512 / 32 | 2 | 0 | 无 |
+
+- **全覆盖**：每个像素至少被一块覆盖（`plan_tiles` + `verify_coverage` 双重校验，
+  并对宽度 8~2999 做了穷举扫描，零失败）。
+- **不出碎片**：块尺寸恒为 `min(tile, 图宽, 图高)`，最后一块**贴边**而不是留一条细缝。
+- **融合是归一化的**：加权累加后除以权重和，所以"把原图切片再拼回来"能**逐像素还原**
+  （实测三种融合模式 `maxdiff = 0`）；不存在没写到的黑边。
+- **色彩对齐**有效：块间人为加 18 级亮度差时，平均偏差从 **45 → 17**。
+
+> ⚠️ **`overlap` 是下界，不是精确值** —— 这一点必须知道，否则会算错块数和耗时。
+> 为了让覆盖完整、又不产生"几乎完全重合的最后一块"，间距会被**均摊**，
+> 实际重叠常常大于请求值：
+>
+> | 图尺寸 | tile / 请求 overlap | 实际采用的 overlap |
+> |--------|--------------------|-------------------|
+> | 1024×1024 | 512 / 64 | **256** |
+> | 2048×2048 | 512 / 64 | **128** |
+> | 1536×1536 | 512 / 64 | **171** |
+>
+> 也就是说在 1024² 这个尺寸下，把 overlap 从 64 调到 128 **不会有任何变化**。
+> 出图元数据里同时写入 `tile_overlap`（请求值）和 `tile_overlap_effective`（实际值）
+> 以便复现。
+
+**实测显存与耗时**（RTX 5060 Laptop 8GB，真机跑，不是估算）：
+
+| 场景 | 结果 |
+|------|------|
+| 512 底图 → `TiledHiresFix` **4x → 2048×2048**（tile 512 / overlap 64 / denoise 0.35 / 4 步） | ✅ 成功，13.3s，**25 块**，**峰值 2677 MB（占 8123 MB 的 33%）** |
+| 同上 2x → 1024×1024 | ✅ 成功，6.5s，9 块，峰值 2676.8 MB |
+| `TiledUpscale` 2x（纯放大，不用模型） | 与 Lanczos **完全一致**（maxdiff 0） |
+| `denoise=0` 的 `TiledHiresFix` | 与 Lanczos **逐像素一致**（maxdiff 0），且完全不加载模型 |
+
+> **一个必须说清的诚实结论**：分块在**低分辨率下并不是显存优化**。
+> 1024² 时节点的激活值增量是 +610.6 MB（分块）vs +616.5 MB（整图），基本没差别；
+> 上面那个 2677 MB 的峰值主要是 **CPU offload 下常驻显存里的权重**。
+> 分块的收益随分辨率增长才体现出来：**2048² 时 +610.6 MB vs +1171.2 MB，且快一倍**。
+> 所以：1024² 用整图或分块都行（分块更慢），**2048² 以上分块才真正划算**。
+
+#### 高清与修脸的顺序由你决定
+
+两种顺序对人脸效果不同，界面里可以直接选（`先高清后修脸` / `先修脸后高清`）：
+
+| 顺序 | 链路 | 效果 |
+|------|------|------|
+| 先高清后修脸 | 基础图 → 高清 → ADetailer | 放大后再修脸，**脸更锐利清晰** |
+| 先修脸后高清 | 基础图 → ADetailer → 高清 | 先修好脸再放大，**脸更自然**（放大时可能被二次柔化） |
+
+实测两条链都能生成并通过校验：
+
+```
+先高清后修脸: … → VAEDecode → TiledHiresFix → ADetailer → SaveImage
+先修脸后高清: … → VAEDecode → ADetailer → TiledHiresFix → SaveImage
+```
+
+**高清方式**可选 `自动 / 整图(快) / 分块(省显存)`：自动档在显存 <10GB 时**默认选分块**
+（实测本机 8GB 自动档生成的就是 `TiledHiresFix`），因为整图放大 2x 在 8GB 上极易爆显存。
+
+#### 区域提示词与局部重绘（主界面就能用）
+
+复杂画面想分别控制"脸 / 衣服 / 背景"时用。**不需要懂工作流** ——
+主界面「🎯 区域提示词」分组 → 点「🎯 编辑区域…」→ 在画布上**拖框** →
+每个框写自己的提示词：
+
+```
+全局提示词：portrait, detailed clothing
+├─ 脸部区域：detailed face, sharp eyes
+├─ 衣服区域：intricate fabric, embroidery
+└─ 背景区域：forest, soft light
+```
+
+支持的能力（逐条状态，不美化）：
+
+| 能力 | 状态 |
+|------|------|
+| 矩形区域提示词 | ✅ 归一化坐标，越界自动夹取，反向坐标自动交换 |
+| 蒙版区域提示词 | ✅ 导入黑白图（**白=生效**），任意尺寸自动缩放 |
+| 区域权重 | ✅ 直接作为该区域重绘的 `strength` |
+| 局部负面提示词 | ✅ 留空则用全局负面词 |
+| 局部 ControlNet | ⚠️ **能跑，但语义是近似的**（见下） |
+| 局部 ADetailer | ✅ 真的局部（只在区域包围盒内检测） |
+
+**编辑器**：拖框新增 / 导入蒙版 / 每个区域独立设置提示词·负面词·权重·羽化 /
+可选的局部 ControlNet·局部 ADetailer / 区域集存成 JSON 复用。
+
+**实测证据**（`regional_preview.png`，自左至右）：
+
+![区域提示词实测](regional_preview.png)
+
+1. 底图 `empty room, white walls`
+2. 左右两半两个区域（`a red apple` / `a blue banana`）→ **左右互不相同**
+   （MAD 37.03），且各自与底图都不同（12.57 / 20.62）
+3. 只开左上象限一个区域 → **右下象限 MAD = 0.00（逐像素完全没变）**
+4. 经工作流执行器输出
+
+**峰值显存 2678 MB / 8123 MB（33%）且与区域数量无关** —— 区域是逐个跑的，
+任何时刻只有一次 inpaint 在飞。所以 `RegionalRedraw` 的显存声明是 2600 MB 量级，
+而不是 2600×区域数（否则 8GB 卡会被显存策略直接判死）。
+
+**工作流侧**：`RegionalPrompt`（定义区域）→ `RegionalRedraw`（逐个应用），
+端口类型是新加的强类型 `REGIONS`（连错端口会在**运行前**报类型不匹配）。
+简易模式里设了区域，编译出的工作流也会带上这两个节点，所以
+"简易模式出的图"和"高级模式看到的图"仍然是同一件事。
+
+```python
+from core.regional import Region, apply_regions, validate_regions
+
+regs = [Region(name="脸部", prompt="detailed face, sharp eyes", weight=0.55,
+               shape="rect", rect=(0.3, 0.1, 0.7, 0.45)),
+        Region(name="衣服", prompt="intricate fabric, embroidery", weight=0.45,
+               shape="mask", mask_path="masks/clothes.png")]
+print(validate_regions(regs, 512, 768))      # 运行前的中文问题清单
+img, meta = apply_regions(ai, model, base, regs, steps=24, cfg=7.0, seed=-1)
+print(meta["regions_applied"], meta["region_errors"])
+```
+
+**实现方式是"顺序蒙版重绘"**（区域精修），不是逐步注意力耦合
+（A1111 Regional Prompter / Latent Couple 那种）。
+
+- 好处：复用既有 inpaint 管线、可预测、8GB 上跑得动、能覆盖上面全部六项能力。
+- 代价（**必须说清**）：区域是在底图**之后**逐个精修的，不是每一步去噪都参与，
+  所以区域之间的全局协调性（光照/风格统一度）比注意力耦合法略低。
+  接口留好了替换位置（换 `_region_sampler` 内核即可，签名不用动）。
+
+**两处诚实的折扣**：
+
+1. **局部 ControlNet 是近似语义**。仓库里只有 **txt2img** 的 ControlNet 管线
+   （`StableDiffusionControlNetPipeline`，没有 `mask_image` 入参），没有
+   ControlNet+Inpaint 的装配。所以现在走的是"CN 引导生成 + 按蒙版贴回"，
+   **底图不参与该次采样**，区域内的承袭性比 inpaint 低。
+   要变成"CN 引导的 inpaint"需要新写一个 `StableDiffusionControlNetInpaintPipeline`
+   装配 —— 这是目前唯一没做的东西。取不到权重/类型不认识时**只警告并退回普通蒙版重绘**。
+2. **局部 ADetailer 的检测范围限制在区域包围盒内**（裁框检测）。
+   YOLO 检测器没有"只看蒙版形状"的入参，所以区域外的脸不会被本区域修到
+   （符合预期），但"框内非蒙版区的脸不修"做不到。
+
+> ⚠️ 修过一个**静默失效**的真 bug：区域配了局部 ADetailer 时，曾把**重绘前**的图
+> 裁给 ADetailer 再贴回，导致该区域的提示词重绘被整体覆盖（区域差异从 43.6 掉到 1.1）。
+> 现在 `tests/test_regional.py` 把调用点钉死了。
+
+#### 模型架构适配层（节点只判断能力，不判断模型名）
+
+节点里**不允许**写 `if arch == "sdxl": ...`。模型加载后产出一份统一能力描述，
+节点只问"能不能做某事"：
+
+```python
+from workflow.adapters import capabilities_for, UnsupportedFeatureError
+
+caps = capabilities_for("flux")          # 或 ai.capabilities（加载后）
+caps.supports_controlnet                 # False
+caps.require("controlnet")               # → UnsupportedFeatureError
+
+if caps.supports_hires_fix:
+    ...
+else:
+    raise UnsupportedFeatureError("高清修复", caps.architecture)
+```
+
+```python
+ModelCapabilities(
+    architecture="anima",
+    supports_txt2img=True,
+    supports_img2img=True,
+    supports_inpaint=True,
+    supports_controlnet=False,
+    supports_ip_adapter=False,
+    supports_lora=False,
+    supports_hires_fix=False,
+    supports_adetailer=False,
+    recommended_precision="bf16",
+)
+```
+
+实测各架构能力表（`prec` = 推荐精度）：
+
+| 架构 | 精度 | 文生图 | 图生图 | 重绘 | ControlNet | IP-Adapter | LoRA | Hires | ADetailer |
+|------|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| sd15 | fp16 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| sd2.x | fp16 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| sdxl | fp16 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| anima | bf16 | ✅ | ✅ | ✅ | — | — | — | — | — |
+| flux | bf16 | ✅ | ✅ | — | — | — | — | — | — |
+| sd3 | bf16 | ✅ | ✅ | ✅ | — | — | ✅ | ✅ | ✅ |
+| video | fp16 | ✅ | ✅ | — | — | ✅ | — | — | — |
+
+**只有一份能力表**：`ModelCapabilities` 完全由既有 `AdapterCaps` 派生
+（`AdapterCaps` 是唯一真相），不会出现"适配器说不支持、能力表说支持"这种两套说法。
+测试里对 6 个架构逐一断言了两者一致。
+
+配套：
+
+- `ai.capabilities`：模型加载后由模型管理器给出；**未加载时返回 `None`**
+  （不编造默认能力，否则会掩盖真正的问题）。
+- `ctx.capabilities`：执行期挂在 `NodeContext` 上，节点可直接
+  `ctx.capabilities.require("controlnet")`。
+- `UnsupportedFeatureError` 是 `RuntimeError` 子类（老代码兼容），
+  但 UI/预检可据此区分"功能不支持"（该提示换模型）与"运行出错"（该看堆栈）。
+- 能力名有别名表（`"hires"` → `"hires_fix"`），旧写法不会立刻炸。
+
+这样以后加 Flux / 视频模型，只需加一个 adapter 并填能力表，
+**不用回头改 `start_generation()`、`model_manager.py` 和一堆节点里的 if/else**。
+实测节点里按架构名硬分支的地方为 **0** 处。
+
+> `LoadCheckpoint` 原来有个「采样器」参数，已经**删掉** —— 采样器属于
+> `Sampler` 节点，两个地方都能设只会互相覆盖。老工作流里残留的
+> `sampler` 参数会被忽略（打日志），不会报错。实测真跑出图元数据里
+> `sampler` 仍是界面选的那个，说明切换功能没有丢。
+
+#### 运行前预检（WorkflowPreflight）
+
+点运行（或 `Ctrl+P`）时，**在真正加载模型之前**把所有能查的问题一次报完，
+按严重程度分三档：
+
+- **错误**：无法运行，必须处理
+- **警告**：可以运行，但可能影响效果或速度
+- **提示**：建议操作
+
+```python
+from workflow.preflight import run_preflight
+res = run_preflight(wf, host=win, ai=win.ai)
+
+res.ok                  # bool：无错误即可运行
+res.errors / res.warnings / res.hints   # [PreflightIssue]（含 code / message / node_id / fix）
+res.required_models     # 需要的底模/LoRA/组件清单
+res.estimated_vram_mb   # 预计显存
+res.estimated_time      # 预计耗时（秒，粗估）
+print(res.to_text())    # 中文分档报告，UI 直接显示
+```
+
+检查项：
+
+| # | 检查 | 判据 |
+|---|------|------|
+| 1 | 工作流结构 | 未注册节点 / 环 / 必填输入缺失 / 类型不匹配 |
+| 2 | 节点输入完整 | 必填输入既没连线也没字面量 |
+| 3 | 模型文件存在 | 按 `load_model` 的搜索规则找文件 |
+| 4 | 模型架构匹配 | 真实探测架构；多架构混用给警告；节点能力 vs 架构 |
+| 5 | VAE 兼容 | 文件存在 + 按体积/文件名粗判是否与底模同代 |
+| 6 | ControlNet 匹配 | 类型是否被 `prepare_controlnet` 支持 + 权重是否已在本地 |
+| 7 | LoRA 适用 | 探测 LoRA 架构，与底模比对（**实测能抓出 SDXL LoRA 配 SD1.5 底模**） |
+| 8 | 显存是否满足 | 汇总节点声明 vs 设备总量，并说明会自动采取什么策略 |
+| 9 | 输出目录可写 | 真写一个临时文件；**并检测配置目录是否被静默回退** |
+| 10 | 依赖组件 | torch/diffusers/Pillow + 节点声明的可下载资产与外部工具 |
+
+实测：整轮预检 **21ms**（9 项检查），不加载模型、不推理。任何单项检查异常都降级成
+警告，**预检本身绝不阻断或崩溃**。
+
+示例输出：
+
+```
+❌ 预检未通过（1 个错误）
+
+❌ 错误（1）
+  · [lora_x] LoRA「xxx.safetensors」是 sdxl 用的，但主模型是 sd15（sd1.5）
+      → 换一个对应架构的 LoRA，或换底模
+
+⚠️ 警告（1）
+  · 当前显存 7.9GB，已自动启用 CPU Offload
+      → 这是正常的省显存模式；显存更大时可切「高性能」预设提速
+
+预计显存 15400 MB · 预计耗时约 8s · 平衡模式（8~16GB…）· 全 GPU · 分块≥1.0MP
+```
+
+#### 统一模型资源管理（工作流按资源 ID 依赖模型）
+
+**问题**：工作流原来只存一个硬编码路径，于是换台电脑就失效、挪个目录就找不到、
+用户也不知道到底缺哪些模型。
+
+**做法**：工作流不存"我的硬盘上在哪"，而存**依赖的是哪个资源**
+（`workflow/resource_store.py`）：
+
+```json
+{
+  "resource_id": "checkpoint/sd15/abyssorangemix2_hard",
+  "filename": "abyssorangemix2_Hard.safetensors",
+  "model_type": "checkpoint",
+  "architecture": "sd15",
+  "sha256": "",
+  "source": "local",
+  "source_url": "",
+  "local_path": null
+}
+```
+
+- `resource_id` = `类型/架构/文件名主干`，**先取 basename 丢掉全部路径成分**
+  —— 这是"换电脑/挪目录都不失效"的关键，所以 ID 里永远不含盘符和目录。
+- `local_path` 默认写 `null`。运行的那一刻才在本机反查真实路径。
+- `sha256` 默认空字符串：普通扫描**不算哈希**（10 个底模加起来几十 GB，
+  扫一次就要几分钟）；只有显式要求校验时才用 `utils.image_metadata.file_sha256()`
+  算，并复用它的磁盘缓存。
+
+**运行时的闭环**（正是你描述的那条链路）：
+
+```
+检查资源 → 存在 → 继续执行
+        → 缺失 → 显示资源卡片 → 用户下载 → 校验 → 重新预检
+```
+
+- **解析**：`resolve(ref)` 按 `resource_id → sha256 → filename → local_path` 依次反查，
+  返回 `ok` / `found_elsewhere`（位置变了但找得到）/ `missing` /
+  `arch_mismatch` / `sha_mismatch`。畸形引用**绝不抛异常**，降级为 `missing`。
+- **报告**：`missing_report(refs)` 给出 `present / missing / mismatched /
+  downloadable`，UI 直接拿它渲染"资源卡片"。
+- **预检接入**：缺资源报**错误**并附可操作建议；资源"位置变了"只报**警告**
+  （能跑）。实测缺底模时报 `resource_missing` + `model_missing` 两条，
+  并告诉用户该把文件放哪。
+- **界面**：编辑器工具栏 →「🗂 资源依赖」，列出名称/类型/架构/状态/大小/说明，
+  支持「🔄 重新检测」和「📂 打开模型目录」。
+
+**下载入口的边界（遵守项目既定策略）**：
+
+| 资源类型 | 下载入口 |
+|---------|---------|
+| ControlNet / ADetailer / IP-Adapter / 插帧 / Flux 引擎（辅助组件） | ✅ 「下载」按钮，走既有 `extension_manager.download_extension()`，**不新增任何下载入口** |
+| 底模 / LoRA / VAE | ❌ **不提供下载**，只告诉用户缺什么、放到哪个目录，放好后点「重新检测」 |
+
+也就是说：模型仍然完全由用户自行下载，程序只是**知道**自己依赖哪些资源。
+
+```python
+from workflow import resource_store as RS
+
+cat = RS.build_catalog()            # 扫描本地（实测 29 项 / 15ms，不算哈希）
+r = RS.by_filename("mix2_Hard.safetensors")
+ref = RS.to_ref(r)                  # → 写进工作流的引用（local_path=None）
+res, status, detail = RS.resolve(ref)     # → "ok"
+
+rep = RS.missing_report(RS.collect_refs(wf))   # 工作流的资源依赖体检
+print(rep["summary"], rep["downloadable"])
+
+RS.save_catalog()                   # 持久化到 models_cache/resources.json
+```
+
+`collect_refs(wf)` 对**老工作流**（只存了 `path`）也能工作：会自动按文件名
+升级成带 `resource_id` 的引用，所以不用手工迁移已有流程。
+
 
 #### 用代码调用（不经过界面）
 
@@ -172,9 +610,11 @@ workflow/            执行引擎
 ├── resource_manager.py  资源清单（只读本地，不联网）
 ├── adapters.py          模型族适配器（SD15/SDXL/Anima/SD3/Flux/Video）
 ├── serializers.py       JSON 保存/加载/版本迁移
+├── preflight.py         运行前预检（错误/警告/提示三档）
+├── resource_store.py    统一模型资源清单（resource_id 解析/缺失报告）
 └── builder.py           界面状态 → 工作流图
 
-nodes/               节点实现（21 个）
+nodes/               节点实现（30 个）
 ├── model_nodes.py       LoadCheckpoint / LoadVAE / LoadLoRA
 ├── text_nodes.py        TextEncode / NegativeTextEncode
 ├── sampling_nodes.py    Sampler / VAEEncode / VAEDecode
@@ -183,13 +623,19 @@ nodes/               节点实现（21 个）
 ├── adapter_nodes.py     IPAdapterApply
 ├── detailer_nodes.py    ADetailer
 ├── upscale_nodes.py     HiresFix / Upscale
-└── video_nodes.py       VideoFrameBatch
+├── tile_nodes.py        TiledHiresFix / TiledUpscale（分块高清）
+├── postprocess_nodes.py ImageNoise / ImageBlur / ImageSharpen / ColorAdjust / ImagePosterize
+├── regional_nodes.py    RegionalPrompt / RegionalRedraw（区域提示词）
+└── video_nodes.py       VideoFrameBatch   （另有 model/text/sampling/control/adapter/detailer 等模块）
 
 ui/workflow_editor/  节点编辑器
 ├── canvas.py            画布：节点/端口/连线，类型检查，状态着色
 ├── palette.py           节点库（从注册表自动生成，带搜索）
-├── param_panel.py       参数面板（从 ParamSpec 自动生成控件）
-└── window.py            编辑器窗口 + 运行线程
+├── param_panel.py       参数面板（节点详情/端口状态/资源声明）
+├── param_sources.py     本地文件下拉源（底模/LoRA/VAE/图片）
+├── resource_panel.py    资源依赖面板（缺失资源补全）
+└── region_editor.py     区域提示词编辑器（主界面入口）
+└── window.py            编辑器窗口 + 运行线程 + 预检
 
 workflows/           工作流 JSON（保存/加载）
 ```
@@ -277,18 +723,22 @@ def run_my_node(ctx, node, inputs):
 
 **已实现**：图结构与校验、执行器（缓存 / 取消 / 逐节点状态 / 失败定位 /
 只重跑某节点）、能力配置化显存策略、资源清单、模型族适配器、JSON 读写与版本号、
-21 个节点、基础节点编辑器、简易模式自动生成图。
+30 个节点、基础节点编辑器、简易模式自动生成图、**分块高清修复**、
+**区域提示词与局部重绘（主界面可用）**、
+**统一模型资源管理（resource_id）**、**运行前预检**、**模型架构适配层**。
 
 **暂未做**（按优先级）：
 1. 把 `start_generation()` 的旧生成路径**逐步**迁到节点（目前是并行通路，
    视频/批处理/XY 矩阵仍走原实现）；
-2. 区域提示词、节点循环、分块放大、参考图组合；
+2. 节点循环、参考图组合；
 3. ControlNet 的 lineart / softedge / tile / segmentation 权重映射
    （`ControlNetPreprocess` 已能预处理这几种，但 `prepare_controlnet`
    目前只认 openpose / canny / depth，接 `ControlNetApply` 会明确报错）；
-4. 用户自定义节点 / 插件机制（**刻意最后做**：任意 Python 节点会让调试、
+4. `LoadLoRA` 的每槽位资源引用（`lora_ref_1..3`）—— 目前 LoRA 的
+   `resource_id` 是**按文件名推导**，底模才是显式存进工作流的；
+5. 用户自定义节点 / 插件机制（**刻意最后做**：任意 Python 节点会让调试、
    显存管理与错误定位迅速失控）；
-5. ComfyUI 工作流格式兼容。
+6. ComfyUI 工作流格式兼容。
 
 ### 2.6 水印
 
@@ -463,6 +913,7 @@ ai  make photo/
 │   ├── prompt_enhancer.py     # Qwen 智能改写
 │   ├── rife_interpolate.py    # RIFE 帧插值
 │   ├── sovits_tts.py          # GPT-SoVITS 配音
+│   ├── tiling.py              # 分块铺排 / 权重图 / 归一化融合（纯 PIL+numpy）
 │   ├── system_utils.py        # 系统工具 / 日志设施
 │   ├── tiled_diffusion.py     # 分块扩散
 │   ├── tts_engine.py          # ChatTTS 配音

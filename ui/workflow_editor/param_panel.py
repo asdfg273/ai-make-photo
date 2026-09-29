@@ -39,12 +39,34 @@ class ParamPanel(QScrollArea):
 
     # ------------------------------------------------------------------
     def _clear(self):
+        """清空面板。
+
+        ⚠️ 必须 `setParent(None)` 再 `deleteLater()`。
+        只调 `deleteLater()` 的话：它只是**排队**等事件循环删除，而这期间
+        控件仍然是 `_host` 的**可见子控件**，会停在原来的坐标继续绘制。
+        于是快速切换节点（或 show_node 连续调用）时，上一个节点的控件会
+        和新控件叠在一起 —— 表现就是"面板里出现了两个采样器/两组参数"。
+        `setParent(None)` 立即解除父子关系（控件随之隐藏），deleteLater 再收尾。
+        """
         self._widgets.clear()
         while self._lay.count():
             item = self._lay.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.setParent(None)
                 w.deleteLater()
+                continue
+            lay = item.layout()
+            if lay is not None:
+                # QFormLayout 这类"子布局"也要连里面的控件一起摘掉
+                while lay.count():
+                    sub = lay.takeAt(0)
+                    sw = sub.widget()
+                    if sw is not None:
+                        sw.setParent(None)
+                        sw.deleteLater()
+                lay.setParent(None)
+                lay.deleteLater()
 
     def _show_placeholder(self, text="选中一个节点查看参数"):
         self._clear()

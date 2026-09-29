@@ -538,6 +538,17 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             self.config.use_hires      = self.chk_hires.isChecked()
             self.config.hires_denoise  = self.scale_hires_denoise.float_value()
 
+            # 高清方式 / 顺序（用户可决定"先高清后修脸"还是反过来）
+            if hasattr(self, 'combo_hires_mode'):
+                self.config.hires_mode = {
+                    "整图 (快)": "latent",
+                    "分块 (省显存)": "tiled"}.get(
+                        self.combo_hires_mode.currentText(), "auto")
+            if hasattr(self, 'combo_hires_order'):
+                self.config.hires_order = {
+                    "先修脸后高清": "adetailer_first"}.get(
+                        self.combo_hires_order.currentText(), "hires_first")
+
             if hasattr(self, 'chk_freeu'):
                 self.config.freeu_enabled = self.chk_freeu.isChecked()
 
@@ -560,6 +571,15 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             if hasattr(self, 'scale_watermark_size'):
                 self.config.watermark_scale = \
                     self.scale_watermark_size.float_value()
+
+            # 区域提示词：区域列表由编辑器直接写进 config.regions，
+            # 这里只需要同步"启用"开关的状态
+            if hasattr(self, 'chk_use_regions'):
+                self.config.use_regions = bool(
+                    self.chk_use_regions.isChecked()
+                    and any(r.get("enabled", True)
+                            for r in (self.config.regions or [])
+                            if isinstance(r, dict)))
             # watermark_image 由选择/清除按钮即时写入，这里不覆盖
 
             if hasattr(self, 'combo_device'):

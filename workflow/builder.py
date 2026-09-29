@@ -27,6 +27,7 @@ inputs、`params` 全空，生成的工作流跑起来一律用默认值（提�
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -136,6 +137,64 @@ def _host_image_path(host, *attrs) -> str:
     return ""
 
 
+def _resource_ref_params(name_or_path: str) -> Dict[str, Any]:
+    """给模型节点附上**资源引用字段**（resource_id 等），让工作流可跨机器迁移。
+
+    为什么不能只存路径：绝对路径换台电脑就失效。存 `resource_id` +
+    `filename` + `architecture` + `sha256` 之后，工作流在任何机器上都能反查
+    "我依赖哪个模型"，缺失时也能明确告诉用户缺什么。
+    `local_path` 默认写 None —— 这正是"可迁移"的关键。
+    `resource_store` 不可用时返回空 dict（只留 `path`），不影响生成。
+    """
+    if not name_or_path:
+        return {}
+    try:
+        from workflow import resource_store as RS
+        base = os.path.basename(str(name_or_path))
+        r = RS.by_filename(base) or RS.by_filename(str(name_or_path))
+        if r is None:
+            return {"filename": base}
+        return RS.to_ref(r)
+    except Exception as e:
+        logger.debug(f"[builder] 资源引用生成失败（忽略）: {e}")
+        return {}
+
+
+def _hires_mode(host, cfg) -> str:
+    """决定高清修复走「整图」还是「分块」。
+
+    优先级：界面下拉 > config > 自动（按显存）。
+    8GB 卡整图 img2img 放大 2x 非常容易爆显存/疯狂换页，所以自动档
+    在总量 <10GB 时选**分块** —— 这正是分块高清存在的意义。
+    """
+    ui = _txt(getattr(host, "combo_hires_mode", None), "")
+    if "分块" in ui:
+        return "tiled"
+    if "整图" in ui:
+        return "latent"
+    mode = str(getattr(cfg, "hires_mode", "auto") or "auto").lower()
+    if mode in ("latent", "tiled"):
+        return mode
+    try:
+        from workflow.memory_policy import DeviceCapabilities
+        if DeviceCapabilities.detect().total_gb < 10.0:
+            return "tiled"
+    except Exception:
+        pass
+    return "latent"
+
+
+def _hires_order(host, cfg) -> str:
+    """高清与修脸的先后顺序。"""
+    ui = _txt(getattr(host, "combo_hires_order", None), "")
+    if "先修脸" in ui:
+        return "adetailer_first"
+    if "先高清" in ui:
+        return "hires_first"
+    order = str(getattr(cfg, "hires_order", "hires_first") or "hires_first")
+    return order if order in ("hires_first", "adetailer_first") else "hires_first"
+
+
 def build_from_context(host, c: Dict[str, Any], *,
                        name: str = "简易模式流程",
                        kind: Optional[str] = None) -> Workflow:
@@ -156,11 +215,16 @@ def build_from_context(host, c: Dict[str, Any], *,
     cfg = getattr(host, "config", None)
 
     model_id = "model_1"
-    _add(wf, model_id, "LoadCheckpoint", {
+    cp_params: Dict[str, Any] = {
         "path": c.get("model_name", ""),
         "clip_skip": int(getattr(cfg, "clip_skip", 0) or 0),
-        "sampler": c.get("sampler_name", "") or "",
-    })
+    }
+    # 注意：**不再**往 LoadCheckpoint 写 `sampler`。采样器属于 Sampler 节点，
+    # 两个地方都能设会互相覆盖（用户已经指出这个框该删）。
+    # 附上资源引用（resource_id / architecture / sha256 / local_path=None），
+    # 这样工作流存的是"依赖哪个模型"而不是"我的硬盘上在哪"
+    cp_params.update(_resource_ref_params(c.get("model_name", "")))
+    _add(wf, model_id, "LoadCheckpoint", cp_params)
 
     # ---- LoRA ----
     loras = list(c.get("lora_meta_info") or [])
@@ -264,30 +328,55 @@ def build_from_context(host, c: Dict[str, Any], *,
 
     cur = decode_id
 
-    # ---- Hires.fix ----
+    # ---- 后处理顺序：高清 与 修脸 谁先谁后由用户决定 ----
+    # 两种顺序对人脸效果不同：
+    #   先高清后修脸 → 放大后再修脸，脸更锐利
+    #   先修脸后高清 → 先修好脸再放大，脸更自然（放大时可能被二次柔化）
     hires_on = _checked(getattr(host, "chk_hires", None),
                         bool(getattr(cfg, "use_hires", False)))
-    if hires_on:
+    ad_face = _checked(getattr(host, "chk_use_adetailer", None))
+    ad_hand = _checked(getattr(host, "chk_use_ad_hand", None))
+    ad_on = bool(ad_face or ad_hand)
+
+    def _add_hires():
+        nonlocal cur
         h_id = "hires_1"
-        _add(wf, h_id, "HiresFix", {
-            "scale": _txt(getattr(host, "combo_hires_scale", None), "2.0"),
-            "denoise": _num(getattr(host, "scale_hires_denoise", None),
-                            float(getattr(cfg, "hires_denoise", 0.45) or 0.45)),
-            "upscaler": _txt(getattr(host, "combo_hires_upscaler", None), "Latent"),
-            "steps": int(c.get("steps", 24) or 24),
-            "cfg": float(c.get("cfg", 7.0) or 7.0),
-            "seed": int(c.get("seed", -1) if c.get("seed") is not None else -1),
-        })
+        scale = _txt(getattr(host, "combo_hires_scale", None), "2.0")
+        denoise = _num(getattr(host, "scale_hires_denoise", None),
+                       float(getattr(cfg, "hires_denoise", 0.45) or 0.45))
+        mode = _hires_mode(host, cfg)
+        steps = int(c.get("steps", 24) or 24)
+        seed = int(c.get("seed", -1) if c.get("seed") is not None else -1)
+        if mode == "tiled":
+            # 分块：8GB 卡也能出 2K~4K（整图 img2img 很容易爆显存）
+            _add(wf, h_id, "TiledHiresFix", {
+                "scale": scale,
+                "tile_size": int(getattr(cfg, "hires_tile_size", 640) or 640),
+                "overlap": int(getattr(cfg, "hires_tile_overlap", 48) or 48),
+                "denoise": denoise,
+                "upscale_method": "Lanczos",
+                "blend": "羽化",
+                "color_correct": True,
+                "vram_mode": "自动",
+                "steps": steps, "cfg": float(c.get("cfg", 7.0) or 7.0),
+                "seed": seed,
+            })
+        else:
+            _add(wf, h_id, "HiresFix", {
+                "scale": scale, "denoise": denoise,
+                "upscaler": _txt(getattr(host, "combo_hires_upscaler", None),
+                                 "Latent"),
+                "steps": steps, "cfg": float(c.get("cfg", 7.0) or 7.0),
+                "seed": seed,
+            })
         wf.connect(src, "model", h_id, "model")
         wf.connect(cur, "image", h_id, "image")
         wf.connect(pos_id, "conditioning", h_id, "positive")
         wf.connect(neg_id, "conditioning", h_id, "negative")
         cur = h_id
 
-    # ---- ADetailer ----
-    ad_face = _checked(getattr(host, "chk_use_adetailer", None))
-    ad_hand = _checked(getattr(host, "chk_use_ad_hand", None))
-    if ad_face or ad_hand:
+    def _add_adetailer():
+        nonlocal cur
         d_id = "adetailer_1"
         _add(wf, d_id, "ADetailer", {
             "target": "二次元脸部" if ad_face else "二次元手部",
@@ -300,6 +389,49 @@ def build_from_context(host, c: Dict[str, Any], *,
         wf.connect(pos_id, "conditioning", d_id, "positive")
         wf.connect(neg_id, "conditioning", d_id, "negative")
         cur = d_id
+
+    order = _hires_order(host, cfg)
+    if order == "adetailer_first":
+        if ad_on:
+            _add_adetailer()
+        if hires_on:
+            _add_hires()
+    else:
+        if hires_on:
+            _add_hires()
+        if ad_on:
+            _add_adetailer()
+    wf.metadata["post_order"] = order
+
+    # ---- 区域提示词 / 局部重绘 ----
+    # 主界面里设了区域就编译成 RegionalPrompt → RegionalRedraw，
+    # 这样"简易模式生成的图"和"高级模式看到的图"仍然是同一件事。
+    if getattr(cfg, "use_regions", False):
+        regs = [r for r in (getattr(cfg, "regions", None) or [])
+                if isinstance(r, dict) and r.get("enabled", True)]
+        if regs:
+            try:
+                r_id, rd_id = "regions_1", "regional_1"
+                _add(wf, r_id, "RegionalPrompt",
+                     {"regions_json": json.dumps({"regions": regs},
+                                                 ensure_ascii=False),
+                      "preset_name": "简易模式区域"})
+                _add(wf, rd_id, "RegionalRedraw", {
+                    "steps": int(c.get("steps", 24) or 24),
+                    "cfg": float(c.get("cfg", 7.0) or 7.0),
+                    "seed": int(c.get("seed", -1)
+                                if c.get("seed") is not None else -1),
+                    "global_negative": raw_n,
+                })
+                wf.connect(r_id, "regions", rd_id, "regions")
+                wf.connect(src, "model", rd_id, "model")
+                wf.connect(cur, "image", rd_id, "image")
+                wf.connect(pos_id, "conditioning", rd_id, "positive")
+                wf.connect(neg_id, "conditioning", rd_id, "negative")
+                cur = rd_id
+                wf.metadata["regions"] = len(regs)
+            except Exception as e:
+                logger.warning(f"[builder] 区域节点生成失败（跳过）: {e}")
 
     # ---- 保存 ----
     save_id = "save_1"

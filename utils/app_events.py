@@ -140,6 +140,31 @@ class EventMixin:
         if hasattr(self, 'scale_hires_denoise'):
             self.scale_hires_denoise.setValue(
                 getattr(cfg, 'hires_denoise', 0.45))
+        # 高清方式 / 顺序（8GB 卡默认走分块）
+        if hasattr(self, 'combo_hires_mode'):
+            _mode = {"auto": "自动", "latent": "整图 (快)",
+                     "tiled": "分块 (省显存)"}.get(
+                         getattr(cfg, 'hires_mode', 'auto'), "自动")
+            _i = self.combo_hires_mode.findText(_mode)
+            if _i >= 0:
+                self.combo_hires_mode.setCurrentIndex(_i)
+        if hasattr(self, 'combo_hires_order'):
+            _order = {"hires_first": "先高清后修脸",
+                      "adetailer_first": "先修脸后高清"}.get(
+                          getattr(cfg, 'hires_order', 'hires_first'),
+                          "先高清后修脸")
+            _j = self.combo_hires_order.findText(_order)
+            if _j >= 0:
+                self.combo_hires_order.setCurrentIndex(_j)
+
+        # ── 区域提示词 ───────────────────────────────────────
+        if hasattr(self, 'chk_use_regions'):
+            self.chk_use_regions.blockSignals(True)
+            self.chk_use_regions.setChecked(
+                bool(getattr(cfg, 'use_regions', False)))
+            self.chk_use_regions.blockSignals(False)
+        if hasattr(self, '_refresh_regions_summary'):
+            self._refresh_regions_summary()
 
         # ── 输出格式 ─────────────────────────────────────────
         if hasattr(self, 'combo_img_format'):
@@ -485,6 +510,159 @@ class EventMixin:
             logger.warning(f"⚠️ 清除水印设置失败: {e}")
         self._refresh_watermark_label("")
         self._set_status("💧 已清除图片水印", "#89dceb")
+
+    # ==========================================================
+    #  区域提示词 / 局部重绘（主界面入口）
+    # ==========================================================
+    def open_region_editor(self):
+        """打开区域编辑器：在图上拖框、每个框写自己的提示词。"""
+        try:
+            from ui.region_editor import RegionEditorDialog
+            w, h = self._region_canvas_size()
+            dlg = RegionEditorDialog(self.regions(), width=w, height=h,
+                                     parent=self)
+            if dlg.exec() == dlg.DialogCode.Accepted:
+                regs = dlg.regions()
+                self.config.regions = regs
+                self.config.use_regions = bool(
+                    regs and any(r.get("enabled", True) for r in regs))
+                try:
+                    self.config.save()
+                except Exception as e:
+                    logger.warning(f"⚠️ 区域设置保存失败: {e}")
+                # 勾选框跟着实际状态走，避免"点了确定但没启用"
+                chk = getattr(self, "chk_use_regions", None)
+                if chk is not None:
+                    chk.blockSignals(True)
+                    chk.setChecked(bool(self.config.use_regions))
+                    chk.blockSignals(False)
+                self._refresh_regions_summary()
+                n = len([r for r in regs if r.get("enabled", True)])
+                self._set_status(
+                    f"🎯 已设置 {n} 个区域" if n else "🎯 已清空区域",
+                    "#a6e3a1" if n else "#7f849c")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "打开区域编辑器失败", str(e))
+
+    def _region_canvas_size(self):
+        """当前输出分辨率（区域坐标是归一化的，但画布要按实际比例显示）。"""
+        w, h = 512, 768
+        try:
+            txt = self.combo_res.currentText()
+            if "x" in txt.lower():
+                a, b = txt.lower().split("x")
+                w, h = int(a.strip()), int(b.strip())
+        except Exception:
+            pass
+        return w, h
+
+    def clear_regions(self):
+        try:
+            self.config.regions = []
+            self.config.use_regions = False
+            self.config.save()
+        except Exception as e:
+            logger.warning(f"⚠️ 清空区域失败: {e}")
+        chk = getattr(self, "chk_use_regions", None)
+        if chk is not None:
+            chk.blockSignals(True)
+            chk.setChecked(False)
+            chk.blockSignals(False)
+        self._refresh_regions_summary()
+        self._set_status("🎯 已清空区域", "#7f849c")
+
+    def regions(self) -> list:
+        """当前区域列表（配置为准）。"""
+        try:
+            return [dict(r) for r in (self.config.regions or [])
+                    if isinstance(r, dict)]
+        except Exception:
+            return []
+
+    def _refresh_regions_summary(self):
+        lbl = getattr(self, "lbl_regions_summary", None)
+        if lbl is None:
+            return
+        regs = [r for r in self.regions() if r.get("enabled", True)]
+        if not regs:
+            lbl.setText("（未设置区域）")
+            return
+        parts = []
+        for i, r in enumerate(regs[:4]):
+            nm = r.get("name") or f"区域{i + 1}"
+            try:
+                wt = float(r.get("weight", 0.5))
+            except Exception:
+                wt = 0.5
+            parts.append(f"{nm}({wt:.2f})")
+        more = f" …共 {len(regs)} 个" if len(regs) > 4 else ""
+        lbl.setText("  ".join(parts) + more)
+
+    def _apply_regions_if_enabled(self, image, ctx, seed=None):
+        """生成后、保存前：按区域逐个局部重绘。任何失败都只警告，不中断出图。"""
+        try:
+            if not getattr(self.config, "use_regions", False):
+                return image
+            regs = [r for r in self.regions() if r.get("enabled", True)]
+            if not regs:
+                return image
+            from core.regional import apply_regions
+            from workflow import adapters as _ad
+            arch = getattr(self.ai, "current_arch_id", "") or "sd15"
+            caps = _ad.capabilities_for(arch)
+            if not caps.supports_inpaint:
+                self.append_log(
+                    f"⚠️ {arch} 架构不支持局部重绘，已跳过区域提示词",
+                    "#fab387")
+                return image
+            model = getattr(self, "_last_model_ref", None)
+            if model is None:
+                # 主界面这条路上没有 ModelRef，临时包一个给引擎用
+                from workflow.values import ModelRef
+                model = ModelRef(name=getattr(self.ai, "current_model_name", ""),
+                                 path=getattr(self.ai, "current_model_path", ""),
+                                 arch_id=arch, pipe=getattr(self.ai, "txt2img_pipe", None),
+                                 img2img_pipe=getattr(self.ai, "img2img_pipe", None),
+                                 inpaint_pipe=getattr(self.ai, "inpaint_pipe", None),
+                                 adapter=_ad.get_adapter(arch),
+                                 vae=getattr(getattr(self.ai, "txt2img_pipe", None), "vae", None),
+                                 loaded=True)
+            steps = int(ctx.get("steps", 24) or 24)
+            cfg = float(ctx.get("cfg", 7.0) or 7.0)
+            neg = ctx.get("enq_neg") or ctx.get("raw_neg") or ""
+            out, meta = apply_regions(
+                self.ai, model, image, regs,
+                global_negative=neg, steps=steps, cfg=cfg,
+                seed=seed if seed is not None else -1,
+                progress=lambda a, b: self._region_progress(a, b),
+                cancel=lambda: bool(getattr(self, "_cancel_requested", False)),
+                status=lambda m: self._set_status(m, "#cba6f7"),
+                log=lambda m: self.append_log(m, "#cba6f7"))
+            applied = int(meta.get("regions_applied", 0) or 0)
+            planned = int(meta.get("regions_planned", len(regs)) or len(regs))
+            self.append_log(
+                f"🎯 区域重绘完成：{applied}/{planned} 个区域生效", "#a6e3a1")
+            for wmsg in (meta.get("region_warnings") or [])[:3]:
+                self.append_log(f"   ⚠️ {wmsg}", "#fab387")
+            for emsg in (meta.get("region_errors") or [])[:3]:
+                self.append_log(f"   ❌ {emsg}", "#f38ba8")
+            return out
+        except Exception as e:
+            logger.warning(f"⚠️ 区域重绘失败（沿用原图）: {e}")
+            try:
+                self.append_log(f"⚠️ 区域重绘失败，已沿用原图：{e}", "#fab387")
+            except Exception:
+                pass
+            return image
+
+    def _region_progress(self, i, n):
+        try:
+            self.progress_bar.setRange(0, max(1, int(n)))
+            self.progress_bar.setValue(int(i))
+        except Exception:
+            pass
 
     def load_pose_image(self):
         path, _ = QFileDialog.getOpenFileName(

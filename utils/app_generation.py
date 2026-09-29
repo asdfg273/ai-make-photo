@@ -1224,6 +1224,10 @@ class GenerationMixin:
                 traceback.print_exc()
                 continue
 
+            # 区域提示词 / 局部重绘：在保存前按区域逐个重绘。
+            # 失败只警告并沿用原图 —— 区域是"锦上添花"，绝不能因为它出不了图。
+            image = self._apply_regions_if_enabled(image, ctx, current_seed)
+
             # 保存
             save_path = self._gt_save_image(image, ctx, i, current_seed)
             if not save_path:

@@ -27,7 +27,8 @@ from workflow import graph as graph_mod
 from workflow import registry
 from workflow.memory_policy import (DeviceCapabilities, MemoryPolicy, plan_for_nodes,
                                     resolve as resolve_policy)
-from workflow.schema import (Cancelled, NodeError, Workflow, WorkflowError)
+from workflow.schema import (Cancelled, DataType, NodeError, Workflow,
+                             WorkflowError)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,10 @@ class NodeContext:
     node_order: list = field(default_factory=list)
     # 节点可往这里塞"要写进元数据"的东西
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # 当前模型的能力描述（ModelCapabilities）。节点应当判断**能力**而不是
+    # 判断模型名：`ctx.capabilities.require("controlnet")`。
+    # 由 LoadCheckpoint 加载后写入；没加载模型时为 None。
+    capabilities: Any = None
 
     def cancelled(self) -> bool:
         try:
@@ -266,7 +271,44 @@ class Executor:
                 "states": states, "outputs": self._leaf_outputs(wf, order, produced),
                 "cached": cached_nodes, "cache_stats": self.cache.stats(),
                 "issues": [i.to_dict() for i in issues],
-                "seconds": elapsed, "plan": plan}
+                "seconds": elapsed, "plan": plan,
+                "images": self._node_images(wf, order, produced)}
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _node_images(wf: Workflow, order: List[str],
+                     produced: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """每个节点产出的 IMAGE 值，供编辑器把图渲染进节点卡片。
+
+        只取每个节点**第一个** IMAGE 输出（节点通常只有一个图像输出），
+        并且只保留 PIL 图 / 文件路径字符串。这些对象本来就被缓存持有，
+        这里只是多一份引用，不会额外占多少内存。
+        """
+        imgs: Dict[str, Any] = {}
+        for nid in order:
+            node = wf.node(nid)
+            if node is None or not registry.exists(node.type):
+                continue
+            spec = registry.get(node.type)
+            out_ports = getattr(spec, "outputs", {}) or {}
+            vals = produced.get(nid) or {}
+            for pname, pspec in out_ports.items():
+                if pspec.type is not DataType.IMAGE:
+                    continue
+                v = vals.get(pname)
+                if v is None:
+                    continue
+                try:
+                    from PIL import Image as _I
+                    if isinstance(v, _I.Image):
+                        imgs[nid] = v
+                        break
+                except Exception:
+                    pass
+                if isinstance(v, str) and v:
+                    imgs[nid] = v
+                    break
+        return imgs
 
     # ------------------------------------------------------------------
     @staticmethod

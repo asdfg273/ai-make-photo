@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 
+from workflow import adapters as adapters_mod
 from workflow.registry import node
 from workflow.schema import (DataType, ParamSpec, PortSpec,
                              ResourceRequirement)
@@ -385,7 +386,7 @@ def run_inpaint(ctx, node, inputs):
     if adapter is None:
         raise RuntimeError(f"模型 {model.describe()} 没有适配器，无法局部重绘")
     if not getattr(adapter.caps, "inpaint", False):
-        raise RuntimeError(f"{model.arch_id} 架构不支持局部重绘（inpaint）")
+        raise adapters_mod.UnsupportedFeatureError("局部重绘", model.arch_id)
     pipe = adapter.pipe(model, "inpaint")
     if pipe is None:
         raise RuntimeError(f"模型 {model.describe()} 没有可用的 inpaint 管线")
@@ -570,7 +571,10 @@ def run_save_image(ctx, node, inputs):
              "mask": PortSpec(DataType.MASK, "遮罩", optional=True),
              "metadata": PortSpec(DataType.METADATA, "信息")},
     params={
-        "path": ParamSpec("str", default="", label="图片路径"),
+        "path": ParamSpec("str", default="", label="图片路径",
+                          source="images",
+                          help="填文件名或绝对路径都行；"
+                               "界面会列出最近生成的图片供下拉选择"),
         "as_mask": ParamSpec("bool", default=False, label="作为遮罩读取",
                              help="开启后按灰度图读成 L 模式（255=重绘区域）"),
         "max_side": ParamSpec("int", default=0, label="最长边限制",

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import random
 
+from workflow import adapters as adapters_mod
 from workflow.registry import node
 from workflow.schema import (DataType, ParamSpec, PortSpec,
                              ResourceRequirement)
@@ -106,7 +107,10 @@ def run_sampler(ctx, node, inputs):
     if pipe is None:
         raise RuntimeError(f"模型没有可用的 {kind} 管线（该架构可能不支持）")
     if kind != "txt2img" and not getattr(adapter.caps, kind, True):
-        raise RuntimeError(f"{model.arch_id} 架构不支持 {kind}")
+        # 抛专用异常：UI/预检据此区分"能力不支持"与"运行出错"
+        raise adapters_mod.UnsupportedFeatureError(
+            {"img2img": "图生图", "inpaint": "局部重绘"}.get(kind, kind),
+            model.arch_id)
 
     steps = int(node.params.get("steps", 28))
     cfg = float(node.params.get("cfg", adapter.default_guidance()))
