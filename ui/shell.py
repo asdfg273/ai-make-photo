@@ -128,6 +128,7 @@ class ShellMixin:
         self.lbl_ext_count.setProperty("role", "hint")
         self.statusBar().addPermanentWidget(self.lbl_ext_count)
         self._refresh_extension_count()
+        ui_i18n.language_changed.connect(self.retranslate_ui)
         self.retranslate_ui()
 
     def retranslate_ui(self):
@@ -141,6 +142,8 @@ class ShellMixin:
                 combo.setProperty("i18nItems", True)
         ui_i18n.translate_widget_tree(self)
         self.setWindowTitle(ui_i18n.tr("AI 绘画工作站 v6.0"))
+        self._render_resource_label()
+        self._render_extension_count()
 
     # ---------- 全局快捷键（键位可在 设置→快捷键 改）----------
     def _setup_shortcuts(self):
@@ -734,19 +737,35 @@ class ShellMixin:
     def _update_resource_label(self):
         try:
             import psutil
-            ram = psutil.Process().memory_info().rss / 1024**3
-            vram = ""
+            self._resource_ram_gb = psutil.Process().memory_info().rss / 1024**3
+            self._resource_vram_gb = None
             try:
                 import torch
                 if torch.cuda.is_available():
                     used = torch.cuda.memory_allocated() / 1024**3
                     total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-                    vram = f" | 显存 {used:.1f}/{total:.1f}GB"
+                    self._resource_vram_gb = (used, total)
             except Exception:
                 pass
-            self.lbl_resource.setText(f"💾 内存 {ram:.1f}GB{vram}")
         except Exception:
-            self.lbl_resource.setText("💾 --")
+            self._resource_ram_gb = None
+            self._resource_vram_gb = None
+        self._render_resource_label()
+
+    def _render_resource_label(self):
+        lbl = getattr(self, "lbl_resource", None)
+        if lbl is None:
+            return
+        ram = getattr(self, "_resource_ram_gb", None)
+        if ram is None:
+            lbl.setText("— —")
+            return
+        text = f"{ui_i18n.tr('内存')} {ram:.1f}GB"
+        vram = getattr(self, "_resource_vram_gb", None)
+        if vram is not None:
+            used, total = vram
+            text += f" ·  {ui_i18n.tr('显存')} {used:.1f}/{total:.1f}GB"
+        lbl.setText(text)
 
     # ---------- 画廊回调 ----------
     def _on_gallery_picked(self, path: str):
@@ -930,10 +949,19 @@ class ShellMixin:
         try:
             from utils.extension_manager import get_status_summary
             s = get_status_summary()
-            lbl.setText(f"🧩 扩展: {s['installed']}/{s['total']}")
+            self._extension_count = (s['installed'], s['total'])
         except Exception as e:
-            lbl.setText("🧩 扩展: --")
+            self._extension_count = None
             logger.warning(f"[EXT-COUNT] 刷新失败: {e}")
+        self._render_extension_count()
+
+    def _render_extension_count(self):
+        lbl = getattr(self, "lbl_ext_count", None)
+        if lbl is None:
+            return
+        count = getattr(self, "_extension_count", None)
+        values = "--" if count is None else f"{count[0]}/{count[1]}"
+        lbl.setText(f"{ui_i18n.tr('扩展:')} {values}")
 
     def _open_extension_market(self):
         try:

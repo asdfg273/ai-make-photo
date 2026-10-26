@@ -196,11 +196,28 @@ def test_shell_language_and_layout():
         # 离屏 Qt 可能没有任何字体，sizeHint() 不代表真实桌面排版；
         # 此处只验证结构和尺寸策略，实际截断由 Windows 桌面视觉验收覆盖。
 
+        # 动态状态栏也要随语言重绘，且后续数值刷新不能退回中文。
+        win._update_resource_label()
+        win._refresh_extension_count()
+        assert win.lbl_resource.text().startswith("Memory ")
+        assert win.lbl_ext_count.text().startswith("Extensions:")
+        resource_values = win.lbl_resource.text().removeprefix("Memory ")
+        extension_values = win.lbl_ext_count.text().removeprefix("Extensions:")
+
         ui_i18n.set_language("ja")
         assert win.nav._buttons["gallery"].text() == "ギャラリー"
         assert win.btn_generate.text() == "生成開始"
+        assert win.lbl_resource.text() == f"メモリ {resource_values}"
+        assert win.lbl_ext_count.text() == f"拡張:{extension_values}"
+        win._update_resource_label()
+        win._refresh_extension_count()
+        assert win.lbl_resource.text().startswith("メモリ ")
+        assert win.lbl_ext_count.text().startswith("拡張:")
+
         ui_i18n.set_language("zh")
         assert win.btn_generate.text() == "开始生成"
+        assert win.lbl_resource.text().startswith("内存 ")
+        assert win.lbl_ext_count.text().startswith("扩展:")
     finally:
         ui_i18n.set_language(old)
         timer = getattr(win, "_resource_timer", None)

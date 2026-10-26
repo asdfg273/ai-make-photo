@@ -28,6 +28,8 @@ TRANSLATIONS = {
     "预检当前工作流": ("Preflight Current Workflow", "現在のワークフローを事前チェック"),
     "打开工作流目录": ("Open Workflow Folder", "ワークフローフォルダーを開く"),
     "内存": ("Memory", "メモリ"),
+    "显存": ("VRAM", "VRAM"),
+    "扩展:": ("Extensions:", "拡張:"),
     "释放内存": ("Release Memory", "メモリを解放"),
     "查看当前内存": ("Show Memory Usage", "メモリ使用量を表示"),
     "关于": ("About", "情報"),
