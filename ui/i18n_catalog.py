@@ -55,6 +55,12 @@ TRANSLATIONS = {
     "切到 动画": ("Switch to Video", "動画へ"),
     "切到 画廊": ("Switch to Gallery", "ギャラリーへ"),
     "扩展市场": ("Extension Market", "拡張マーケット"),
+    "已安装": ("Installed", "インストール済み"),
+    "已安装:": ("Installed:", "インストール済み:"),
+    "未安装": ("Not installed", "未インストール"),
+    "缺失（必需）": ("Missing (required)", "不足（必須）"),
+    "卸载": ("Uninstall", "アンインストール"),
+    "下载": ("Download", "ダウンロード"),
     "设置已保存并应用": ("Settings saved and applied", "設定を保存して適用しました"),
     "恢复默认键位": ("Reset Shortcuts", "ショートカットを初期化"),
     "点击输入框后按下新键位；清空即禁用该快捷键。\n修改点「确定」后立即生效。": (

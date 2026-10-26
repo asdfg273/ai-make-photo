@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPoint, QTimer
 from PyQt6.QtGui import QPixmap, QIcon, QWheelEvent
 
+from ui.i18n import ui_i18n
 from utils.paths import DATA_DIR
 import logging
 
@@ -320,6 +321,7 @@ class GalleryPanel(QWidget):
 
         self.lbl_count = QLabel("0 张")
         self.lbl_count.setProperty("role", "value")
+        self._count_values = (0, 0, 0)
 
         # 排序 + 时间过滤
         from PyQt6.QtWidgets import QComboBox
@@ -376,6 +378,22 @@ class GalleryPanel(QWidget):
         self.meta_panel.resize(380, 520)
         self.meta_panel.apply_params_signal.connect(self.apply_params_signal)
         self.meta_panel.hide()
+        ui_i18n.language_changed.connect(self._render_count)
+        self._render_count()
+
+    def _render_count(self, *_):
+        """按当前语言重绘数量，筛选和语言切换共用同一数据源。"""
+        shown, total, hidden = self._count_values
+        if ui_i18n.language == "en":
+            suffix = f" ({hidden} hidden)" if hidden else ""
+            text = f"{shown}/{total} items{suffix}"
+        elif ui_i18n.language == "ja":
+            suffix = f"（{hidden} 件非表示）" if hidden else ""
+            text = f"{shown}/{total} 枚{suffix}"
+        else:
+            suffix = f"（隐藏 {hidden}）" if hidden else ""
+            text = f"{shown}/{total} 张{suffix}"
+        self.lbl_count.setText(text)
 
     # ========== 收藏持久化 ==========
     def _load_favs(self) -> set:
@@ -530,10 +548,9 @@ class GalleryPanel(QWidget):
             self._add_to_list(path)
             shown += 1
 
-        if nsfw_hidden > 0 and not show_nsfw:
-            self.lbl_count.setText(f"{shown}/{len(self._all_items)} 张 (🔞 隐藏 {nsfw_hidden})")
-        else:
-            self.lbl_count.setText(f"{shown}/{len(self._all_items)} 张")
+        hidden = nsfw_hidden if not show_nsfw else 0
+        self._count_values = (shown, len(self._all_items), hidden)
+        self._render_count()
         self.items_changed.emit()
 
     _video_thumb_cache = None

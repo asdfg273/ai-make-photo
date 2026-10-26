@@ -231,12 +231,99 @@ def test_shell_language_and_layout():
         win.deleteLater()
 
 
+def test_gallery_count_language_roundtrip():
+    from ui.gallery_panel import GalleryPanel
+    from ui.i18n import ui_i18n
+
+    old = ui_i18n.language
+    gallery = GalleryPanel()
+    gallery._all_items = [
+        ("missing-visible.png", "", False),
+        ("missing-hidden.png", "", True),
+    ]
+    try:
+        ui_i18n.set_language("en")
+        gallery._apply_filter()
+        assert gallery.lbl_count.text() == "1/2 items (1 hidden)"
+        ui_i18n.set_language("ja")
+        assert gallery.lbl_count.text() == "1/2 枚（1 件非表示）"
+        gallery._apply_filter()
+        assert gallery.lbl_count.text() == "1/2 枚（1 件非表示）"
+        ui_i18n.set_language("zh")
+        assert gallery.lbl_count.text() == "1/2 张（隐藏 1）"
+    finally:
+        ui_i18n.set_language(old)
+        gallery.close()
+        gallery.deleteLater()
+
+
+def test_character_count_language_roundtrip():
+    from PyQt6.QtWidgets import QWidget
+    from ui.i18n import ui_i18n
+    from ui.pages.characters_page import CharactersPage
+    from utils.character_library import Character, CharacterLibrary
+
+    old = ui_i18n.language
+    with tempfile.TemporaryDirectory() as directory:
+        page = CharactersPage()
+        page.library = CharacterLibrary(directory)
+        page.library.save_character(Character(name="测试角色"))
+        host = QWidget()
+        try:
+            page.build(host)
+            ui_i18n.set_language("en")
+            page.refresh()
+            assert page.lbl_count.text() == "1 character"
+            ui_i18n.set_language("ja")
+            assert page.lbl_count.text() == "1 キャラクター"
+            page.refresh()
+            assert page.lbl_count.text() == "1 キャラクター"
+            ui_i18n.set_language("zh")
+            assert page.lbl_count.text() == "1 个角色"
+        finally:
+            ui_i18n.set_language(old)
+            page.dispose()
+            host.close()
+            host.deleteLater()
+
+
+def test_extension_market_language_roundtrip():
+    from ui.extension_market import ExtensionMarketDialog
+    from ui.i18n import ui_i18n
+    from utils.extension_manager import get_status_summary
+
+    old = ui_i18n.language
+    dlg = ExtensionMarketDialog()
+    try:
+        summary = get_status_summary()
+        ui_i18n.set_language("en")
+        dlg._update_summary()
+        assert dlg.lbl_summary.text() == (
+            f"Installed: {summary['installed']} / {summary['total']}")
+        first_card = next(iter(dlg.cards.values()))
+        assert first_card.lbl_status.text() in {"Installed", "Not installed", "Missing (required)"}
+        assert first_card.btn_action.text() in {"Uninstall", "Download"}
+        ui_i18n.set_language("ja")
+        assert dlg.lbl_summary.text() == (
+            f"インストール済み: {summary['installed']} / {summary['total']}")
+        ui_i18n.set_language("zh")
+        assert dlg.lbl_summary.text() == (
+            f"已安装: {summary['installed']} / {summary['total']}")
+    finally:
+        ui_i18n.set_language(old)
+        dlg.close()
+        dlg.deleteLater()
+
+
 if __name__ == "__main__":
     test_config_language_roundtrip()
     test_translate_and_validate_language()
     test_widget_tree_roundtrip_and_dynamic_text()
     test_settings_language_control()
     test_shell_language_and_layout()
+    test_gallery_count_language_roundtrip()
+    test_character_count_language_roundtrip()
+    test_extension_market_language_roundtrip()
     print("UI_I18N_OK")
     sys.stdout.flush()
     # 与现有 Qt 离屏测试一致，跳过 Multimedia/Qt 的进程退出清理。

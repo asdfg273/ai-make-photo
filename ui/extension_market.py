@@ -174,12 +174,13 @@ class ExtensionCard(QFrame):
         self._refresh_ui()
 
     def _refresh_ui(self):
+        from ui.i18n import ui_i18n
         if self.installed:
-            self.lbl_status.setText("✅ 已安装")
+            self.lbl_status.setText(ui_i18n.tr("已安装"))
             self.lbl_status.setStyleSheet(
                 f"background:{_C_OK_BG}; color:{_C_OK_FG}; font-size:12px; padding:2px 8px; border-radius:4px;"
             )
-            self.btn_action.setText("🗑️ 卸载")
+            self.btn_action.setText(ui_i18n.tr("卸载"))
             self.btn_action.setStyleSheet(f"""
                 QPushButton {{
                     background:{_C_BAD_BG}; color:{_C_BAD_FG}; border:none;
@@ -190,16 +191,16 @@ class ExtensionCard(QFrame):
         else:
             required = self.ext_info.get("required", False)
             if required:
-                self.lbl_status.setText("🔴 缺失(必需)")
+                self.lbl_status.setText(ui_i18n.tr("缺失（必需）"))
                 self.lbl_status.setStyleSheet(
                     f"background:{_C_BAD_BG}; color:{_C_BAD_FG}; font-size:12px; padding:2px 8px; border-radius:4px;"
                 )
             else:
-                self.lbl_status.setText("⚪ 未安装")
+                self.lbl_status.setText(ui_i18n.tr("未安装"))
                 self.lbl_status.setStyleSheet(
                     f"background:{_C_DIM_BG}; color:{_C_DIM_FG}; font-size:12px; padding:2px 8px; border-radius:4px;"
                 )
-            self.btn_action.setText("⬇️ 下载")
+            self.btn_action.setText(ui_i18n.tr("下载"))
             self.btn_action.setStyleSheet(f"""
                 QPushButton {{
                     background:{PALETTE['accent']}; color:#0d1620; border:none;
@@ -258,6 +259,12 @@ class ExtensionCard(QFrame):
 #  扩展市场主对话框
 # ============================================================
 class ExtensionMarketDialog(QDialog):
+    def retranslate_dynamic(self):
+        """刷新安装状态和汇总数字，保留当前界面语言。"""
+        for card in self.cards.values():
+            card._refresh_ui()
+        self._update_summary()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🧩 扩展市场")
@@ -315,6 +322,9 @@ class ExtensionMarketDialog(QDialog):
 
         self._build_cards()
         self._update_summary()
+        from ui.i18n import ui_i18n
+        ui_i18n.language_changed.connect(self.retranslate_dynamic)
+        ui_i18n.translate_widget_tree(self)
 
     def _build_cards(self):
         """按分类构建卡片"""
@@ -358,10 +368,12 @@ class ExtensionMarketDialog(QDialog):
 
     def _update_summary(self):
         """更新顶部汇总"""
+        from ui.i18n import ui_i18n
         summary = get_status_summary()
         installed = summary["installed"]
         total = summary["total"]
-        self.lbl_summary.setText(f"📊 已安装: {installed} / {total}")
+        label = ui_i18n.tr("已安装:")
+        self.lbl_summary.setText(f"{label} {installed} / {total}")
         self.lbl_summary.setStyleSheet("")
 
 

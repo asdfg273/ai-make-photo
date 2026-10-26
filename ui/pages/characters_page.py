@@ -19,6 +19,7 @@ from PyQt6.QtCore import QObject
 from utils.character_library import CharacterLibrary, Character
 from utils.scene_library import SceneLibrary
 from utils.batch_runner import BatchRunner
+from ui.i18n import ui_i18n
 logger = logging.getLogger(__name__)
 
 # ── 主题色兼容层：design_tokens 可能是 dict 也可能是对象 ──
@@ -429,7 +430,20 @@ class CharactersPage(QObject):
         self._shell = shell
         self._ws = self._build_workspace()
         self._params = self._build_params()
+        self._character_count = 0
         self.refresh()
+        ui_i18n.language_changed.connect(self._render_character_count)
+
+    def _render_character_count(self, *_):
+        """角色数量使用结构化数值，避免语言切换后遗留旧文案。"""
+        count = getattr(self, "_character_count", 0)
+        if ui_i18n.language == "en":
+            text = f"{count} character" + ("" if count == 1 else "s")
+        elif ui_i18n.language == "ja":
+            text = f"{count} キャラクター"
+        else:
+            text = f"{count} 个角色"
+        self.lbl_count.setText(text)
 
     def dispose(self):
         """页面销毁时调用。shell 重建页面时必须走到这里。"""
@@ -602,7 +616,8 @@ class CharactersPage(QObject):
             ]
 
         if hasattr(self, "lbl_count"):
-            self.lbl_count.setText(f"{len(chars)} 个角色")
+            self._character_count = len(chars)
+            self._render_character_count()
 
         if not chars:
             ph = QLabel("暂无角色，点击右侧 [➕ 新建角色] 开始创建")
