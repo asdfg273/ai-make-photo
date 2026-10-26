@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QTabWidget, QWid
 from PyQt6.QtGui import QKeySequence
 
 from core.config_manager import DEFAULT_SHORTCUTS, SHORTCUT_LABELS
+from ui.i18n import LANGUAGE_ORDER, SUPPORTED_LANGUAGES, ui_i18n
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ RES_OPTIONS = ["512x512", "512x768", "768x512", "768x768",
                "1024x1024", "832x1216", "1216x832"]
 SAMPLER_OPTIONS = ["DPM++ 2M Karras", "DPM++ SDE Karras",
                    "Euler a", "Euler", "DDIM", "UniPC"]
-TRANS_MODES = [" 纯词典", "AI 智能改写", " 词典优先 + AI 兜底 "]
+TRANS_MODES = ["纯词典", "AI 智能改写", "词典优先 + AI 兜底"]
 
 
 class SettingsDialog(QDialog):
@@ -27,21 +28,52 @@ class SettingsDialog(QDialog):
         super().__init__(host)
         self._host = host
         self.cfg = host.config
-        self.setWindowTitle("⚙️ 设置")
-        self.resize(520, 560)
+        self.setWindowTitle("设置")
+        self.resize(560, 600)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 12)
+        root.setSpacing(10)
         self.tabs = QTabWidget()
         root.addWidget(self.tabs)
 
+        self._build_general_tab()
         self._build_shortcut_tab()
         self._build_defaults_tab()
 
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                               | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
+        bb.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         root.addWidget(bb)
+        ui_i18n.translate_widget_tree(self)
+
+    # ============ Tab 0: 常规 ============
+    def _build_general_tab(self):
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setContentsMargins(12, 16, 12, 12)
+        form.setSpacing(12)
+
+        grp = QGroupBox("界面与语言")
+        gl = QFormLayout(grp)
+        self.combo_ui_language = QComboBox()
+        for code in LANGUAGE_ORDER:
+            self.combo_ui_language.addItem(SUPPORTED_LANGUAGES[code], code)
+        current = ui_i18n.normalize(getattr(self.cfg, "ui_language", "zh"))
+        self.combo_ui_language.setCurrentIndex(
+            max(0, self.combo_ui_language.findData(current)))
+        gl.addRow("界面语言:", self.combo_ui_language)
+        form.addRow(grp)
+
+        hint = QLabel("选择界面使用的语言。点击「确定」后立即生效，并保存到本地配置。")
+        hint.setProperty("role", "hint")
+        hint.setWordWrap(True)
+        form.addRow(hint)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.tabs.addTab(w, "常规")
 
     # ============ Tab 1: 快捷键 ============
     def _build_shortcut_tab(self):
@@ -58,17 +90,17 @@ class SettingsDialog(QDialog):
             form.addRow(SHORTCUT_LABELS.get(action_id, action_id), edit)
             self.seq_edits[action_id] = edit
 
-        hint = QLabel("💡 点击输入框后按下新键位；清空即禁用该快捷键。\n"
+        hint = QLabel("点击输入框后按下新键位；清空即禁用该快捷键。\n"
                       "修改点「确定」后立即生效。")
         hint.setProperty("role", "hint")
         hint.setWordWrap(True)
         form.addRow(hint)
 
-        btn_reset = QPushButton("↩️ 恢复默认键位")
+        btn_reset = QPushButton("恢复默认键位")
         btn_reset.clicked.connect(self._reset_shortcuts)
         form.addRow(btn_reset)
 
-        self.tabs.addTab(w, "⌨️ 快捷键")
+        self.tabs.addTab(w, "快捷键")
 
     def _reset_shortcuts(self):
         for action_id, edit in self.seq_edits.items():
@@ -81,7 +113,7 @@ class SettingsDialog(QDialog):
         cfg = self.cfg
 
         # ── 生成默认值 ──
-        grp_gen = QGroupBox("🎨 生成默认值")
+        grp_gen = QGroupBox("生成默认值")
         f = QFormLayout(grp_gen)
 
         self.spin_steps = QSpinBox()
@@ -121,7 +153,7 @@ class SettingsDialog(QDialog):
         v.addWidget(grp_gen)
 
         # ── 精修默认开关 ──
-        grp_fix = QGroupBox("✨ 精修默认开关")
+        grp_fix = QGroupBox("精修默认开关")
         f2 = QFormLayout(grp_fix)
         self.chk_hires = QCheckBox("默认开启 Hires.fix")
         self.chk_hires.setChecked(bool(getattr(cfg, "use_hires", False)))
@@ -138,10 +170,11 @@ class SettingsDialog(QDialog):
         v.addWidget(grp_fix)
 
         # ── AI / 设备 ──
-        grp_ai = QGroupBox("🧠 AI 与设备")
+        grp_ai = QGroupBox("AI 与设备")
         f3 = QFormLayout(grp_ai)
 
         self.combo_trans = QComboBox()
+        self.combo_trans.setProperty("i18nItems", True)  # 业务层读取索引
         self.combo_trans.addItems(TRANS_MODES)
         self.combo_trans.setCurrentIndex(
             max(0, min(2, int(getattr(cfg, "default_trans_mode", 2)))))
@@ -167,14 +200,14 @@ class SettingsDialog(QDialog):
         f3.addRow("默认设备:", self.combo_device)
         v.addWidget(grp_ai)
 
-        hint = QLabel("💡 点「确定」后立即写入配置并应用到当前界面；"
+        hint = QLabel("点「确定」后立即写入配置并应用到当前界面；"
                       "设备偏好在下次加载模型时生效。")
         hint.setProperty("role", "hint")
         hint.setWordWrap(True)
         v.addWidget(hint)
         v.addStretch()
 
-        self.tabs.addTab(w, "🎛️ 默认参数")
+        self.tabs.addTab(w, "默认参数")
 
     # ============ 收集结果 ============
     def accept(self):
@@ -200,7 +233,9 @@ class SettingsDialog(QDialog):
         if self.combo_qwen.currentData():
             cfg.qwen_model_key = self.combo_qwen.currentData()
         cfg.device_preference = self.combo_device.currentText().lower()
+        cfg.ui_language = self.combo_ui_language.currentData()
 
         cfg.save()
-        logger.info("⚙️ 设置已保存")
+        ui_i18n.set_language(cfg.ui_language)
+        logger.info(f"设置已保存，界面语言: {cfg.ui_language}")
         super().accept()

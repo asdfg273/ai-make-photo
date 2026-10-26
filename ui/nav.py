@@ -9,10 +9,11 @@ class NavRail(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(64)
+        self.setFixedWidth(136)
+        self.setObjectName("navRail")
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(6, 8, 6, 8)
-        self._layout.setSpacing(4)
+        self._layout.setContentsMargins(8, 12, 8, 12)
+        self._layout.setSpacing(3)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons: dict[str, QToolButton] = {}
@@ -22,7 +23,7 @@ class NavRail(QWidget):
         for cls in pages:
             btn = QToolButton()
             btn.setObjectName("navBtn")          # theme.py 的 QSS 钩子
-            btn.setText(f"{cls.icon}\n{cls.title}")
+            btn.setText(cls.title)
             btn.setCheckable(True)
             btn.setToolTip(cls.title)
             btn.clicked.connect(

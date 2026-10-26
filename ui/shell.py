@@ -5,12 +5,17 @@
 # ============================================================
 import logging
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget, QProgressBar, QLabel, QStatusBar,
-                             QScrollArea, QSizePolicy)
+                             QScrollArea, QSizePolicy, QApplication)
 from PyQt6.QtCore import Qt
 
 from ui.nav import NavRail
 from ui.pages import PAGES
 from ui.contracts import install_aliases, check_contract, apply_degradation
+from ui.theme import PALETTE
+from ui.i18n import ui_i18n
+
+_DEFAULT_FG = PALETTE["fg"]
+_OK = PALETTE["success"]
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +38,11 @@ class ShellMixin:
     """替代 UIBuilderMixin 的 setup_ui 实现。业务 mixin 零改动。"""
 
     def setup_ui(self):
-        self.setMinimumSize(1320, 820)
-        self.setWindowTitle("AI 绘画工作站 v6.0")
+        cfg = getattr(self, "config", None)
+        ui_i18n.set_language(getattr(cfg, "ui_language", "zh"))
+        ui_i18n.install(QApplication.instance())
+        self.setMinimumSize(1180, 760)
+        self.setWindowTitle(ui_i18n.tr("AI 绘画工作站 v6.0"))
         # 主题由 main.py 的 apply_theme(QApplication) 统一应用
 
         from ui.core_panel import build_status_widgets
@@ -43,12 +51,12 @@ class ShellMixin:
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(6, 6, 6, 6)
-        root.setSpacing(6)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(10)
 
         # ── 主体三栏 ──
         body = QHBoxLayout()
-        body.setSpacing(6)
+        body.setSpacing(12)
 
         self.nav = NavRail()
         body.addWidget(self.nav)
@@ -117,10 +125,22 @@ class ShellMixin:
         self._init_defaults()
         self._setup_shortcuts()
         self.lbl_ext_count = QLabel()
-        self.lbl_ext_count.setStyleSheet("color:#7d8187; font-size:11px; margin-right:6px;")
+        self.lbl_ext_count.setProperty("role", "hint")
         self.statusBar().addPermanentWidget(self.lbl_ext_count)
         self._refresh_extension_count()
+        self.retranslate_ui()
 
+    def retranslate_ui(self):
+        """语言切换后就地更新文字，不重建页面或清空用户输入。"""
+        # 这些下拉框由业务层读取 currentIndex/currentData，允许翻译显示文本。
+        # 其他下拉框可能以 currentText 作为参数值，默认保持原文。
+        for name in ("combo_trans_mode", "combo_enhance_mode",
+                     "combo_video_mode", "combo_travel_mode"):
+            combo = getattr(self, name, None)
+            if combo is not None:
+                combo.setProperty("i18nItems", True)
+        ui_i18n.translate_widget_tree(self)
+        self.setWindowTitle(ui_i18n.tr("AI 绘画工作站 v6.0"))
 
     # ---------- 全局快捷键（键位可在 设置→快捷键 改）----------
     def _setup_shortcuts(self):
@@ -285,20 +305,22 @@ class ShellMixin:
     # ---------- 右侧面板（整体可滚动，生成按钮固定底部）----------
     def _build_params_panel(self) -> QWidget:
         w = QWidget()
+        w.setObjectName("paramsPanel")
         w.setFixedWidth(400)
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        lay.setContentsMargins(10, 8, 10, 10)
+        lay.setSpacing(8)
 
         # 单一滚动区：核心区 + 页面专属区 + 共享折叠分组，内容再多也不挤压
         self.params_scroll = QScrollArea()
         self.params_scroll.setWidgetResizable(True)
+        self.params_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.params_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QWidget()
         clay = QVBoxLayout(content)
-        clay.setContentsMargins(4, 4, 4, 4)
-        clay.setSpacing(8)
+        clay.setContentsMargins(2, 2, 2, 2)
+        clay.setSpacing(10)
 
         # 生成核心区（全局单例，包一层容器便于整区显隐）
         self.core_wrap = QWidget()
@@ -351,7 +373,7 @@ class ShellMixin:
         self._setup_resource_monitor()
 
     # ---------- 方法契约 ----------
-    def append_log(self, text: str, color: str = "#dfe5ec"):
+    def append_log(self, text: str, color: str = _DEFAULT_FG):
         """从旧 append_log 迁入：写图片/动画日志框，带颜色，自动滚底。"""
         html = (
             f'<span style="color:{color}; font-family:Consolas;">'
@@ -368,7 +390,7 @@ class ShellMixin:
         if not wrote:
             logger.info(text)
 
-    def set_status(self, text: str, color: str = "#dfe5ec"):
+    def set_status(self, text: str, color: str = _DEFAULT_FG):
         if getattr(self, "lbl_status", None) is not None:
             self.lbl_status.setText(text)
 
@@ -791,7 +813,7 @@ class ShellMixin:
         from PyQt6.QtGui import QAction
         mb = self.menuBar()
 
-        m_file = mb.addMenu("📁 文件")
+        m_file = mb.addMenu("文件")
         a_open = QAction("加载图片", self)
         if hasattr(self, "select_image"):
             a_open.triggered.connect(self.select_image)
@@ -804,53 +826,53 @@ class ShellMixin:
         a_quit.triggered.connect(self.close)
         m_file.addAction(a_quit)
 
-        m_tool = mb.addMenu("🔧 工具")
+        m_tool = mb.addMenu("工具")
         a_clear_log = QAction("清空日志", self)
         a_clear_log.triggered.connect(lambda: (
             getattr(self, 'txt_log_image', None) and self.txt_log_image.clear(),
             getattr(self, 'txt_log_video', None) and self.txt_log_video.clear()))
         m_tool.addAction(a_clear_log)
         m_tool.addSeparator()
-        act_market = QAction("🛒 扩展市场...", self)
+        act_market = QAction("扩展市场...", self)
         act_market.setShortcut("Ctrl+E")
         act_market.triggered.connect(self._open_extension_market)
         m_tool.addAction(act_market)
         self._act_market = act_market   # 设置改键后同步
-        act_refresh = QAction("🔄 刷新扩展状态", self)
+        act_refresh = QAction("刷新扩展状态", self)
         act_refresh.triggered.connect(self._refresh_extension_count)
         m_tool.addAction(act_refresh)
 
         # ---------- 工作流（节点编辑 / 用引擎生成）----------
-        m_wf = mb.addMenu("🧩 工作流")
-        a_wf_edit = QAction("🧩 打开工作流编辑器…", self)
+        m_wf = mb.addMenu("工作流")
+        a_wf_edit = QAction("打开工作流编辑器…", self)
         a_wf_edit.setShortcut("Ctrl+W")
         a_wf_edit.setToolTip("可视化节点编辑器：看/改这张「界面自动生成的流程图」")
         a_wf_edit.triggered.connect(self._open_workflow_editor)
         m_wf.addAction(a_wf_edit)
 
-        a_wf_gen = QAction("✨ 用当前界面设置生成流程图", self)
+        a_wf_gen = QAction("用当前界面设置生成流程图", self)
         a_wf_gen.setToolTip("把当前模型/提示词/LoRA/高清/修脸等设置编译成工作流并打开编辑器")
         a_wf_gen.triggered.connect(self._open_workflow_from_ui)
         m_wf.addAction(a_wf_gen)
         m_wf.addSeparator()
 
-        a_wf_run = QAction("▶️ 用工作流引擎生成", self)
+        a_wf_run = QAction("用工作流引擎生成", self)
         a_wf_run.setShortcut("Ctrl+Shift+W")
         a_wf_run.setToolTip("按当前界面设置生成工作流并**立即执行**（走 workflow 引擎）")
         a_wf_run.triggered.connect(self._run_workflow_from_ui)
         m_wf.addAction(a_wf_run)
 
-        a_wf_check = QAction("🩺 预检当前工作流", self)
+        a_wf_check = QAction("预检当前工作流", self)
         a_wf_check.setToolTip("运行前预检：模型/LoRA/VAE/ControlNet/显存/输出目录/依赖")
         a_wf_check.triggered.connect(self._check_workflow_from_ui)
         m_wf.addAction(a_wf_check)
         m_wf.addSeparator()
 
-        a_wf_dir = QAction("📂 打开工作流目录", self)
+        a_wf_dir = QAction("打开工作流目录", self)
         a_wf_dir.triggered.connect(self._open_workflow_dir)
         m_wf.addAction(a_wf_dir)
 
-        m_memory = mb.addMenu("🧹 内存")
+        m_memory = mb.addMenu("内存")
         a_release = QAction("释放内存", self)
         a_release.triggered.connect(self.on_unload_models)
         m_memory.addAction(a_release)
@@ -858,12 +880,12 @@ class ShellMixin:
         a_show.triggered.connect(self._show_memory)
         m_memory.addAction(a_show)
 
-        m_about = mb.addMenu("❓ 关于")
+        m_about = mb.addMenu("关于")
         a_about = QAction("关于本软件", self)
         a_about.triggered.connect(self._show_about)
         m_about.addAction(a_about)
 
-        m_setting = mb.addMenu("⚙️ 设置")
+        m_setting = mb.addMenu("设置")
         a_pref = QAction("偏好设置...", self)
         a_pref.setShortcut("Ctrl+,")
         a_pref.triggered.connect(self._open_settings)
@@ -897,7 +919,8 @@ class ShellMixin:
                 self.combo_device.setCurrentIndex(idx)
 
         self._rebuild_shortcuts()
-        self.set_status("✅ 设置已保存并应用", "#a6e3a1")
+        self.retranslate_ui()
+        self.set_status(ui_i18n.tr("设置已保存并应用"), _OK)
         self._refresh_extension_count()   # 只刷新文字，不再重建控件
 
     def _refresh_extension_count(self):

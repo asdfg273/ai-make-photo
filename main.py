@@ -56,6 +56,7 @@ from utils.app_generation import GenerationMixin
 from ui.preset_manager import PresetManagerMixin, TooltipMixin
 from ui.param_snapshot import ParamSnapshotMixin
 from ui.video_panel_mixin import VideoPanelMixin
+from ui.i18n import ui_i18n
 from core.presets import PROMPT_PRESETS
 from utils.prompt_enhancer import get_enhancer
 from utils.paths import OUTPUT_DIR
@@ -160,13 +161,14 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 
         # ── 初始按钮状态 ──
         self.btn_generate.setEnabled(False)
-        self.btn_generate.setText("🚀 AI 引擎预热中...")
-        self._set_status("⏳ 正在后台加载大模型与底层环境,请稍候...", "#f9e2af")
+        self.btn_generate.setText(ui_i18n.tr("AI 引擎预热中..."))
+        self._set_status(
+            ui_i18n.tr("正在后台加载大模型与底层环境,请稍候..."), "#f9e2af")
 
         threading.Thread(target=self._async_init_ai, daemon=True).start()
 
         if hasattr(self, 'combo_model') and self.combo_model.count() > 0:
-            self._set_status("🔄 正在加载默认模型...", "#f9e2af")
+            self._set_status(ui_i18n.tr("正在加载默认模型..."), "#f9e2af")
             QTimer.singleShot(500, self._preload_default_model)
 
     # ==========================================================
@@ -181,7 +183,8 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         try:
             if hasattr(self, 'combo_model') and self.combo_model.count() > 0:
                 self.on_model_selected(0)   # 刷新模型信息 + LoRA + 备注
-                self._set_status("✅ 默认模型就绪（权重将在首次生成时加载）", "#a6e3a1")
+                self._set_status(
+                    ui_i18n.tr("默认模型就绪（权重将在首次生成时加载）"), "#a6e3a1")
         except Exception as e:
             logger.warning(f"[PRELOAD] ⚠️ 默认模型信息加载失败: {e}")
 
@@ -273,8 +276,9 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 
     def _on_ai_failed(self, err: str):
         self.btn_generate.setEnabled(False)
-        self.btn_generate.setText("❌ 引擎加载失败")
-        self._set_status(f"❌ 引擎加载失败: {err}", "#f38ba8")
+        self.btn_generate.setText(ui_i18n.tr("引擎加载失败"))
+        self._set_status(
+            f"{ui_i18n.tr('引擎加载失败')}: {err}", "#f38ba8")
         QMessageBox.critical(self, "AI 引擎加载失败",
                              f"无法加载 AI 引擎：\n\n{err}")
 
@@ -285,7 +289,8 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         except Exception as e:
             logger.warning(f"模型扫描失败(忽略): {e}")
         logger.info("👉 [预热] 后台导入重型库 (PyTorch / Diffusers)...")
-        self._emit_status("⏳ 正在导入 PyTorch & Diffusers...", "#f9e2af")
+        self._emit_status(
+            ui_i18n.tr("正在导入 PyTorch & Diffusers..."), "#f9e2af")
         try:
             global torch
             import torch
@@ -293,7 +298,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             log_gpu_info()
             from core.model_manager import ModelManager
             self._emit_status(
-                "⏳ 正在加载大模型,首次启动可能需要数分钟...", "#f9e2af")
+                ui_i18n.tr("正在加载大模型,首次启动可能需要数分钟..."), "#f9e2af")
             self.ai = ModelManager()
         except Exception as e:
             logger.exception("❌ AI 引擎加载失败")   # exception 会带完整 traceback
@@ -308,8 +313,9 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             self.refresh_lora_by_model()
 
         self.btn_generate.setEnabled(True)
-        self.btn_generate.setText("🚀 开始生成")
-        self._set_status("✅ 系统就绪,等待生成指令...", "#a6e3a1")
+        self.btn_generate.setText(ui_i18n.tr("开始生成"))
+        self._set_status(
+            ui_i18n.tr("系统就绪,等待生成指令..."), "#a6e3a1")
         logger.info("✅ [预热] 引擎就绪!")
         QMetaObject.invokeMethod(self, "refresh_models", Qt.ConnectionType.QueuedConnection)
 

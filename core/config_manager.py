@@ -20,15 +20,15 @@ DEFAULT_SHORTCUTS = {
     "extension_market": "Ctrl+E",        # 扩展市场
 }
 
-# 快捷键动作的中文标签（设置界面展示用）
+# 快捷键动作的界面标签（多语言由 ui.i18n 统一处理）
 SHORTCUT_LABELS = {
-    "generate":         "🎨 触发生成",
-    "interrupt":        "⏹ 中断生成",
-    "page_txt2img":     "1️⃣ 切到 文生图",
-    "page_img2img":     "2️⃣ 切到 图生图",
-    "page_video":       "3️⃣ 切到 动画",
-    "page_gallery":     "4️⃣ 切到 画廊",
-    "extension_market": "🛒 扩展市场",
+    "generate":         "触发生成",
+    "interrupt":        "中断生成",
+    "page_txt2img":     "切到 文生图",
+    "page_img2img":     "切到 图生图",
+    "page_video":       "切到 动画",
+    "page_gallery":     "切到 画廊",
+    "extension_market": "扩展市场",
 }
 
 
@@ -42,6 +42,7 @@ class AppConfig:
     default_lora_weight: float = 0.7
     adetailer_enabled: bool = False
     theme: str = "darkly"
+    ui_language: str = "zh"           # 界面语言: zh / ja / en
     device_preference:    str   = "auto"
     default_width: int = 512
     default_height: int = 768
