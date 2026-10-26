@@ -156,7 +156,7 @@ def test_settings_language_control():
 
 
 def test_shell_language_and_layout():
-    from PyQt6.QtWidgets import QMainWindow
+    from PyQt6.QtWidgets import QHBoxLayout, QMainWindow, QSizePolicy
     from core.config_manager import AppConfig
     from ui.i18n import ui_i18n
     from ui.shell import ShellMixin
@@ -184,6 +184,17 @@ def test_shell_language_and_layout():
         margins = win.centralWidget().layout().contentsMargins()
         assert margins.left() >= 12 and margins.top() >= 10
         assert PALETTE["radius"] <= 5
+        assert (win.nav._buttons["gallery"].sizePolicy().horizontalPolicy()
+                == QSizePolicy.Policy.Expanding)
+
+        # AI 工具和模型档位分两行，避免英/日长文本互相挤压。
+        layouts = win.findChildren(QHBoxLayout)
+        enhance_row = next(x for x in layouts if x.indexOf(win.btn_enhance_prompt) >= 0)
+        model_row = next(x for x in layouts if x.indexOf(win.combo_ai_model) >= 0)
+        assert enhance_row is not model_row
+
+        # 离屏 Qt 可能没有任何字体，sizeHint() 不代表真实桌面排版；
+        # 此处只验证结构和尺寸策略，实际截断由 Windows 桌面视觉验收覆盖。
 
         ui_i18n.set_language("ja")
         assert win.nav._buttons["gallery"].text() == "ギャラリー"

@@ -1,5 +1,6 @@
 # ui/nav.py
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QToolButton, QButtonGroup
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QToolButton, QButtonGroup,
+                             QSizePolicy)
 from PyQt6.QtCore import pyqtSignal
 
 
@@ -26,6 +27,8 @@ class NavRail(QWidget):
             btn.setText(cls.title)
             btn.setCheckable(True)
             btn.setToolTip(cls.title)
+            btn.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.clicked.connect(
                 lambda _=False, pid=cls.page_id: self.page_selected.emit(pid))
             self._buttons[cls.page_id] = btn

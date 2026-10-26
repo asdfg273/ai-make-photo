@@ -66,7 +66,7 @@ def build_core(host, layout: QVBoxLayout) -> None:
     model_row.setSpacing(6)
     model_row.addWidget(host.combo_model, 1)
     host.btn_model_diag = QPushButton("🔬")
-    host.btn_model_diag.setFixedSize(32, 28)
+    host.btn_model_diag.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     host.btn_model_diag.setToolTip(
         "诊断当前已加载模型的架构、v-pred、调度器、显存等信息")
     _wire(host, host.btn_model_diag.clicked, "_show_model_diagnostics")
@@ -97,17 +97,16 @@ def build_core(host, layout: QVBoxLayout) -> None:
 
     host.lbl_preset_badge = QLabel("")
     host.lbl_preset_badge.setProperty("role", "value")
-    host.lbl_preset_badge.setMinimumWidth(60)
     preset_row.addWidget(host.lbl_preset_badge)
 
     host.btn_save_preset = QPushButton("💾")
-    host.btn_save_preset.setFixedSize(32, 28)
+    host.btn_save_preset.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     host.btn_save_preset.setToolTip("把当前所有参数保存为新预设")
     _wire(host, host.btn_save_preset.clicked, "save_current_as_preset")
     preset_row.addWidget(host.btn_save_preset)
 
     host.btn_restore_preset = QPushButton("↩️")
-    host.btn_restore_preset.setFixedSize(32, 28)
+    host.btn_restore_preset.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     host.btn_restore_preset.setToolTip("还原到套用预设前的所有参数")
     _wire(host, host.btn_restore_preset.clicked, "restore_preset_backup")
     preset_row.addWidget(host.btn_restore_preset)
@@ -179,20 +178,21 @@ def build_core(host, layout: QVBoxLayout) -> None:
     host.combo_enhance_mode.setMinimumContentsLength(6)
     host.combo_enhance_mode.setSizeAdjustPolicy(
         QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-    prompt_btn_row.addWidget(host.combo_enhance_mode)
+    prompt_btn_row.addWidget(host.combo_enhance_mode, 1)
 
     host.btn_vision_prompt = QPushButton("📷 识图生成")
     host.btn_vision_prompt.setToolTip(
         "上传一张图片 + 输入需求, AI 自动整合生成 SD 提示词")
     _wire(host, host.btn_vision_prompt.clicked, "on_vision_prompt")
     prompt_btn_row.addWidget(host.btn_vision_prompt)
+    gp.addLayout(prompt_btn_row)
 
+    enhance_model_row = QHBoxLayout()
+    enhance_model_row.setSpacing(6)
     host.chk_auto_enhance = QCheckBox("生成前自动改写")
     host.chk_auto_enhance.setToolTip(
         "勾选后, 每次生成前都会调用 AI 智能改写提示词")
-    prompt_btn_row.addWidget(host.chk_auto_enhance)
-    prompt_btn_row.addStretch()
-    gp.addLayout(prompt_btn_row)
+    enhance_model_row.addWidget(host.chk_auto_enhance)
 
     from utils.prompt_enhancer import PromptEnhancer
     host.combo_ai_model = QComboBox()
@@ -204,7 +204,8 @@ def build_core(host, layout: QVBoxLayout) -> None:
     host.combo_ai_model.setSizeAdjustPolicy(
         QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
     _wire(host, host.combo_ai_model.currentIndexChanged, "_on_ai_model_changed")
-    prompt_btn_row.addWidget(host.combo_ai_model, 1)
+    enhance_model_row.addWidget(host.combo_ai_model, 1)
+    gp.addLayout(enhance_model_row)
 
     # ─── 翻译模式选择 ───
     row_trans = QHBoxLayout()
@@ -212,6 +213,17 @@ def build_core(host, layout: QVBoxLayout) -> None:
     lbl_trans = QLabel("🌐 翻译模式:")
     lbl_trans.setProperty("role", "title")
     row_trans.addWidget(lbl_trans)
+    row_trans.addStretch(1)
+
+    host.btn_trans_compare = QPushButton("🔁 对比")
+    host.btn_trans_compare.setToolTip(
+        "中→英→中 回译对比\n"
+        "把当前提示词按所选模式翻成英文（即实际送入模型的文本），\n"
+        "再让 AI 把英文翻回中文，检查翻译是否有幻觉/漏词，\n"
+        "避免词不达意导致生图质量不佳")
+    _wire(host, host.btn_trans_compare.clicked, "_on_trans_compare")
+    row_trans.addWidget(host.btn_trans_compare)
+    gp.addLayout(row_trans)
 
     host.combo_trans_mode = QComboBox()
     host.combo_trans_mode.addItems([
@@ -227,17 +239,7 @@ def build_core(host, layout: QVBoxLayout) -> None:
         " 纯词典: 只用 JSON 词典查词, 速度快但不通顺\n"
         " AI 改写: 每次都调 Qwen, 效果最好但慢\n"
         "混合模式: 词典命中直接用, 未命中才调 AI ")
-    row_trans.addWidget(host.combo_trans_mode, 1)
-
-    host.btn_trans_compare = QPushButton("🔁 对比")
-    host.btn_trans_compare.setToolTip(
-        "中→英→中 回译对比\n"
-        "把当前提示词按所选模式翻成英文（即实际送入模型的文本），\n"
-        "再让 AI 把英文翻回中文，检查翻译是否有幻觉/漏词，\n"
-        "避免词不达意导致生图质量不佳")
-    _wire(host, host.btn_trans_compare.clicked, "_on_trans_compare")
-    row_trans.addWidget(host.btn_trans_compare)
-    gp.addLayout(row_trans)
+    gp.addWidget(host.combo_trans_mode)
 
     layout.addWidget(grp_prompt)
 
