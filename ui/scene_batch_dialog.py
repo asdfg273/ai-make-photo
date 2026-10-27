@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
 )
 
+from ui.i18n import ui_i18n
 logger = logging.getLogger(__name__)
 
 # ── 场景字段表：唯一需要维护字段名的地方 ───────────────────────
@@ -72,8 +73,8 @@ class SceneBatchDialog(QDialog):
         self._widgets: dict = {}
         self._loading = False
 
-        name = getattr(character, "name", "未命名角色")
-        self.setWindowTitle(f"批量出图 — {name}")
+        name = getattr(character, "name", ui_i18n.tr("未命名角色"))
+        self.setWindowTitle(ui_i18n.trf("批量出图 — {name}", name=name))
         self.setMinimumSize(760, 520)
         self._build_ui()
         self._reload(select_uuid=None)
@@ -151,7 +152,7 @@ class SceneBatchDialog(QDialog):
             g.addWidget(sw, i, 1)
             self._opt_widgets[key] = (cb, sw)
 
-        btn_save = QPushButton("💾  保存场景")
+        btn_save = QPushButton("保存场景")
         btn_save.clicked.connect(self._save_current)
         g.addWidget(btn_save, len(_SCENE_FIELDS) + 1, 1)
         split.addWidget(box)
@@ -167,8 +168,8 @@ class SceneBatchDialog(QDialog):
         v.addWidget(self.lbl_status)
 
         row3 = QHBoxLayout()
-        self.btn_run = QPushButton("🚀  开始批量出图")
-        self.btn_open_out = QPushButton("📂 打开输出目录")
+        self.btn_run = QPushButton("开始批量出图")
+        self.btn_open_out = QPushButton("打开输出目录")
         self.btn_close = QPushButton("关闭")
         self.btn_run.clicked.connect(self._on_run)
         self.btn_open_out.clicked.connect(self._open_output_dir)
@@ -202,7 +203,7 @@ class SceneBatchDialog(QDialog):
                 self._scenes = list(self.library.list_for_character(self._char_uuid()) or [])
             except Exception as e:
                 logger.exception("读取场景失败")
-                self.lbl_status.setText(f"读取场景失败：{e}")
+                self.lbl_status.setText(ui_i18n.trf("读取场景失败：{error}", error=e))
 
         for sc in self._scenes:
             it = QListWidgetItem(self._row_text(sc))
@@ -215,11 +216,10 @@ class SceneBatchDialog(QDialog):
 
         shots = sum(max(1, int(getattr(s, "count", 1) or 1))
                     for s in self._scenes if getattr(s, "enabled", True))
-        self.lbl_head.setText(
-            f"角色：<b>{getattr(self.character, 'name', '—')}</b>　"
-            f"场景：<b>{len(self._scenes)}</b> 个　"
-            f"启用出图：<b>{shots}</b> 张"
-        )
+        self.lbl_head.setText(ui_i18n.trf(
+            "角色：<b>{character}</b>　场景：<b>{scenes}</b> 个　启用出图：<b>{shots}</b> 张",
+            character=getattr(self.character, "name", "—"),
+            scenes=len(self._scenes), shots=shots))
         self.btn_run.setEnabled(bool(self._scenes))
 
         # 选中目标行
@@ -235,11 +235,11 @@ class SceneBatchDialog(QDialog):
             self._load_form(None)
 
     def _row_text(self, sc) -> str:
-        label = getattr(sc, "name", "") or "(未命名)"
+        label = getattr(sc, "name", "") or ui_i18n.tr("(未命名)")
         text = f"{label}　×{max(1, int(getattr(sc, 'count', 1) or 1))}"
         st = getattr(sc, "status", "") or ""
         if st and st != "pending":
-            text += f"　[{st}]"
+            text += f"　[{ui_i18n.tr(st)}]"
         return text
 
     def _current(self):
@@ -292,11 +292,10 @@ class SceneBatchDialog(QDialog):
     def _refresh_header(self):
         shots = sum(max(1, int(getattr(s, "count", 1) or 1))
                     for s in self._scenes if getattr(s, "enabled", True))
-        self.lbl_head.setText(
-            f"角色：<b>{getattr(self.character, 'name', '—')}</b>　"
-            f"场景：<b>{len(self._scenes)}</b> 个　"
-            f"启用出图：<b>{shots}</b> 张"
-        )
+        self.lbl_head.setText(ui_i18n.trf(
+            "角色：<b>{character}</b>　场景：<b>{scenes}</b> 个　启用出图：<b>{shots}</b> 张",
+            character=getattr(self.character, "name", "—"),
+            scenes=len(self._scenes), shots=shots))
 
     def _on_item_changed(self, it):
         if self._loading or self.library is None:
@@ -331,7 +330,8 @@ class SceneBatchDialog(QDialog):
     def _save_current(self):
         sc = self._current()
         if sc is None:
-            QMessageBox.information(self, "提示", "请先在左侧选择一个场景。")
+            QMessageBox.information(
+                self, ui_i18n.tr("提示"), ui_i18n.tr("请先在左侧选择一个场景。"))
             return
         self._collect(sc)
         if self.library is not None:
@@ -339,7 +339,8 @@ class SceneBatchDialog(QDialog):
         it = self.lst.currentItem()
         if it is not None:
             it.setText(self._row_text(sc))
-        self.lbl_status.setText(f"已保存：{getattr(sc, 'name', '') or '(未命名)'}")
+        name = getattr(sc, "name", "") or ui_i18n.tr("(未命名)")
+        self.lbl_status.setText(ui_i18n.trf("已保存：{name}", name=name))
 
     def _on_add(self):
         if self.library is None:
@@ -356,7 +357,8 @@ class SceneBatchDialog(QDialog):
             self.library.save()
         except Exception as e:
             logger.exception("新增场景失败")
-            QMessageBox.critical(self, "错误", f"新增场景失败：{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"), ui_i18n.trf("新增场景失败：{error}", error=e))
             return
         self._reload(select_uuid=getattr(sc, "uuid", None))
 
@@ -373,7 +375,8 @@ class SceneBatchDialog(QDialog):
             self.library.save()
         except Exception as e:
             logger.exception("复制场景失败")
-            QMessageBox.critical(self, "错误", f"复制场景失败：{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"), ui_i18n.trf("复制场景失败：{error}", error=e))
             return
         self._reload(select_uuid=getattr(new, "uuid", None))
 
@@ -381,8 +384,9 @@ class SceneBatchDialog(QDialog):
         sc = self._current()
         if sc is None or self.library is None:
             return
-        nm = getattr(sc, "name", "") or "(未命名)"
-        if QMessageBox.question(self, "确认", f"删除场景「{nm}」？") \
+        nm = getattr(sc, "name", "") or ui_i18n.tr("(未命名)")
+        if QMessageBox.question(
+                self, ui_i18n.tr("确认"), ui_i18n.trf("删除场景「{name}」？", name=nm)) \
                 != QMessageBox.StandardButton.Yes:
             return
         try:
@@ -390,7 +394,8 @@ class SceneBatchDialog(QDialog):
             self.library.save()
         except Exception as e:
             logger.exception("删除场景失败")
-            QMessageBox.critical(self, "错误", f"删除场景失败：{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"), ui_i18n.trf("删除场景失败：{error}", error=e))
             return
         self._reload()
 
@@ -438,15 +443,18 @@ class SceneBatchDialog(QDialog):
             os.startfile(d)
         except Exception as e:
             logger.error(f"打开输出目录失败: {e}")
-            QMessageBox.critical(self, "错误", f"打开输出目录失败：{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"), ui_i18n.trf("打开输出目录失败：{error}", error=e))
 
     def _on_run(self):
         chosen = self._selected()
         if not chosen:
-            QMessageBox.information(self, "提示", "请至少勾选一个场景。")
+            QMessageBox.information(
+                self, ui_i18n.tr("提示"), ui_i18n.tr("请至少勾选一个场景。"))
             return
         if self.shell is None:
-            QMessageBox.critical(self, "错误", "缺少宿主对象（shell），无法启动生成。")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"), ui_i18n.tr("缺少宿主对象（shell），无法启动生成。"))
             return
         self._save_current()
 
@@ -454,13 +462,16 @@ class SceneBatchDialog(QDialog):
             try:
                 from utils.batch_runner import BatchRunner
             except Exception as e:
-                QMessageBox.critical(self, "错误", f"BatchRunner 导入失败：{e}")
+                QMessageBox.critical(
+                    self, ui_i18n.tr("错误"),
+                    ui_i18n.trf("BatchRunner 导入失败：{error}", error=e))
                 return
             self._runner = BatchRunner(self.shell, self.library, parent=self)
             self._owns_runner = True
 
         if self._runner.running:
-            QMessageBox.information(self, "提示", "已有批量任务在运行中。")
+            QMessageBox.information(
+                self, ui_i18n.tr("提示"), ui_i18n.tr("已有批量任务在运行中。"))
             return
 
         self._attach()
@@ -471,7 +482,7 @@ class SceneBatchDialog(QDialog):
         self.btn_close.setEnabled(False)
 
         if not self._runner.start(self.character, chosen):
-            self.lbl_status.setText("启动失败（可能已有任务在运行）")
+            self.lbl_status.setText(ui_i18n.tr("启动失败（可能已有任务在运行）"))
             self.btn_run.setEnabled(True)
             self.btn_close.setEnabled(True)
             self._detach()
@@ -507,7 +518,8 @@ class SceneBatchDialog(QDialog):
     def _on_scene_done(self, scene_uuid: str, status: str):
         sc = self.library.get(scene_uuid) if self.library else None
         nm = getattr(sc, "name", scene_uuid[:8])
-        self.lbl_status.setText(f"场景完成：{nm} — {status}")
+        self.lbl_status.setText(ui_i18n.trf(
+            "场景完成：{name} — {status}", name=nm, status=ui_i18n.tr(status)))
         for i in range(self.lst.count()):
             it = self.lst.item(i)
             if it.data(Qt.ItemDataRole.UserRole) is sc and sc is not None:
@@ -521,7 +533,7 @@ class SceneBatchDialog(QDialog):
     def _on_finished(self, ok: int, fail: int):
         if self.bar.maximum() > 0:
             self.bar.setValue(self.bar.maximum())
-        self.lbl_status.setText(f"完成：成功 {ok} / 失败 {fail}")
+        self.lbl_status.setText(ui_i18n.trf("完成：成功 {ok} / 失败 {fail}", ok=ok, fail=fail))
         self.btn_run.setEnabled(True)
         self.btn_close.setEnabled(True)
         self._detach()
@@ -530,7 +542,8 @@ class SceneBatchDialog(QDialog):
 
     def closeEvent(self, ev):
         if self._runner is not None and self._runner.running:
-            r = QMessageBox.question(self, "确认", "批量任务正在运行，确定中止并关闭？")
+            r = QMessageBox.question(
+                self, ui_i18n.tr("确认"), ui_i18n.tr("批量任务正在运行，确定中止并关闭？"))
             if r != QMessageBox.StandardButton.Yes:
                 ev.ignore()
                 return

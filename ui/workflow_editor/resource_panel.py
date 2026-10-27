@@ -30,16 +30,17 @@ from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout,
                              QPushButton, QTableWidget, QTableWidgetItem,
                              QVBoxLayout)
 
+from ui.i18n import ui_i18n
 logger = logging.getLogger(__name__)
 
 # 状态 → (中文标签, 颜色)
 STATUS_LABELS = {
-    "ok": ("✅ 就绪", "#a6e3a1"),
-    "found_elsewhere": ("⚠️ 位置已变", "#f9e2af"),
-    "missing": ("❌ 缺失", "#f38ba8"),
-    "arch_mismatch": ("❌ 架构不符", "#f38ba8"),
-    "sha_mismatch": ("❌ 校验失败", "#f38ba8"),
-    "unknown": ("❔ 未检查", "#6c7086"),
+    "ok": ("就绪", "#a6e3a1"),
+    "found_elsewhere": ("位置已变", "#f9e2af"),
+    "missing": ("缺失", "#f38ba8"),
+    "arch_mismatch": ("架构不符", "#f38ba8"),
+    "sha_mismatch": ("校验失败", "#f38ba8"),
+    "unknown": ("未检查", "#6c7086"),
 }
 
 # 资源类型 → 用户可读
@@ -98,9 +99,10 @@ class _DownloadThread(QThread):
             download_extension(
                 self.ext_id,
                 lambda pct, msg: self.progress.emit(float(pct), str(msg)))
-            self.done.emit(True, f"✅ {self.ext_id} 下载完成")
+            self.done.emit(True, ui_i18n.trf("{extension} 下载完成", extension=self.ext_id))
         except Exception as e:
-            self.done.emit(False, f"❌ {self.ext_id} 下载失败: {e}")
+            self.done.emit(False, ui_i18n.trf(
+                "{extension} 下载失败: {error}", extension=self.ext_id, error=e))
 
 
 class ResourceDialog(QDialog):
@@ -109,14 +111,14 @@ class ResourceDialog(QDialog):
     def __init__(self, wf, parent=None):
         super().__init__(parent)
         self.wf = wf
-        self.setWindowTitle("📦 工作流资源")
+        self.setWindowTitle(ui_i18n.tr("工作流资源"))
         self.resize(920, 520)
         self._report = {}
         self._rows: list = []
         self._thread = None
 
         lay = QVBoxLayout(self)
-        self.lbl_summary = QLabel("正在检查…")
+        self.lbl_summary = QLabel(ui_i18n.tr("正在检查…"))
         self.lbl_summary.setWordWrap(True)
         lay.addWidget(self.lbl_summary)
 
@@ -139,18 +141,18 @@ class ResourceDialog(QDialog):
         lay.addWidget(self.bar)
 
         btns = QHBoxLayout()
-        self.btn_recheck = QPushButton("🔄 重新检测")
+        self.btn_recheck = QPushButton(" 重新检测")
         self.btn_recheck.clicked.connect(self.reload)
         btns.addWidget(self.btn_recheck)
 
-        self.btn_download = QPushButton("⬇️ 下载选中的辅助组件")
+        self.btn_download = QPushButton(" 下载选中的辅助组件")
         self.btn_download.setToolTip(
             "只对辅助组件（ControlNet / ADetailer / IP-Adapter / 插帧 / Flux 引擎）\n"
             "提供下载。底模、LoRA、VAE 请自行下载 —— 这是项目既定策略。")
         self.btn_download.clicked.connect(self.on_download)
         btns.addWidget(self.btn_download)
 
-        self.btn_open_dir = QPushButton("📂 打开模型目录")
+        self.btn_open_dir = QPushButton(" 打开模型目录")
         self.btn_open_dir.clicked.connect(self.on_open_dir)
         btns.addWidget(self.btn_open_dir)
 
@@ -172,7 +174,7 @@ class ResourceDialog(QDialog):
             rep = RS.missing_report(refs)
         except Exception as e:
             logger.warning(f"资源检查失败: {e}")
-            self.lbl_summary.setText(f"⚠️ 资源检查不可用：{e}")
+            self.lbl_summary.setText(ui_i18n.trf("资源检查不可用：{error}", error=e))
             self.table.setRowCount(0)
             return
 
@@ -187,14 +189,15 @@ class ResourceDialog(QDialog):
         bad = len(rep.get("mismatched", []))
         dl = len(rep.get("downloadable", []))
         if not total:
-            head = "ℹ️ 这个工作流没有引用任何本地模型"
+            head = ui_i18n.tr("这个工作流没有引用任何本地模型")
         elif not miss and not bad:
-            head = f"✅ 依赖 {total} 项资源，全部就绪"
+            head = ui_i18n.trf("依赖 {total} 项资源，全部就绪", total=total)
         else:
-            head = (f"⚠️ 依赖 {total} 项资源：缺失 {miss} 项"
-                    f"，不匹配 {bad} 项")
+            head = ui_i18n.trf(
+                "依赖 {total} 项资源：缺失 {missing} 项，不匹配 {bad} 项",
+                total=total, missing=miss, bad=bad)
             if dl:
-                head += f"（其中 {dl} 项可从扩展市场下载）"
+                head += ui_i18n.trf("（其中 {count} 项可从扩展市场下载）", count=dl)
         self.lbl_summary.setText(head + "\n" + str(rep.get("summary", "")))
 
     def _fill_table(self, rows):
@@ -213,8 +216,8 @@ class ResourceDialog(QDialog):
             size_txt = (f"{size / 1024 ** 3:.2f} GB" if size > 1024 ** 3
                         else (f"{size / 1024 ** 2:.0f} MB" if size else "—"))
 
-            cells = [name, TYPE_LABELS.get(rtype, rtype), arch, label, size_txt,
-                     r.get("detail", "")]
+            cells = [name, ui_i18n.tr(TYPE_LABELS.get(rtype, rtype)), arch,
+                     ui_i18n.tr(label), size_txt, r.get("detail", "")]
             for c, txt in enumerate(cells):
                 item = QTableWidgetItem(str(txt))
                 if c == 3:
@@ -234,24 +237,27 @@ class ResourceDialog(QDialog):
     def on_download(self):
         row = self._selected_row()
         if row is None:
-            QMessageBox.information(self, "未选中", "请先在列表里选一项。")
+            QMessageBox.information(
+                self, ui_i18n.tr("未选中"), ui_i18n.tr("请先在列表里选一项。"))
             return
         ref = row.get("ref") or {}
         rtype = ref.get("model_type") or ""
         ext_id = extension_id_for(rtype, ref.get("architecture", ""),
                                   ref.get("kind", ""))
         if not ext_id:
+            directory = ui_i18n.tr(TYPE_DIRS.get(rtype, "models/ 目录"))
             QMessageBox.information(
-                self, "需要自行下载",
-                "底模 / LoRA / VAE 需要你自己下载（项目不提供这些下载入口）。\n\n"
-                f"请把文件放到：{TYPE_DIRS.get(rtype, 'models/ 目录')}\n"
-                "放好后点「🔄 重新检测」。")
+                self, ui_i18n.tr("需要自行下载"),
+                ui_i18n.tr("底模 / LoRA / VAE 需要你自己下载（项目不提供这些下载入口）。")
+                + "\n\n" + ui_i18n.trf("请把文件放到：{directory}", directory=directory)
+                + "\n" + ui_i18n.tr("放好后点「重新检测」。"))
             return
         try:
             from utils.extension_manager import is_installed
             if is_installed(ext_id):
-                QMessageBox.information(self, "已安装",
-                                        f"{ext_id} 已经在本地了。")
+                QMessageBox.information(
+                    self, ui_i18n.tr("已安装"),
+                    ui_i18n.trf("{extension} 已经在本地了。", extension=ext_id))
                 self.reload()
                 return
         except Exception:
@@ -260,7 +266,8 @@ class ResourceDialog(QDialog):
 
     def _start_download(self, ext_id: str):
         if self._thread is not None and self._thread.isRunning():
-            QMessageBox.information(self, "正在下载", "上一个下载还没结束。")
+            QMessageBox.information(
+                self, ui_i18n.tr("正在下载"), ui_i18n.tr("上一个下载还没结束。"))
             return
         self.bar.setVisible(True)
         self.bar.setValue(0)
@@ -272,13 +279,13 @@ class ResourceDialog(QDialog):
 
     def _on_progress(self, pct: float, msg: str):
         self.bar.setValue(int(max(0.0, min(100.0, pct))))
-        self.lbl_summary.setText(msg)
+        self.lbl_summary.setText(ui_i18n.tr(msg))
 
     def _on_download_done(self, ok: bool, msg: str):
         self.bar.setVisible(False)
         self.btn_download.setEnabled(True)
         self._thread = None
-        self.lbl_summary.setText(msg)
+        self.lbl_summary.setText(ui_i18n.tr(msg))
         # 下载完 → 重新检测（用户要求的闭环：下载完成 → 重新预检）
         self.reload()
 
@@ -300,7 +307,7 @@ class ResourceDialog(QDialog):
                 import subprocess
                 subprocess.Popen(["xdg-open", d])
         except Exception as e:
-            QMessageBox.warning(self, "无法打开目录", str(e))
+            QMessageBox.warning(self, ui_i18n.tr("无法打开目录"), str(e))
 
     def closeEvent(self, event):
         if self._thread is not None and self._thread.isRunning():

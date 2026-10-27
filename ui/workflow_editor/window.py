@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (QComboBox, QFileDialog, QLabel, QMainWindow, QMessa
                              QPlainTextEdit, QSplitter,
                              QToolBar, QVBoxLayout, QWidget)
 
+from ui.i18n import ui_i18n
 from ui.workflow_editor.canvas import GraphScene, GraphView
 from ui.workflow_editor.palette import NodePalette
 from ui.workflow_editor.param_panel import ParamPanel
@@ -64,7 +65,7 @@ class WorkflowRunThread(QThread):
                 log=lambda m: self.progress.emit(str(m)),
                 status=lambda m: self.progress.emit(str(m)),
                 progress=lambda a, b: None)
-            self.progress.emit(f"🧠 显存策略预设: {preset}")
+            self.progress.emit(ui_i18n.trf("显存策略预设: {preset}", preset=preset))
             ex = Executor(ctx)
             res = ex.run(self.wf, only=self.only)
             self.finished_ok.emit(res)
@@ -84,7 +85,7 @@ class WorkflowEditorWindow(QMainWindow):
     def __init__(self, host=None, parent=None):
         super().__init__(parent)
         self.host = host
-        self.setWindowTitle("🧩 工作流编辑器 — 基础版")
+        self.setWindowTitle(ui_i18n.tr("工作流编辑器 — 基础版"))
         self.resize(1360, 860)
         self._thread: WorkflowRunThread | None = None
         self._current_path = ""
@@ -99,8 +100,8 @@ class WorkflowEditorWindow(QMainWindow):
         self._build_ui()
         self._connect()
         self.scene.load_workflow(Workflow(name="新工作流"))
-        self._log("💡 双击左侧节点添加；拖端口连线；选中节点改参数。")
-        self._log("💡 也可以点「从当前界面生成」把简易模式的设置变成一张图。")
+        self._log(ui_i18n.tr("双击左侧节点添加；拖端口连线；选中节点改参数。"))
+        self._log(ui_i18n.tr("也可以点「从当前界面生成」把简易模式的设置变成一张图。"))
 
     # ------------------------------------------------------------------
     def _build_ui(self):
@@ -117,33 +118,33 @@ class WorkflowEditorWindow(QMainWindow):
             tb.addAction(a)
             return a
 
-        act("🆕 新建", self.on_new)
-        act("📂 打开", self.on_open, "Ctrl+O")
-        act("💾 保存", self.on_save, "Ctrl+S")
-        act("📋 另存为", self.on_save_as)
+        act("新建", self.on_new)
+        act("打开", self.on_open, "Ctrl+O")
+        act("保存", self.on_save, "Ctrl+S")
+        act("另存为", self.on_save_as)
         tb.addSeparator()
-        act("✨ 从当前界面生成", self.on_build_from_ui, "Ctrl+G",
+        act("从当前界面生成", self.on_build_from_ui, "Ctrl+G",
             "把简易模式当前的模型/提示词/LoRA/高清/修脸等设置编译成工作流")
-        act("📥 载入当前界面设置", self.on_apply_ui_to_graph, None,
+        act("载入当前界面设置", self.on_apply_ui_to_graph, None,
             "在当前画布上按界面设置重建（会替换现有图）")
         tb.addSeparator()
-        act("✅ 校验", self.on_validate)
-        act("🩺 预检", self.on_preflight, "Ctrl+P",
+        act("校验", self.on_validate)
+        act("预检", self.on_preflight, "Ctrl+P",
             "运行前预检：模型/LoRA/VAE/ControlNet/显存/输出目录/依赖 一次查完")
-        act("📦 资源清单", self.on_resources)
-        act("🗂 资源依赖", self.on_resources_dialog, None,
+        act("资源清单", self.on_resources)
+        act("资源依赖", self.on_resources_dialog, None,
             "工作流依赖了哪些模型、哪些缺失、怎么补（按 resource_id 检查）")
-        act("▶️ 运行", self.on_run, "Ctrl+R")
-        act("🎯 只跑选中节点", self.on_run_selected, "Ctrl+Shift+R")
-        act("⏹ 取消", self.on_cancel)
+        act("运行", self.on_run, "Ctrl+R")
+        act("只跑选中节点", self.on_run_selected, "Ctrl+Shift+R")
+        act("取消", self.on_cancel)
         tb.addSeparator()
-        act("🧹 清空状态", lambda: self.scene.reset_states())
-        act("🗑 删除选中", self.on_delete_selected)
-        act("🔍 适应窗口", self.on_fit, "Ctrl+0")
+        act("清空状态", lambda: self.scene.reset_states())
+        act("删除选中", self.on_delete_selected)
+        act("适应窗口", self.on_fit, "Ctrl+0")
 
         # 显存策略选择（能力配置，不是显卡名字）
         tb.addSeparator()
-        tb.addWidget(QLabel(" 显存策略: "))
+        tb.addWidget(QLabel("显存策略: "))
         self.combo_policy = QComboBox()
         from workflow.memory_policy import PRESET_LABELS
         self.combo_policy.addItem("自动", "auto")
@@ -204,8 +205,9 @@ class WorkflowEditorWindow(QMainWindow):
     def _update_title(self):
         wf = self.scene.to_workflow()
         name = os.path.basename(self._current_path) if self._current_path else wf.name
-        self.setWindowTitle(f"🧩 工作流编辑器 — {name} "
-                            f"（{len(wf.nodes)} 节点 / {len(wf.links)} 连线）")
+        self.setWindowTitle(ui_i18n.trf(
+            "工作流编辑器 — {name}（{nodes} 节点 / {links} 连线）",
+            name=name, nodes=len(wf.nodes), links=len(wf.links)))
 
     def _on_node_selected(self, node_id: str):
         wf = self.scene.to_workflow(self.scene.wf.name)
@@ -235,15 +237,15 @@ class WorkflowEditorWindow(QMainWindow):
         self.scene.load_workflow(Workflow(name="新工作流"))
         self._current_path = ""
         self._update_title()
-        self._log("🆕 已新建工作流")
+        self._log(ui_i18n.tr("已新建工作流"))
 
     def _confirm_discard(self) -> bool:
         if not self.scene.node_items:
             return True
-        r = QMessageBox.question(self, "确认", "当前工作流未保存，确定要放弃吗？",
-                                 QMessageBox.StandardButton.Yes
-                                 | QMessageBox.StandardButton.No,
-                                 QMessageBox.StandardButton.No)
+        r = QMessageBox.question(
+            self, ui_i18n.tr("确认"), ui_i18n.tr("当前工作流未保存，确定要放弃吗？"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
         return r == QMessageBox.StandardButton.Yes
 
     def on_open(self):
@@ -251,18 +253,18 @@ class WorkflowEditorWindow(QMainWindow):
             return
         d = serializers.workflows_dir()
         path, _ = QFileDialog.getOpenFileName(
-            self, "打开工作流", d, "工作流 JSON (*.json)")
+            self, ui_i18n.tr("打开工作流"), d, ui_i18n.tr("工作流 JSON (*.json)"))
         if not path:
             return
         try:
             wf = serializers.load(path)
         except Exception as e:
-            QMessageBox.critical(self, "打开失败", f"{type(e).__name__}: {e}")
+            QMessageBox.critical(self, ui_i18n.tr("打开失败"), f"{type(e).__name__}: {e}")
             return
         self.scene.load_workflow(wf)
         self._current_path = path
         self._update_title()
-        self._log(f"📂 已载入 {path}（{len(wf.nodes)} 节点）")
+        self._log(ui_i18n.trf("已载入 {path}（{count} 节点）", path=path, count=len(wf.nodes)))
         self.on_validate(silent_ok=True)
 
     def on_save(self):
@@ -275,7 +277,7 @@ class WorkflowEditorWindow(QMainWindow):
         d = serializers.workflows_dir()
         default = os.path.join(d, serializers._safe_name(self.scene.wf.name))
         path, _ = QFileDialog.getSaveFileName(
-            self, "保存工作流", default, "工作流 JSON (*.json)")
+            self, ui_i18n.tr("保存工作流"), default, ui_i18n.tr("工作流 JSON (*.json)"))
         if not path:
             return
         self._save_to(path)
@@ -286,31 +288,34 @@ class WorkflowEditorWindow(QMainWindow):
             wf.name = os.path.splitext(os.path.basename(path))[0]
             serializers.save(wf, path)
         except Exception as e:
-            QMessageBox.critical(self, "保存失败", f"{type(e).__name__}: {e}")
+            QMessageBox.critical(self, ui_i18n.tr("保存失败"), f"{type(e).__name__}: {e}")
             return
         self._current_path = path
         self.scene.wf = wf
         self._update_title()
-        self._log(f"💾 已保存 {path}")
+        self._log(ui_i18n.trf("已保存 {path}", path=path))
 
     # ------------------------------------------------------------------ 生成
     def on_build_from_ui(self):
         if self.host is None:
-            QMessageBox.information(self, "无宿主",
-                                    "编辑器没有绑定主窗口，无法从界面生成。")
+            QMessageBox.information(
+                self, ui_i18n.tr("无宿主"),
+                ui_i18n.tr("编辑器没有绑定主窗口，无法从界面生成。"))
             return
         try:
             from workflow import builder
             wf = builder.build_from_ui(self.host)
         except Exception as e:
-            QMessageBox.warning(self, "生成失败",
-                                f"{type(e).__name__}: {e}\n\n"
-                                "请确认主窗口已就绪（模型列表已加载）。")
+            QMessageBox.warning(
+                self, ui_i18n.tr("生成失败"),
+                f"{type(e).__name__}: {e}\n\n"
+                + ui_i18n.tr("请确认主窗口已就绪（模型列表已加载）。"))
             return
         self.scene.load_workflow(wf)
         self._current_path = ""
         self._update_title()
-        self._log(f"✨ 已从当前界面生成工作流：{builder.describe(wf)}")
+        self._log(ui_i18n.trf(
+            "已从当前界面生成工作流：{description}", description=builder.describe(wf)))
         self.on_validate(silent_ok=True)
 
     def on_apply_ui_to_graph(self):
@@ -325,18 +330,19 @@ class WorkflowEditorWindow(QMainWindow):
         errs = [i for i in issues if i.level == "error"]
         warns = [i for i in issues if i.level == "warning"]
         for i in issues:
-            self._log(("❌ " if i.level == "error" else "⚠️ ") + str(i))
+            self._log(ui_i18n.tr("错误"if i.level == "error"else "提醒") + str(i))
         if errs:
-            self._log(f"❌ 校验未通过：{len(errs)} 个错误")
-            QMessageBox.warning(self, "校验未通过",
-                                "发现 %d 个问题：\n\n%s" % (
-                                    len(errs),
-                                    "\n".join(f"· {i}" for i in errs[:12])))
+            self._log(ui_i18n.trf("校验未通过：{count} 个错误", count=len(errs)))
+            QMessageBox.warning(
+                self, ui_i18n.tr("校验未通过"),
+                ui_i18n.trf("发现 {count} 个问题：\n\n{details}",
+                            count=len(errs),
+                            details="\n".join(f"· {i}"for i in errs[:12])))
             return False
         if warns:
-            self._log(f"✅ 校验通过（{len(warns)} 条提醒）")
+            self._log(ui_i18n.trf("校验通过（{count} 条提醒）", count=len(warns)))
         elif not silent_ok:
-            self._log("✅ 校验通过")
+            self._log(ui_i18n.tr("校验通过"))
         return True
 
     def on_resources(self):
@@ -344,11 +350,11 @@ class WorkflowEditorWindow(QMainWindow):
         try:
             rep = resource_manager.summary(wf)
         except Exception as e:
-            QMessageBox.warning(self, "资源清单失败", str(e))
+            QMessageBox.warning(self, ui_i18n.tr("资源清单失败"), str(e))
             return
         for line in rep["text"].splitlines():
             self._log(line)
-        QMessageBox.information(self, "📦 资源清单", rep["text"])
+        QMessageBox.information(self, ui_i18n.tr("资源清单"), rep["text"])
 
     def on_resources_dialog(self):
         """打开资源依赖面板（缺失资源可在此补全）。"""
@@ -359,7 +365,7 @@ class WorkflowEditorWindow(QMainWindow):
         except Exception as e:
             import traceback
             traceback.print_exc()
-            QMessageBox.critical(self, "资源面板打开失败", str(e))
+            QMessageBox.critical(self, ui_i18n.tr("资源面板打开失败"), str(e))
 
     def on_preflight(self):
         """只做预检（不执行），把错误/警告/提示一次列清。"""
@@ -370,7 +376,7 @@ class WorkflowEditorWindow(QMainWindow):
             res = run_preflight(wf, host=self.host,
                                 ai=getattr(self.host, "ai", None))
         except Exception as e:
-            QMessageBox.critical(self, "预检失败", f"{type(e).__name__}: {e}")
+            QMessageBox.critical(self, ui_i18n.tr("预检失败"), f"{type(e).__name__}: {e}")
             return
         text = res.to_text()
         for line in text.splitlines():
@@ -381,9 +387,9 @@ class WorkflowEditorWindow(QMainWindow):
             if item is not None:
                 item.set_status("error", it.message)
         if res.errors:
-            QMessageBox.warning(self, "🩺 预检未通过", text)
+            QMessageBox.warning(self, ui_i18n.tr("预检未通过"), text)
         else:
-            QMessageBox.information(self, "🩺 预检结果", text)
+            QMessageBox.information(self, ui_i18n.tr("预检结果"), text)
 
     # ------------------------------------------------------------------ 运行
     def _policy_kwargs(self) -> dict:
@@ -396,14 +402,16 @@ class WorkflowEditorWindow(QMainWindow):
     def on_run_selected(self):
         nid = self.scene.selected_node_id()
         if not nid:
-            QMessageBox.information(self, "未选中", "请先在画布上选中一个节点。")
+            QMessageBox.information(
+                self, ui_i18n.tr("未选中"), ui_i18n.tr("请先在画布上选中一个节点。"))
             return
-        self._log(f"🎯 只重跑 {nid}（其余节点用缓存）")
+        self._log(ui_i18n.trf("只重跑 {node}（其余节点用缓存）", node=nid))
         self._start_run(only=[nid])
 
     def _start_run(self, only=None):
         if self._thread is not None and self._thread.isRunning():
-            QMessageBox.information(self, "正在运行", "上一个任务还没结束。")
+            QMessageBox.information(
+                self, ui_i18n.tr("正在运行"), ui_i18n.tr("上一个任务还没结束。"))
             return
         if not self.on_validate(silent_ok=True):
             return
@@ -421,7 +429,7 @@ class WorkflowEditorWindow(QMainWindow):
         for nid in self.scene.node_items:
             self.scene.node_items[nid].set_status("idle")
 
-        self._log("▶️ 开始执行…")
+        self._log(ui_i18n.tr("开始执行…"))
         self._thread = WorkflowRunThread(wf, self.host, only=only, parent=self)
         self._thread.progress.connect(self._log)
         self._thread.finished_ok.connect(self._on_run_done)
@@ -434,37 +442,37 @@ class WorkflowEditorWindow(QMainWindow):
             res = run_preflight(wf, host=self.host,
                                 ai=getattr(self.host, "ai", None))
         except Exception as e:
-            self._log(f"⚠️ 预检失败（继续运行）: {e}")
+            self._log(ui_i18n.trf("预检失败（继续运行）: {error}", error=e))
             return True
 
         text = res.to_text()
         for line in text.splitlines():
             self._log(line)
         if res.errors:
-            QMessageBox.warning(self, "❌ 预检未通过", text)
+            QMessageBox.warning(self, ui_i18n.tr("预检未通过"), text)
             return False
         if res.warnings or res.hints:
             # 只是提醒，不阻断；用户可选择继续
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Information)
-            box.setWindowTitle("⚠️ 预检通过（有提醒）")
-            box.setText("可以运行，但有以下提醒：")
+            box.setWindowTitle(ui_i18n.tr("预检通过（有提醒）"))
+            box.setText(ui_i18n.tr("可以运行，但有以下提醒："))
             box.setInformativeText(text)
-            go = box.addButton("继续运行", QMessageBox.ButtonRole.AcceptRole)
-            box.addButton("先改一下", QMessageBox.ButtonRole.RejectRole)
+            go = box.addButton(ui_i18n.tr("继续运行"), QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(ui_i18n.tr("先改一下"), QMessageBox.ButtonRole.RejectRole)
             box.exec()
             if box.clickedButton() is not go:
                 return False
         else:
-            self._log("✅ 预检通过")
+            self._log(ui_i18n.tr("预检通过"))
         return True
 
     def on_cancel(self):
         if self._thread is not None and self._thread.isRunning():
             self._thread.cancel()
-            self._log("⏹ 已请求取消（当前节点跑完就停）")
+            self._log(ui_i18n.tr("已请求取消（当前节点跑完就停）"))
         else:
-            self._log("（当前没有运行中的任务）")
+            self._log(ui_i18n.tr("（当前没有运行中的任务）"))
 
     def _on_run_done(self, res: dict):
         states = res.get("states") or {}
@@ -476,25 +484,28 @@ class WorkflowEditorWindow(QMainWindow):
             logger.debug(f"节点预览推送失败: {e}")
         secs = res.get("seconds", 0)
         if res.get("cancelled"):
-            self._log("⏹ 已取消")
+            self._log(ui_i18n.tr("已取消"))
         elif res.get("ok"):
-            self._log(f"🏁 完成，用时 {secs:.1f}s")
+            self._log(ui_i18n.trf("完成，用时 {seconds}s", seconds=f"{secs:.1f}"))
             if res.get("cached"):
-                self._log(f"♻️ 复用缓存节点 {len(res['cached'])} 个")
+                self._log(ui_i18n.trf("复用缓存节点 {count} 个", count=len(res["cached"])))
             outs = res.get("outputs") or {}
             for k, v in outs.items():
                 if isinstance(v, str) and os.path.exists(v):
                     self._log(f"🖼 {k} → {v}")
             if res.get("cache_stats"):
                 st = res["cache_stats"]
-                self._log(f"🧠 缓存 {st['entries']} 项，命中率 "
-                          f"{st['hit_rate'] * 100:.0f}%")
+                self._log(ui_i18n.trf(
+                    "缓存 {count} 项，命中率 {rate}%",
+                    count=st["entries"], rate=f"{st['hit_rate'] * 100:.0f}"))
         else:
             failed = res.get("failed_node") or "?"
-            self._log(f"❌ 失败于节点 [{failed}]：{res.get('error', '')}")
+            self._log(ui_i18n.trf(
+                "失败于节点 [{node}]：{error}", node=failed, error=res.get("error", "")))
             QMessageBox.critical(
-                self, "执行失败",
-                f"节点 [{failed}] 执行失败：\n\n{res.get('error', '')}")
+                self, ui_i18n.tr("执行失败"),
+                ui_i18n.trf("节点 [{node}] 执行失败：\n\n{error}",
+                            node=failed, error=res.get("error", "")))
         if res.get("trace"):
             logger.error("工作流 traceback:\n%s", res["trace"])
         self._thread = None
@@ -503,7 +514,7 @@ class WorkflowEditorWindow(QMainWindow):
     def closeEvent(self, event):
         if self._thread is not None and self._thread.isRunning():
             r = QMessageBox.question(
-                self, "正在运行", "工作流还在运行，确定关闭吗？",
+                self, ui_i18n.tr("正在运行"), ui_i18n.tr("工作流还在运行，确定关闭吗？"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No)
             if r != QMessageBox.StandardButton.Yes:

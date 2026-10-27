@@ -502,6 +502,111 @@ def test_video_validation_status_language():
         host.deleteLater()
 
 
+def test_scene_batch_dialog_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox
+    from ui.i18n import ui_i18n
+    from ui.scene_batch_dialog import SceneBatchDialog
+
+    old = ui_i18n.language
+    dialog = SceneBatchDialog()
+    captured = []
+    try:
+        with patch.object(QMessageBox, "information", side_effect=(
+                lambda _parent, title, text, *args: captured.append((title, text)))):
+            ui_i18n.set_language("en")
+            dialog._on_run()
+            assert captured[-1] == ("Notice", "Select at least one scene.")
+            ui_i18n.set_language("ja")
+            dialog._save_current()
+            assert captured[-1] == ("通知", "左側のリストからシーンを選択してください。")
+    finally:
+        ui_i18n.set_language(old)
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_workflow_editor_dialog_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox
+    from ui.i18n import ui_i18n
+    from ui.workflow_editor.window import WorkflowEditorWindow
+
+    old = ui_i18n.language
+    window = WorkflowEditorWindow()
+    captured = []
+    try:
+        with patch.object(QMessageBox, "information", side_effect=(
+                lambda _parent, title, text, *args: captured.append((title, text)))):
+            ui_i18n.set_language("en")
+            window.on_build_from_ui()
+            assert captured[-1] == (
+                "No Host",
+                "The editor is not attached to the main window and cannot build from the interface.")
+        window.scene.node_items["n1"] = object()
+        with patch.object(QMessageBox, "question", side_effect=(
+                lambda _parent, title, text, *args: (
+                    captured.append((title, text)), QMessageBox.StandardButton.No)[1])):
+            ui_i18n.set_language("ja")
+            assert window._confirm_discard() is False
+            assert captured[-1] == ("確認", "現在のワークフローは未保存です。破棄しますか？")
+    finally:
+        ui_i18n.set_language(old)
+        window.close()
+        window.deleteLater()
+
+
+def test_workflow_resource_dialog_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox
+    from ui.i18n import ui_i18n
+    from ui.workflow_editor.resource_panel import ResourceDialog
+    from workflow.schema import Workflow
+
+    old = ui_i18n.language
+    dialog = ResourceDialog(Workflow(name="test"))
+    captured = []
+    try:
+        with patch.object(QMessageBox, "information", side_effect=(
+                lambda _parent, title, text, *args: captured.append((title, text)))):
+            ui_i18n.set_language("en")
+            dialog.on_download()
+            assert captured[-1] == ("Nothing Selected", "Select an item in the list first.")
+            dialog._thread = type("RunningThread", (), {"isRunning": lambda self: True})()
+            ui_i18n.set_language("ja")
+            dialog._start_download("example")
+            assert captured[-1] == ("ダウンロード中", "前のダウンロードがまだ終了していません。")
+    finally:
+        dialog._thread = None
+        ui_i18n.set_language(old)
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_workflow_failure_dialog_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox
+    from ui.i18n import ui_i18n
+    from ui.workflow_editor.window import WorkflowEditorWindow
+
+    old = ui_i18n.language
+    window = WorkflowEditorWindow()
+    captured = []
+    try:
+        with patch.object(QMessageBox, "critical", side_effect=(
+                lambda _parent, title, text, *args: captured.append((title, text)))):
+            ui_i18n.set_language("en")
+            window._on_run_done({
+                "ok": False, "failed_node": "n1", "error": "boom",
+                "states": {}, "outputs": {}, "cached": [], "seconds": 0.0,
+            })
+            assert captured[-1] == ("Execution Failed", "Node [n1] failed:\n\nboom")
+    finally:
+        ui_i18n.set_language(old)
+        window.close()
+        window.deleteLater()
+
+
 if __name__ == "__main__":
     test_config_language_roundtrip()
     test_translate_and_validate_language()
@@ -517,6 +622,10 @@ if __name__ == "__main__":
     test_preset_empty_export_dialog_language()
     test_shell_busy_dialog_language()
     test_video_validation_status_language()
+    test_scene_batch_dialog_language()
+    test_workflow_editor_dialog_language()
+    test_workflow_resource_dialog_language()
+    test_workflow_failure_dialog_language()
     print("UI_I18N_OK")
     sys.stdout.flush()
     # 与现有 Qt 离屏测试一致，跳过 Multimedia/Qt 的进程退出清理。
