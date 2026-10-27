@@ -230,8 +230,8 @@ def missing(wf, *, include_optional: bool = False) -> List[Requirement]:
             if not r.present and (include_optional or not r.optional)]
 
 
-def summary(wf) -> dict:
-    """给 UI 用的资源报告。"""
+def summary(wf, *, translate=None) -> dict:
+    """给 UI 用的资源报告，可选注入界面翻译函数。"""
     reqs = collect(wf)
     miss_required = [r for r in reqs if not r.present and not r.optional]
     miss_optional = [r for r in reqs if not r.present and r.optional]
@@ -241,30 +241,31 @@ def summary(wf) -> dict:
         "missing_optional": [r.to_dict() for r in miss_optional],
         "total_missing_mb": sum(r.size_mb for r in miss_required + miss_optional),
         "can_run": not miss_required,
-        "text": format_report(reqs),
+        "text": format_report(reqs, translate=translate),
     }
 
 
-def format_report(reqs: List[Requirement]) -> str:
-    """中文清单，可直接放进弹窗。"""
+def format_report(reqs: List[Requirement], *, translate=None) -> str:
+    """生成资源清单；后台默认保留中文，界面可注入翻译函数。"""
+    tr = translate or (lambda text: text)
     if not reqs:
-        return "该工作流不需要额外资源。"
-    lines = ["📦 资源清单", ""]
+        return tr("该工作流不需要额外资源。")
+    lines = [tr("📦 资源清单"), ""]
     for r in reqs:
         mark = "✅" if r.present else ("⚠️" if r.optional else "❌")
         label = r.label or r.key
         line = f"  {mark} {label}"
         if not r.present and r.size_mb:
-            line += f"（约 {r.size_mb / 1024:.1f}GB）"
+            line += tr("（约 {size}GB）").format(size=f"{r.size_mb / 1024:.1f}")
         if not r.present and r.optional:
-            line += "  [可选]"
+            line += tr("  [可选]")
         lines.append(line)
         if not r.present and r.hint:
-            lines.append(f"      {r.hint}")
+            lines.append(f"      {tr(r.hint)}")
     miss = [r for r in reqs if not r.present and not r.optional]
     if miss:
-        lines += ["", f"缺少 {len(miss)} 项必需资源，工作流无法运行。",
-                  "提示：程序只读取本地文件，不会自动联网下载。"]
+        lines += ["", tr("缺少 {count} 项必需资源，工作流无法运行。").format(
+            count=len(miss)), tr("提示：程序只读取本地文件，不会自动联网下载。")]
     else:
-        lines += ["", "必需资源齐备，可以运行。"]
+        lines += ["", tr("必需资源齐备，可以运行。")]
     return "\n".join(lines)

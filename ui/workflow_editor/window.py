@@ -348,7 +348,7 @@ class WorkflowEditorWindow(QMainWindow):
     def on_resources(self):
         wf = self.scene.to_workflow()
         try:
-            rep = resource_manager.summary(wf)
+            rep = resource_manager.summary(wf, translate=ui_i18n.tr)
         except Exception as e:
             QMessageBox.warning(self, ui_i18n.tr("资源清单失败"), str(e))
             return
@@ -378,7 +378,7 @@ class WorkflowEditorWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, ui_i18n.tr("预检失败"), f"{type(e).__name__}: {e}")
             return
-        text = res.to_text()
+        text = res.to_text(translate=ui_i18n.tr)
         for line in text.splitlines():
             self._log(line)
         # 错误节点直接标红并选中，方便定位
@@ -445,7 +445,7 @@ class WorkflowEditorWindow(QMainWindow):
             self._log(ui_i18n.trf("预检失败（继续运行）: {error}", error=e))
             return True
 
-        text = res.to_text()
+        text = res.to_text(translate=ui_i18n.tr)
         for line in text.splitlines():
             self._log(line)
         if res.errors:

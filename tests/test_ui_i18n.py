@@ -617,6 +617,7 @@ def test_param_panel_language():
 
     spec = NodeSpec(
         type="I18nTest",
+        description="加载底模（.safetensors/.ckpt）。可填文件名或绝对路径。",
         inputs={"image": PortSpec(DataType.IMAGE)},
         params={"seed": ParamSpec(
             kind="seed", default=-1, label="Seed", minimum=-1, maximum=100)},
@@ -638,6 +639,8 @@ def test_param_panel_language():
             assert "Inputs" in labels
             assert "Parameters" in labels
             assert "Resource Requirements" in labels
+            assert ("Load a base model (.safetensors/.ckpt). "
+                    "Enter a filename or an absolute path.") in labels
             assert any("Peak VRAM ≈ 1024 MB" in text for text in labels)
             assert "Range [-1, 100]" in panel._widgets["seed"].toolTip()
             assert panel._widgets["seed"].specialValueText() == "Random (-1)"
@@ -647,6 +650,8 @@ def test_param_panel_language():
             assert "入力" in labels
             assert "パラメーター" in labels
             assert "リソース要件" in labels
+            assert ("基本モデル（.safetensors/.ckpt）を読み込みます。"
+                    "ファイル名または絶対パスを指定できます。") in labels
             assert any("VRAM ピーク ≈ 1024 MB" in text for text in labels)
             assert panel._widgets["seed"].specialValueText() == "ランダム (-1)"
     finally:
@@ -691,6 +696,54 @@ def test_region_editor_language():
             dialog.deleteLater()
 
 
+def test_workflow_report_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox
+    from ui.i18n import ui_i18n
+    from ui.workflow_editor.window import WorkflowEditorWindow
+    from workflow.preflight import ERROR, PreflightIssue, PreflightResult
+
+    old = ui_i18n.language
+    window = WorkflowEditorWindow()
+    captured = []
+    result = PreflightResult(
+        ok=False,
+        errors=[PreflightIssue(ERROR, "test", "boom") for _ in range(2)],
+        estimated_vram_mb=2048,
+        estimated_time=12,
+        required_models=[{"present": False}],
+        policy="auto",
+    )
+    try:
+        with patch.object(QMessageBox, "information", side_effect=(
+                lambda _parent, title, text, *args: captured.append((title, text)))):
+            ui_i18n.set_language("en")
+            window.on_resources()
+            assert captured[-1] == (
+                "Resource Summary", "This workflow does not require additional resources.")
+        with patch("workflow.preflight.run_preflight", return_value=result), \
+                patch.object(QMessageBox, "warning", side_effect=(
+                    lambda _parent, title, text, *args: captured.append((title, text)))):
+            window.on_preflight()
+            text = captured[-1][1]
+            assert "Preflight failed (2 errors)" in text
+            assert "Estimated VRAM 2048 MB" in text
+            assert "Estimated time ≈ 12s" in text
+            assert "Resources: 1 required, 1 missing" in text
+
+            ui_i18n.set_language("ja")
+            window.on_preflight()
+            text = captured[-1][1]
+            assert "プレフライト失敗（2 件のエラー）" in text
+            assert "推定 VRAM 2048 MB" in text
+            assert "推定所要時間 約 12s" in text
+            assert "リソース: 必要 1 件、不足 1 件" in text
+    finally:
+        ui_i18n.set_language(old)
+        window.close()
+        window.deleteLater()
+
+
 def test_node_palette_language():
     from unittest.mock import patch
     from ui.i18n import ui_i18n
@@ -699,6 +752,7 @@ def test_node_palette_language():
 
     spec = NodeSpec(
         type="I18nNode", category="模型",
+        description="加载底模（.safetensors/.ckpt）。可填文件名或绝对路径。",
         resources=ResourceRequirement(estimated_vram_mb=2048, requires=("cuda",)),
     )
     old = ui_i18n.language
@@ -711,11 +765,15 @@ def test_node_palette_language():
             assert palette.findChildren(QLabel)[0].text() == "Node Library"
             assert palette.tree.topLevelItem(0).text(0) == "Models (1)"
             assert palette.hint.text() == "1 node type · Double-click to add · Del to delete"
-            assert "Peak VRAM ≈ 2048 MB" in palette.tree.topLevelItem(0).child(0).toolTip(0)
+            tooltip = palette.tree.topLevelItem(0).child(0).toolTip(0)
+            assert "Load a base model (.safetensors/.ckpt)." in tooltip
+            assert "Peak VRAM ≈ 2048 MB" in tooltip
 
             ui_i18n.set_language("ja")
             assert palette.tree.topLevelItem(0).text(0) == "モデル（1）"
             assert palette.hint.text() == "1 種類のノード · ダブルクリックで追加 · Del で削除"
+            assert "基本モデル（.safetensors/.ckpt）を読み込みます。" in (
+                palette.tree.topLevelItem(0).child(0).toolTip(0))
     finally:
         ui_i18n.set_language(old)
         if palette is not None:
@@ -731,6 +789,7 @@ def test_workflow_canvas_language():
 
     spec = NodeSpec(
         type="I18nTest",
+        description="加载底模（.safetensors/.ckpt）。可填文件名或绝对路径。",
         inputs={"image": PortSpec(DataType.IMAGE)},
         outputs={"out": PortSpec(DataType.IMAGE)},
         params={
@@ -756,12 +815,14 @@ def test_workflow_canvas_language():
             item = scene.node_items[node_id]
             assert item.param_widgets["seed"].specialValueText() == "Random"
             assert item.preview_note == "No reference image selected"
+            assert "Load a base model (.safetensors/.ckpt)." in item.toolTip()
             assert scene.connect_ports(item.ports_out["out"], item.ports_in["image"]) is False
             assert messages[-1] == "Cannot connect to the same node"
 
             ui_i18n.set_language("ja")
             assert item.param_widgets["seed"].specialValueText() == "ランダム"
             assert item.preview_note == "参照画像が選択されていません"
+            assert "基本モデル（.safetensors/.ckpt）を読み込みます。" in item.toolTip()
     finally:
         ui_i18n.set_language(old)
         if scene is not None:
@@ -790,6 +851,7 @@ if __name__ == "__main__":
     test_workflow_failure_dialog_language()
     test_param_panel_language()
     test_region_editor_language()
+    test_workflow_report_language()
     test_node_palette_language()
     test_workflow_canvas_language()
     print("UI_I18N_OK")

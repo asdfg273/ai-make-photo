@@ -80,7 +80,7 @@ class NodePalette(QFrame):
             for s in sorted(by_cat[cat], key=lambda x: x.type):
                 child = QTreeWidgetItem([s.type])
                 child.setData(0, Qt.ItemDataRole.UserRole, s.type)
-                tip = s.description or ""
+                tip = ui_i18n.tr(s.description or "")
                 res = s.resources
                 if res.estimated_vram_mb:
                     tip += "\n\n" + ui_i18n.trf(

@@ -104,7 +104,7 @@ class ParamPanel(QScrollArea):
         title = QLabel(f"<b>{node_id}</b> · {node.type}")
         title.setStyleSheet("color:#cdd6f4; font-size:13px;")
         self._lay.addWidget(title)
-        desc = QLabel(spec.description or "")
+        desc = QLabel(ui_i18n.tr(spec.description or ""))
         desc.setWordWrap(True)
         desc.setStyleSheet("color:#7f849c; font-size:11px;")
         self._lay.addWidget(desc)

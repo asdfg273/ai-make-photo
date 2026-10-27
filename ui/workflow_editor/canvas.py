@@ -189,8 +189,9 @@ class NodeItem(QGraphicsItem):
         self.setZValue(1)
 
         self._layout_ports()
-        title = self.spec.description.splitlines()[0] if self.spec.description else ""
-        self.setToolTip(f"{ntype}\n{title}\n\n{self.spec.description}")
+        description = ui_i18n.tr(self.spec.description or "")
+        title = description.splitlines()[0] if description else ""
+        self.setToolTip(f"{ntype}\n{title}\n\n{description}")
 
     # ---- 几何 ----
     def _layout_ports(self):
@@ -371,6 +372,9 @@ class NodeItem(QGraphicsItem):
 
     def retranslate_dynamic(self) -> None:
         """刷新 graphics 项内不会经过普通控件树翻译的文字。"""
+        description = ui_i18n.tr(self.spec.description or "")
+        title = description.splitlines()[0] if description else ""
+        self.setToolTip(f"{self.ntype}\n{title}\n\n{description}")
         for name, widget in self.param_widgets.items():
             pspec = self.spec.params.get(name)
             if widget is None or pspec is None:

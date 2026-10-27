@@ -95,38 +95,45 @@ class PreflightResult:
             "policy": self.policy,
         }
 
-    def to_text(self, max_each: int = 12) -> str:
-        """给弹窗/日志的中文报告。"""
+    def to_text(self, max_each: int = 12, *, translate=None) -> str:
+        """生成预检报告；后台默认保留中文，界面可注入翻译函数。"""
+        tr = translate or (lambda text: text)
         lines: List[str] = []
         if self.ok:
-            lines.append("✅ 预检通过，可以运行")
+            lines.append(tr("✅ 预检通过，可以运行"))
         else:
-            lines.append(f"❌ 预检未通过（{len(self.errors)} 个错误）")
+            lines.append(tr("❌ 预检未通过（{count} 个错误）").format(
+                count=len(self.errors)))
 
-        for label, items in ((LEVEL_LABELS[ERROR], self.errors),
-                             (LEVEL_LABELS[WARNING], self.warnings),
-                             (LEVEL_LABELS[HINT], self.hints)):
+        for level, items in ((ERROR, self.errors),
+                             (WARNING, self.warnings),
+                             (HINT, self.hints)):
             if not items:
                 continue
             lines.append("")
-            lines.append(f"{label}（{len(items)}）")
+            lines.append(tr("{label}（{count}）").format(
+                label=tr(LEVEL_LABELS[level]), count=len(items)))
             for it in items[:max_each]:
                 where = f"[{it.node_id}] " if it.node_id else ""
-                lines.append(f"  · {where}{it.message}")
+                lines.append(f"  · {where}{tr(it.message)}")
                 if it.fix:
-                    lines.append(f"      → {it.fix}")
+                    lines.append(f"      → {tr(it.fix)}")
             if len(items) > max_each:
-                lines.append(f"  …还有 {len(items) - max_each} 条")
+                lines.append(tr("  …还有 {count} 条").format(
+                    count=len(items) - max_each))
 
         lines.append("")
-        lines.append(f"预计显存 {self.estimated_vram_mb} MB"
-                     + (f" · 预计耗时约 {self.estimated_time:.0f}s"
-                        if self.estimated_time else "")
-                     + (f" · {self.policy}" if self.policy else ""))
+        line = tr("预计显存 {value} MB").format(value=self.estimated_vram_mb)
+        if self.estimated_time:
+            line += tr(" · 预计耗时约 {seconds}s").format(
+                seconds=f"{self.estimated_time:.0f}")
+        if self.policy:
+            line += f" · {self.policy}"
+        lines.append(line)
         if self.required_models:
             miss = [m for m in self.required_models if not m.get("present")]
-            lines.append(f"资源：需要 {len(self.required_models)} 项，"
-                         f"缺 {len(miss)} 项")
+            lines.append(tr("资源：需要 {required} 项，缺 {missing} 项").format(
+                required=len(self.required_models), missing=len(miss)))
         return "\n".join(lines)
 
 

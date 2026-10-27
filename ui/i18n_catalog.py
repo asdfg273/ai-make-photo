@@ -949,4 +949,169 @@ TRANSLATIONS = {
         "タイプが一致しません: {source} → {target}（自動変換は行いません）",
     ),
     "（未连到端口，已取消）": ("(Not connected to a port; cancelled)", "（ポートに接続されていないためキャンセルしました）"),
+
+    # 内置节点说明
+    "挂载 IP-Adapter：用参考图（可带遮罩）影响风格 / 人脸 / 构图。支持单张（连线 image）或多张（refs_json，每张独立角色与强度）。": (
+        "Attach IP-Adapter: use reference images (with optional masks) to guide style, faces, and composition. Supports one image (image link) or multiple images (refs_json, with independent character and strength settings).",
+        "IP-Adapter を適用：参照画像（マスク対応）で画風・顔・構図を制御します。単一画像（image 接続）と複数画像（refs_json、画像ごとにキャラクターと強度を設定）に対応。",
+    ),
+    "把图像预处理成 ControlNet 条件图（骨架/边缘/深度/线稿/柔边/平铺/分割）。": (
+        "Preprocess images into ControlNet condition maps (pose, edges, depth, line art, soft edges, tile, or segmentation).",
+        "画像を ControlNet 条件マップ（骨格・輪郭・深度・線画・柔らかい輪郭・タイル・セグメンテーション）に前処理します。",
+    ),
+    "把控制图装到模型上（按当前架构自动选 SD1.5 / SDXL 权重）。": (
+        "Attach a control map to the model (automatically selects SD1.5 / SDXL weights for the current architecture).",
+        "制御マップをモデルに適用します（現在のアーキテクチャに応じて SD1.5 / SDXL の重みを自動選択）。",
+    ),
+    "ADetailer 局部精修：自动检测脸部/手部/人物并逐块重绘，再羽化贴回原图（不整图重绘）。": (
+        "ADetailer local refinement: automatically detects faces, hands, and people, repaints each region, then blends it back with feathering instead of redrawing the whole image.",
+        "ADetailer 局部精修：顔・手・人物を自動検出して領域ごとに再描画し、画像全体を描き直さずにフェザリングで元画像へ合成します。",
+    ),
+    "调整图像尺寸：拉伸 / 适应并补边（边缘延伸）/ 中心裁剪。": (
+        "Resize images: stretch, fit with padding (edge extension), or center crop.",
+        "画像サイズを調整：引き伸ばし・パディング付きフィット（端の延伸）・中央切り抜き。",
+    ),
+    "按坐标裁剪图像；right/bottom 填 0 表示到边缘，越界会被夹取。": (
+        "Crop images by coordinates; set right/bottom to 0 to use the image edge. Out-of-range values are clamped.",
+        "座標で画像を切り抜きます。right/bottom を 0 にすると画像の端まで使用し、範囲外の値は clamp されます。",
+    ),
+    "生成重绘遮罩（255=重绘区域）：全图 / 矩形 / 椭圆，可羽化。": (
+        "Create an inpainting mask (255 = repaint area): full image, rectangle, or ellipse, with optional feathering.",
+        "インペイントマスク（255 = 再描画領域）を作成：全体・長方形・楕円、フェザリング対応。",
+    ),
+    "局部重绘：按遮罩重画图像（白=重绘区域），一步到位出图。": (
+        "Inpainting: repaints the masked area (white = repaint region) and produces the finished image in one step.",
+        "インペイント：マスク領域（白 = 再描画領域）を描き直し、1 回の処理で完成画像を生成します。",
+    ),
+    "保存图像到输出目录（写入元数据，水印走统一实现）。": (
+        "Save images to the output directory (writes metadata and applies watermarks through the shared implementation).",
+        "画像を出力ディレクトリに保存します（メタデータを書き込み、ウォーターマークは共通実装で処理）。",
+    ),
+    "从磁盘读取一张图（图生图 / ControlNet 参考图 / IP-Adapter 参考图的入口）。": (
+        "Load an image from disk (entry point for img2img, ControlNet references, and IP-Adapter references).",
+        "ディスクから画像を読み込みます（img2img・ControlNet 参照・IP-Adapter 参照の入力）。",
+    ),
+    "加载底模（.safetensors/.ckpt）。可填文件名或绝对路径。": (
+        "Load a base model (.safetensors/.ckpt). Enter a filename or an absolute path.",
+        "基本モデル（.safetensors/.ckpt）を読み込みます。ファイル名または絶対パスを指定できます。",
+    ),
+    "加载独立 VAE，并替换到模型管线上。": (
+        "Load a standalone VAE and attach it to the model pipeline.",
+        "独立した VAE を読み込み、モデルパイプラインに差し替えます。",
+    ),
+    "加载若干 LoRA 并挂到模型上（可串联多个）。": (
+        "Load one or more LoRAs and attach them to the model (multiple nodes can be chained).",
+        "複数の LoRA を読み込んでモデルに適用します（複数ノードを直列接続可能）。",
+    ),
+    "给图片加噪：高斯 / 均匀 / 盐椒三种噪点，可用种子复现、可只加单色噪点（不引入彩色杂点）。": (
+        "Add noise: Gaussian, uniform, or salt-and-pepper, reproducible with a seed and optionally monochrome to avoid colored speckles.",
+        "ノイズを追加：ガウス・一様・塩コショウの 3 種類。シードで再現でき、モノクロノイズを選択すれば色付きの斑点を避けられます。",
+    ),
+    "模糊/柔化：高斯模糊、方框模糊，以及径向（缩放）模糊。": (
+        "Blur and soften: Gaussian blur, box blur, and radial (zoom) blur.",
+        "ぼかし・柔化：ガウスぼかし、ボックスぼかし、放射（ズーム）ぼかし。",
+    ),
+    "锐化：USM（UnsharpMask）增强边缘细节，可分别控制半径、百分比与阈值。": (
+        "Sharpen: USM (UnsharpMask) enhances edge detail with separate radius, percentage, and threshold controls.",
+        "シャープ化：USM（UnsharpMask）で輪郭の細部を強調し、半径・適用率・しきい値を個別に調整できます。",
+    ),
+    "色彩调整：亮度 / 对比度 / 饱和度 / 锐度四项一次性调节（等价于 PS 的基础调整层）。": (
+        "Color adjustment: adjust brightness, contrast, saturation, and sharpness together (similar to basic adjustment layers in Photoshop).",
+        "色調整：明るさ・コントラスト・彩度・シャープネスをまとめて調整します（Photoshop の基本調整レイヤーに相当）。",
+    ),
+    "色调分离 / 色阶压缩：减少每个通道的色阶数，或做纯黑白阈值、整图反相。": (
+        "Posterize / compress levels: reduce levels per channel, apply a monochrome threshold, or invert the whole image.",
+        "ポスタリゼーション・階調圧縮：チャンネルごとの階調数を減らす、モノクロ二値化、または画像全体を反転します。",
+    ),
+    "定义区域提示词（矩形/蒙版、区域权重、局部负面词、局部 ControlNet、局部 ADetailer），供 RegionalRedraw 使用。": (
+        "Define regional prompts (rectangles/masks, regional weights, local negative prompts, local ControlNet, and local ADetailer) for RegionalRedraw.",
+        "RegionalRedraw で使用する領域プロンプト（矩形・マスク、領域の重み、局部ネガティブプロンプト、局部 ControlNet、局部 ADetailer）を定義します。",
+    ),
+    "区域精修（局部重绘）：按区域逐个用各自的提示词/权重做蒙版重绘，再羽化合成回底图。": (
+        "Regional refinement (local inpainting): repaints each masked region with its own prompt and weight, then blends it back with feathering.",
+        "領域精修（局部インペイント）：領域ごとのプロンプトと重みでマスク内を再描画し、フェザリングでベース画像へ合成します。",
+    ),
+    "采样：文生图 / 图生图 / 局部重绘（有 image 即图生图，再有 mask 即重绘）。": (
+        "Sampling: text-to-image, img2img, or inpainting (image enables img2img; adding a mask enables inpainting).",
+        "サンプリング：テキストから画像・img2img・インペイント（image があれば img2img、さらに mask があればインペイント）。",
+    ),
+    "把图像编码到潜空间（图生图 / 重绘 / 分块放大的入口）。": (
+        "Encode images into latent space (entry point for img2img, inpainting, and tiled upscaling).",
+        "画像を潜在空間にエンコードします（img2img・インペイント・タイル拡大の入力）。",
+    ),
+    "把潜空间解码成图像。若上游已给出图像则直接透传。": (
+        "Decode latent data into an image. Passes through an upstream image unchanged when one is already available.",
+        "潜在データを画像にデコードします。上流で画像が生成済みの場合はそのまま通過させます。",
+    ),
+    "编码正面提示词为文本条件（含翻译/改写后的最终提示词）。": (
+        "Encode the positive prompt as text conditioning (using the final translated or rewritten prompt).",
+        "ポジティブプロンプトをテキスト条件にエンコードします（翻訳・書き換え後の最終プロンプトを使用）。",
+    ),
+    "编码负面提示词；若已给定条件则把负向附加进去。": (
+        "Encode the negative prompt; append it to existing conditioning when provided.",
+        "ネガティブプロンプトをエンコードし、既存の条件があればそこへ追加します。",
+    ),
+    "分块高清修复：放大 → 切成带重叠的小块 → 每块图生图重绘 → 羽化融合。显存峰值只取决于块尺寸，与最终分辨率无关，所以能在 8GB 卡上做到 2K/4K。denoise=0 时退化为纯放大。": (
+        "Tiled high-resolution refinement: upscale → split into overlapping tiles → img2img repaint per tile → feathered blending. Peak VRAM depends on tile size rather than final resolution, enabling 2K/4K output on 8 GB GPUs. Set denoise=0 for pure upscaling.",
+        "タイル高解像度精修：拡大 → 重なり付きタイルに分割 → タイルごとに img2img 再描画 → フェザリングで合成。VRAM ピークは最終解像度ではなくタイルサイズに依存するため、8 GB GPU でも 2K/4K に対応。denoise=0 で単純拡大になります。",
+    ),
+    "分块纯缩放（不跑扩散、不吃显存）：按块逐步缩放再拼回，避免一次性分配整张巨图的内存，适合把 4K 图在 8GB 机器上放大。": (
+        "Pure tiled scaling (no diffusion or GPU memory): scales and reassembles tiles to avoid allocating an entire large image at once, suitable for upscaling 4K images on 8 GB systems.",
+        "タイル単純スケーリング（拡散処理・VRAM 不使用）：タイルごとに拡大して再結合し、巨大画像全体のメモリ確保を回避。8 GB マシンでの 4K 画像拡大に適しています。",
+    ),
+    "高清修复（二次采样）：先按倍率放大到 8 的倍数尺寸，再做一次低强度图生图补细节（Hires.fix）。": (
+        "High-resolution fix (second sampling): upscale to dimensions divisible by 8, then restore detail with a low-strength img2img pass (Hires.fix).",
+        "高解像度修正（2 回目のサンプリング）：8 の倍数のサイズへ拡大後、低強度の img2img で細部を補正します（Hires.fix）。",
+    ),
+    "纯图像放大（不跑扩散、不吃显存）：按倍率与插值方法缩放。": (
+        "Pure image upscaling (no diffusion or GPU memory): scales by the selected factor and interpolation method.",
+        "画像単純拡大（拡散処理・VRAM 不使用）：倍率と補間方法を指定してスケーリングします。",
+    ),
+    "把图像 / 图像序列 / 帧目录汇总成帧批次（限帧数、按短边缩放并带上 fps）。": (
+        "Combine an image, image sequence, or frame directory into a frame batch (with frame limit, short-edge scaling, and fps).",
+        "画像・画像シーケンス・フレームディレクトリをフレームバッチにまとめます（フレーム数制限、短辺基準の拡大縮小、fps 設定）。",
+    ),
+
+    # 工作流资源与预检报告
+    "该工作流不需要额外资源。": (
+        "This workflow does not require additional resources.",
+        "このワークフローに追加リソースは不要です。",
+    ),
+    "📦 资源清单": ("📦 Resource Summary", "📦 リソース一覧"),
+    "（约 {size}GB）": ("(≈ {size} GB)", "（約 {size} GB）"),
+    "  [可选]": ("  [Optional]", "  [オプション]"),
+    "缺少 {count} 项必需资源，工作流无法运行。": (
+        "Missing {count} required resources; the workflow cannot run.",
+        "必須リソースが {count} 件不足しているため、ワークフローを実行できません。",
+    ),
+    "提示：程序只读取本地文件，不会自动联网下载。": (
+        "Note: the application only reads local files and does not download automatically.",
+        "注意：ローカルファイルのみを読み込み、自動ダウンロードは行いません。",
+    ),
+    "必需资源齐备，可以运行。": (
+        "All required resources are available; the workflow can run.",
+        "必須リソースが揃っているため、実行できます。",
+    ),
+    "✅ 预检通过，可以运行": (
+        "✅ Preflight passed; ready to run",
+        "✅ プレフライトに合格しました。実行できます",
+    ),
+    "❌ 预检未通过（{count} 个错误）": (
+        "❌ Preflight failed ({count} errors)",
+        "❌ プレフライト失敗（{count} 件のエラー）",
+    ),
+    "{label}（{count}）": ("{label} ({count})", "{label}（{count}）"),
+    "❌ 错误": ("❌ Errors", "❌ エラー"),
+    "⚠️ 警告": ("⚠️ Warnings", "⚠️ 警告"),
+    "💡 提示": ("💡 Hints", "💡 ヒント"),
+    "  …还有 {count} 条": ("  …{count} more", "  …ほか {count} 件"),
+    "预计显存 {value} MB": ("Estimated VRAM {value} MB", "推定 VRAM {value} MB"),
+    " · 预计耗时约 {seconds}s": (
+        " · Estimated time ≈ {seconds}s",
+        " · 推定所要時間 約 {seconds}s",
+    ),
+    "资源：需要 {required} 项，缺 {missing} 项": (
+        "Resources: {required} required, {missing} missing",
+        "リソース: 必要 {required} 件、不足 {missing} 件",
+    ),
 }
