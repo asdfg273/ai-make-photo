@@ -607,6 +607,90 @@ def test_workflow_failure_dialog_language():
         window.deleteLater()
 
 
+def test_param_panel_language():
+    from unittest.mock import patch
+    from ui.i18n import ui_i18n
+    from ui.workflow_editor.param_panel import ParamPanel
+    from workflow.schema import (
+        DataType, Node, NodeSpec, ParamSpec, PortSpec, ResourceRequirement, Workflow,
+    )
+
+    spec = NodeSpec(
+        type="I18nTest",
+        inputs={"image": PortSpec(DataType.IMAGE)},
+        params={"seed": ParamSpec(
+            kind="seed", default=-1, label="Seed", minimum=-1, maximum=100)},
+        resources=ResourceRequirement(
+            requires=("cuda", "model"), estimated_vram_mb=1024,
+            supports_cpu_offload=True, supports_tiled=False, exclusive_gpu=True),
+    )
+    wf = Workflow(nodes=[Node(id="n1", type="I18nTest")])
+    old = ui_i18n.language
+    panel = None
+    try:
+        with patch("ui.workflow_editor.param_panel.registry.exists", return_value=True), \
+                patch("ui.workflow_editor.param_panel.registry.get", return_value=spec):
+            ui_i18n.set_language("en")
+            panel = ParamPanel()
+            assert panel.findChildren(QLabel)[0].text() == "Select a node to view its parameters"
+            panel.show_node(wf, "n1")
+            labels = [label.text() for label in panel.findChildren(QLabel)]
+            assert "Inputs" in labels
+            assert "Parameters" in labels
+            assert "Resource Requirements" in labels
+            assert any("Peak VRAM ≈ 1024 MB" in text for text in labels)
+            assert "Range [-1, 100]" in panel._widgets["seed"].toolTip()
+            assert panel._widgets["seed"].specialValueText() == "Random (-1)"
+
+            ui_i18n.set_language("ja")
+            labels = [label.text() for label in panel.findChildren(QLabel)]
+            assert "入力" in labels
+            assert "パラメーター" in labels
+            assert "リソース要件" in labels
+            assert any("VRAM ピーク ≈ 1024 MB" in text for text in labels)
+            assert panel._widgets["seed"].specialValueText() == "ランダム (-1)"
+    finally:
+        ui_i18n.set_language(old)
+        if panel is not None:
+            panel.close()
+            panel.deleteLater()
+
+
+def test_region_editor_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QFileDialog
+    from ui.i18n import ui_i18n
+    from ui.region_editor import COL_SHAPE, RegionEditorDialog
+
+    old = ui_i18n.language
+    dialog = None
+    try:
+        ui_i18n.set_language("en")
+        dialog = RegionEditorDialog([{
+            "name": "Face", "weight": 0.5, "shape": "rect", "enabled": True,
+        }], width=640, height=480)
+        assert dialog.windowTitle() == "Regional Prompts"
+        assert dialog.table.horizontalHeaderItem(COL_SHAPE).text() == "Shape"
+        assert dialog.table.item(0, COL_SHAPE).text() == "Rectangle"
+        assert dialog.lbl_summary.text() == "1 region enabled: Face(0.50)"
+        assert dialog.lbl_hint.text() == "Canvas preserves the output aspect ratio (current 640×480)"
+
+        with patch.object(QFileDialog, "getOpenFileName", return_value=("", "")) as picker:
+            dialog._add_mask_region()
+            assert picker.call_args.args[1] == "Select Mask Image (white = active region)"
+
+        ui_i18n.set_language("ja")
+        assert dialog.windowTitle() == "領域プロンプト"
+        assert dialog.table.item(0, COL_SHAPE).text() == "長方形"
+        assert dialog.lbl_summary.text() == "1 個の領域を有効化: Face(0.50)"
+        assert dialog.lbl_hint.text() == "キャンバスは出力解像度のアスペクト比で表示（現在 640×480）"
+    finally:
+        ui_i18n.set_language(old)
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
+
+
 if __name__ == "__main__":
     test_config_language_roundtrip()
     test_translate_and_validate_language()
@@ -626,6 +710,8 @@ if __name__ == "__main__":
     test_workflow_editor_dialog_language()
     test_workflow_resource_dialog_language()
     test_workflow_failure_dialog_language()
+    test_param_panel_language()
+    test_region_editor_language()
     print("UI_I18N_OK")
     sys.stdout.flush()
     # 与现有 Qt 离屏测试一致，跳过 Multimedia/Qt 的进程退出清理。

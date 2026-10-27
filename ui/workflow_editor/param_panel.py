@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
                              QFrame, QLabel, QLineEdit, QPlainTextEdit,
                              QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 
+from ui.i18n import ui_i18n
 from workflow import registry
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class ParamPanel(QScrollArea):
         self._lay = QVBoxLayout(self._host)
         self._lay.setContentsMargins(8, 8, 8, 8)
         self.setWidget(self._host)
+        ui_i18n.language_changed.connect(self.retranslate_dynamic)
         self._show_placeholder()
 
     # ------------------------------------------------------------------
@@ -68,13 +70,21 @@ class ParamPanel(QScrollArea):
                 lay.setParent(None)
                 lay.deleteLater()
 
-    def _show_placeholder(self, text="选中一个节点查看参数"):
+    def _show_placeholder(self, text=None):
         self._clear()
-        lbl = QLabel(text)
+        lbl = QLabel(text if text is not None else ui_i18n.tr("选中一个节点查看参数"))
         lbl.setWordWrap(True)
         lbl.setStyleSheet("color:#7f849c;")
         self._lay.addWidget(lbl)
         self._lay.addStretch(1)
+
+    def retranslate_dynamic(self, *_):
+        """语言切换后重建只读参数视图，业务值仍从节点数据读取。"""
+        if self._wf is not None and self._node_id:
+            self.show_node(self._wf, self._node_id)
+        else:
+            self._show_placeholder()
+
 
     # ------------------------------------------------------------------
     def show_node(self, wf, node_id: str, node_item=None):
@@ -85,7 +95,7 @@ class ParamPanel(QScrollArea):
             self._show_placeholder()
             return
         if not registry.exists(node.type):
-            self._show_placeholder(f"未注册的节点类型：{node.type}")
+            self._show_placeholder(ui_i18n.trf("未注册的节点类型：{type}", type=node.type))
             return
 
         spec = registry.get(node.type)
@@ -101,13 +111,13 @@ class ParamPanel(QScrollArea):
 
         # ---- 输入端口现状（只读，连线在画布上做）----
         if spec.inputs:
-            self._lay.addWidget(self._section("输入"))
+            self._lay.addWidget(self._section(ui_i18n.tr("输入")))
             form = QFormLayout()
             form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
             for name, ps in spec.inputs.items():
                 link = node.link_refs().get(name)
-                txt = (f"← {link[0]}.{link[1]}" if link
-                       else ("未连接" if not ps.optional else "未连接（可选）"))
+                txt = (f"← {link[0]}.{link[1]}" if link else ui_i18n.tr(
+                    "未连接" if not ps.optional else "未连接（可选）"))
                 lbl = QLabel(txt)
                 col = "#a6e3a1" if link else "#6c7086"
                 lbl.setStyleSheet(f"color:{col}; font-size:11px;")
@@ -116,7 +126,7 @@ class ParamPanel(QScrollArea):
 
         # ---- 参数 ----
         if spec.params:
-            self._lay.addWidget(self._section("参数"))
+            self._lay.addWidget(self._section(ui_i18n.tr("参数")))
             form = QFormLayout()
             form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
             for name, pspec in spec.params.items():
@@ -127,23 +137,29 @@ class ParamPanel(QScrollArea):
                 self._widgets[name] = w
                 tip = pspec.help or ""
                 if pspec.minimum is not None or pspec.maximum is not None:
-                    tip += (f"\n范围 [{pspec.minimum}, {pspec.maximum}]")
+                    tip += "\n" + ui_i18n.trf(
+                        "范围 [{minimum}, {maximum}]",
+                        minimum=pspec.minimum, maximum=pspec.maximum)
                 if tip:
                     w.setToolTip(tip.strip())
                 form.addRow(pspec.label or name, w)
             self._lay.addLayout(form)
         else:
-            self._lay.addWidget(self._muted("该节点没有可调参数"))
+            self._lay.addWidget(self._muted(ui_i18n.tr("该节点没有可调参数")))
 
-        self._lay.addWidget(self._section("资源声明"))
+        self._lay.addWidget(self._section(ui_i18n.tr("资源声明")))
         res = spec.resources
-        info = [f"显存峰值 ≈ {res.estimated_vram_mb} MB",
-                f"CPU offload: {'支持' if res.supports_cpu_offload else '不支持'}",
-                f"分块: {'支持' if res.supports_tiled else '不支持'}"]
+        support = ui_i18n.tr("支持")
+        unsupported = ui_i18n.tr("不支持")
+        info = [ui_i18n.trf("显存峰值 ≈ {value} MB", value=res.estimated_vram_mb),
+                ui_i18n.trf("CPU offload: {status}",
+                            status=support if res.supports_cpu_offload else unsupported),
+                ui_i18n.trf("分块: {status}",
+                            status=support if res.supports_tiled else unsupported)]
         if res.exclusive_gpu:
-            info.append("独占 GPU")
+            info.append(ui_i18n.tr("独占 GPU"))
         if res.requires:
-            info.append("依赖: " + ", ".join(res.requires))
+            info.append(ui_i18n.trf("依赖: {requirements}", requirements=", ".join(res.requires)))
         lbl = QLabel("\n".join(info))
         lbl.setWordWrap(True)
         lbl.setStyleSheet("color:#94e2d5; font-size:11px;")
@@ -186,7 +202,7 @@ class ParamPanel(QScrollArea):
                     2_147_483_647 if kind == "seed" else 100000)
                 w.setRange(lo, hi)
                 if kind == "seed":
-                    w.setSpecialValueText("随机 (-1)")
+                    w.setSpecialValueText(ui_i18n.tr("随机 (-1)"))
                 try:
                     w.setValue(int(cur))
                 except Exception:

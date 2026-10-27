@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
                              QPushButton, QTableWidget, QTableWidgetItem,
                              QVBoxLayout, QWidget)
 
+from ui.i18n import ui_i18n
 logger = logging.getLogger(__name__)
 
 # 新建区域时轮换的配色（画布上便于区分）
@@ -57,7 +58,7 @@ class RegionCanvas(QWidget):
         self._drag_from = None
         self._drag_to = None
         self.setMouseTracking(True)
-        self.setToolTip("按住左键拖出一个矩形区域；点选已有区域")
+        self.setToolTip(ui_i18n.tr("按住左键拖出一个矩形区域；点选已有区域"))
 
     # ---- 尺寸换算 ----
     def set_image_size(self, w: int, h: int):
@@ -122,7 +123,7 @@ class RegionCanvas(QWidget):
             p.setPen(QPen(col, 3 if i == self.selected else 1,
                           Qt.PenStyle.SolidLine if on else Qt.PenStyle.DashLine))
             p.drawRect(rc)
-            label = reg.get("name") or f"区域{i + 1}"
+            label = reg.get("name") or ui_i18n.trf("区域{index}", index=i + 1)
             p.setPen(QPen(col))
             p.drawText(rc.adjusted(4, 2, -4, -2),
                        int(Qt.AlignmentFlag.AlignTop
@@ -193,7 +194,7 @@ class RegionEditorDialog(QDialog):
     def __init__(self, regions: list, width: int = 512, height: int = 768,
                  parent=None):
         super().__init__(parent)
-        self.setWindowTitle("🎯 区域提示词")
+        self.setWindowTitle("区域提示词")
         self.resize(1040, 660)
         self._regions: list = []
         self._loading = False
@@ -216,9 +217,9 @@ class RegionEditorDialog(QDialog):
         self.canvas.regionCreated.connect(self._on_created)
         self.canvas.regionPicked.connect(self._on_picked)
         left.addWidget(self.canvas, 1)
-        hint = QLabel(f"画布按输出分辨率等比显示（当前 {width}×{height}）")
-        hint.setStyleSheet("color:#7f849c; font-size:11px;")
-        left.addWidget(hint)
+        self.lbl_hint = QLabel()
+        self.lbl_hint.setStyleSheet("color:#7f849c; font-size:11px;")
+        left.addWidget(self.lbl_hint)
         body.addLayout(left, 3)
 
         # ---- 右：区域列表 ----
@@ -241,13 +242,13 @@ class RegionEditorDialog(QDialog):
 
         btns = QHBoxLayout()
         for text, slot, tip in (
-                ("➕ 加矩形", lambda: self._add_region("rect"),
+                ("加矩形", lambda: self._add_region("rect"),
                  "也可以直接在画布上拖"),
-                ("🖼 导入蒙版", self._add_mask_region,
+                ("导入蒙版", self._add_mask_region,
                  "选一张黑白图，白色=生效区域"),
-                ("🗑 删除", self._remove_selected, ""),
-                ("⏫", lambda: self._move(-1), "上移"),
-                ("⏬", lambda: self._move(1), "下移")):
+                ("删除", self._remove_selected, ""),
+                ("↑", lambda: self._move(-1), "上移"),
+                ("↓", lambda: self._move(1), "下移")):
             b = QPushButton(text)
             b.clicked.connect(slot)
             if tip:
@@ -299,9 +300,9 @@ class RegionEditorDialog(QDialog):
         lay.addWidget(self.lbl_summary)
 
         bottom = QHBoxLayout()
-        b_save = QPushButton("💾 保存区域集")
+        b_save = QPushButton("保存区域集")
         b_save.clicked.connect(self._save_set)
-        b_load = QPushButton("📂 载入区域集")
+        b_load = QPushButton("载入区域集")
         b_load.clicked.connect(self._load_set)
         bottom.addWidget(b_save)
         bottom.addWidget(b_load)
@@ -313,7 +314,10 @@ class RegionEditorDialog(QDialog):
         bottom.addWidget(bb)
         lay.addLayout(bottom)
 
+        ui_i18n.language_changed.connect(self.retranslate_dynamic)
         self._set_regions(list(regions or []), width, height)
+        self.retranslate_dynamic()
+        ui_i18n.translate_widget_tree(self)
 
     # ------------------------------------------------------------------
     def _set_regions(self, regions: list, w=None, h=None):
@@ -324,7 +328,7 @@ class RegionEditorDialog(QDialog):
                 if not isinstance(r, dict):
                     continue
                 d = dict(r)
-                d.setdefault("name", f"区域{i + 1}")
+                d.setdefault("name", ui_i18n.trf("区域{index}", index=i + 1))
                 d.setdefault("prompt", "")
                 d.setdefault("negative", "")
                 d.setdefault("weight", 0.5)
@@ -364,14 +368,14 @@ class RegionEditorDialog(QDialog):
             sp.setRange(0.0, 1.0)
             sp.setSingleStep(0.05)
             sp.setValue(float(r.get("weight", 0.5)))
-            sp.setToolTip("区域权重 = 该区域的重绘强度（越大改动越多）")
+            sp.setToolTip(ui_i18n.tr("区域权重 = 该区域的重绘强度（越大改动越多）"))
             sp.valueChanged.connect(
                 lambda v, idx=i: self._set_field(idx, "weight", float(v)))
             self.table.setCellWidget(i, COL_WEIGHT, sp)
 
             shape = str(r.get("shape", "rect"))
-            it = QTableWidgetItem("矩形" if shape == "rect" else "蒙版")
-            it.setToolTip(r.get("mask_path", "") or "拖拽产生的矩形区域")
+            it = QTableWidgetItem(ui_i18n.tr("矩形" if shape == "rect" else "蒙版"))
+            it.setToolTip(r.get("mask_path", "") or ui_i18n.tr("拖拽产生的矩形区域"))
             self.table.setItem(i, COL_SHAPE, it)
         self.table.blockSignals(False)
 
@@ -388,21 +392,41 @@ class RegionEditorDialog(QDialog):
     def _update_summary(self):
         enabled = [r for r in self._regions if r.get("enabled", True)]
         if not enabled:
-            self.lbl_summary.setText("未启用任何区域（生成时不做区域重绘）")
+            self.lbl_summary.setText(ui_i18n.tr("未启用任何区域（生成时不做区域重绘）"))
             return
         parts = []
         for i, r in enumerate(enabled[:6]):
-            nm = r.get("name") or f"区域{i + 1}"
+            nm = r.get("name") or ui_i18n.trf("区域{index}", index=i + 1)
             parts.append(f"{nm}({float(r.get('weight', 0.5)):.2f})")
-        more = f" …共 {len(enabled)} 个" if len(enabled) > 6 else ""
-        self.lbl_summary.setText(
-            f"已启用 {len(enabled)} 个区域：" + "  ".join(parts) + more)
+        more = ui_i18n.trf(" …共 {count} 个", count=len(enabled)) if len(enabled) > 6 else ""
+        template = ("已启用 1 个区域：{regions}" if len(enabled) == 1
+                    else "已启用 {count} 个区域：{regions}")
+        self.lbl_summary.setText(ui_i18n.trf(
+            template, count=len(enabled), regions="  ".join(parts)) + more)
+
+    def retranslate_dynamic(self, *_):
+        """刷新无法由控件树自动翻译的摘要、形状和分辨率提示。"""
+        self.lbl_hint.setText(ui_i18n.trf(
+            "画布按输出分辨率等比显示（当前 {width}×{height}）",
+            width=self.canvas.img_w, height=self.canvas.img_h))
+        for i, region in enumerate(self._regions):
+            item = self.table.item(i, COL_SHAPE)
+            if item is None:
+                continue
+            shape = str(region.get("shape", "rect"))
+            item.setText(ui_i18n.tr("矩形" if shape == "rect" else "蒙版"))
+            if not region.get("mask_path"):
+                item.setToolTip(ui_i18n.tr("拖拽产生的矩形区域"))
+        self._update_summary()
+        self.canvas.update()
+
 
     # ------------------------------------------------------------------
     def _on_created(self, rect):
         idx = len(self._regions)
         self._regions.append({
-            "name": f"区域{idx + 1}", "prompt": "", "negative": "",
+            "name": ui_i18n.trf("区域{index}", index=idx + 1),
+            "prompt": "", "negative": "",
             "weight": 0.5, "shape": "rect", "rect": tuple(rect),
             "mask_path": "", "color": PALETTE[idx % len(PALETTE)],
             "enabled": True, "feather": 16})
@@ -474,7 +498,8 @@ class RegionEditorDialog(QDialog):
         # 默认放在中间偏上，避免叠在一起看不出来
         off = min(0.3, 0.05 * idx)
         self._regions.append({
-            "name": f"区域{idx + 1}", "prompt": "", "negative": "",
+            "name": ui_i18n.trf("区域{index}", index=idx + 1),
+            "prompt": "", "negative": "",
             "weight": 0.5, "shape": shape,
             "rect": (0.1 + off, 0.1 + off, 0.5 + off, 0.4 + off),
             "mask_path": "", "color": PALETTE[idx % len(PALETTE)],
@@ -485,14 +510,15 @@ class RegionEditorDialog(QDialog):
 
     def _add_mask_region(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择蒙版图（白色=生效区域）", "",
-            "图片 (*.png *.jpg *.jpeg *.bmp *.webp)")
+            self, ui_i18n.tr("选择蒙版图（白色=生效区域）"), "",
+            ui_i18n.tr("图片 (*.png *.jpg *.jpeg *.bmp *.webp)"))
         if not path:
             return
         idx = len(self._regions)
         name = os.path.splitext(os.path.basename(path))[0][:16]
         self._regions.append({
-            "name": name or f"区域{idx + 1}", "prompt": "", "negative": "",
+            "name": name or ui_i18n.trf("区域{index}", index=idx + 1),
+            "prompt": "", "negative": "",
             "weight": 0.5, "shape": "mask", "rect": (0.0, 0.0, 1.0, 1.0),
             "mask_path": path, "color": PALETTE[idx % len(PALETTE)],
             "enabled": True, "feather": 16})
@@ -531,8 +557,9 @@ class RegionEditorDialog(QDialog):
     def _save_set(self):
         self._commit_extras()
         path, _ = QFileDialog.getSaveFileName(
-            self, "保存区域集", os.path.join(self._sets_dir(), "区域集.json"),
-            "JSON (*.json)")
+            self, ui_i18n.tr("保存区域集"),
+            os.path.join(self._sets_dir(), ui_i18n.tr("区域集.json")),
+            ui_i18n.tr("JSON (*.json)"))
         if not path:
             return
         try:
@@ -540,13 +567,13 @@ class RegionEditorDialog(QDialog):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({"regions": self._regions}, f,
                           ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "已保存", path)
+            QMessageBox.information(self, ui_i18n.tr("已保存"), path)
         except Exception as e:
-            QMessageBox.warning(self, "保存失败", str(e))
+            QMessageBox.warning(self, ui_i18n.tr("保存失败"), str(e))
 
     def _load_set(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "载入区域集", self._sets_dir(), "JSON (*.json)")
+            self, ui_i18n.tr("载入区域集"), self._sets_dir(), ui_i18n.tr("JSON (*.json)"))
         if not path:
             return
         try:
@@ -556,7 +583,7 @@ class RegionEditorDialog(QDialog):
             regs = data.get("regions") if isinstance(data, dict) else data
             self._set_regions(list(regs or []))
         except Exception as e:
-            QMessageBox.warning(self, "载入失败", str(e))
+            QMessageBox.warning(self, ui_i18n.tr("载入失败"), str(e))
 
     # ------------------------------------------------------------------
     def regions(self) -> list:
