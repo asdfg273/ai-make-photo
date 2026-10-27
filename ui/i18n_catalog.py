@@ -901,4 +901,52 @@ TRANSLATIONS = {
     "JSON (*.json)": ("JSON (*.json)", "JSON (*.json)"),
     "已保存": ("Saved", "保存しました"),
     "载入失败": ("Load Failed", "読み込みに失敗しました"),
+
+    # 工作流节点库与画布
+    "节点库": ("Node Library", "ノードライブラリ"),
+    "搜索节点…": ("Search nodes…", "ノードを検索…"),
+    "双击添加到画布；也可以从这里拖到画布": (
+        "Double-click to add to the canvas, or drag the node onto the canvas",
+        "ダブルクリックでキャンバスに追加、またはここからキャンバスへドラッグ",
+    ),
+    "提示：拖端口连线，选中后 Del 删除": (
+        "Tip: drag between ports to connect; select and press Del to delete",
+        "ヒント：ポート間をドラッグして接続、選択後に Del で削除",
+    ),
+    "{category}（{count}）": ("{category} ({count})", "{category}（{count}）"),
+    "模型": ("Models", "モデル"),
+    "文本": ("Text", "テキスト"),
+    "采样": ("Sampling", "サンプリング"),
+    "潜空间": ("Latent Space", "潜在空間"),
+    "图像": ("Image", "画像"),
+    "适配": ("Adapters", "アダプター"),
+    "放大": ("Upscaling", "拡大"),
+    "输出": ("Output", "出力"),
+    "通用": ("General", "汎用"),
+    "测试": ("Test", "テスト"),
+    "共 1 种节点 · 双击添加 · Del 删除": (
+        "1 node type · Double-click to add · Del to delete",
+        "1 種類のノード · ダブルクリックで追加 · Del で削除",
+    ),
+    "共 {count} 种节点 · 双击添加 · Del 删除": (
+        "{count} node types · Double-click to add · Del to delete",
+        "{count} 種類のノード · ダブルクリックで追加 · Del で削除",
+    ),
+    "文件不存在": ("File does not exist", "ファイルが存在しません"),
+    "无法读取": ("Unable to read", "読み込めません"),
+    "（无预览）": ("(No preview)", "（プレビューなし）"),
+    "（重跑）": (" (Rerun)", "（再実行）"),
+    "{label}：{source}共 {count} 个可选\n（也可直接粘贴绝对路径）": (
+        "{label}: {source}{count} options available\n(You can also paste an absolute path)",
+        "{label}: {source}選択肢 {count} 件\n（絶対パスを直接貼り付けることもできます）",
+    ),
+    "已添加 {type} ({id})": ("Added {type} ({id})", "{type} を追加しました ({id})"),
+    "已删除 {id}": ("Deleted {id}", "{id} を削除しました"),
+    "不能连接到同一个节点": ("Cannot connect to the same node", "同じノードには接続できません"),
+    "必须从「输出」连到「输入」": ("Connect an output to an input", "「出力」から「入力」へ接続してください"),
+    "类型不匹配：{source} → {target}（不会自动转换）": (
+        "Type mismatch: {source} → {target} (no automatic conversion)",
+        "タイプが一致しません: {source} → {target}（自動変換は行いません）",
+    ),
+    "（未连到端口，已取消）": ("(Not connected to a port; cancelled)", "（ポートに接続されていないためキャンセルしました）"),
 }

@@ -12,6 +12,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QFrame, QLabel, QLineEdit, QTreeWidget,
                              QTreeWidgetItem, QVBoxLayout)
 
+from ui.i18n import ui_i18n
 from workflow import registry
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class NodePalette(QFrame):
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(4)
 
-        title = QLabel("🧩 节点库")
+        title = QLabel("节点库")
         title.setStyleSheet("font-weight:bold; color:#cdd6f4;")
         lay.addWidget(title)
 
@@ -55,7 +56,9 @@ class NodePalette(QFrame):
         self.hint.setStyleSheet("color:#7f849c; font-size:11px;")
         lay.addWidget(self.hint)
 
+        ui_i18n.language_changed.connect(self.retranslate_dynamic)
         self.reload()
+        ui_i18n.translate_widget_tree(self)
 
     # ------------------------------------------------------------------
     def reload(self):
@@ -70,7 +73,8 @@ class NodePalette(QFrame):
                [c for c in sorted(by_cat) if c not in CATEGORY_ORDER]
 
         for cat in cats:
-            top = QTreeWidgetItem([f"{cat}（{len(by_cat[cat])}）"])
+            top = QTreeWidgetItem([ui_i18n.trf(
+                "{category}（{count}）", category=ui_i18n.tr(cat), count=len(by_cat[cat]))])
             top.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.tree.addTopLevelItem(top)
             for s in sorted(by_cat[cat], key=lambda x: x.type):
@@ -79,14 +83,23 @@ class NodePalette(QFrame):
                 tip = s.description or ""
                 res = s.resources
                 if res.estimated_vram_mb:
-                    tip += f"\n\n显存峰值 ≈ {res.estimated_vram_mb} MB"
+                    tip += "\n\n" + ui_i18n.trf(
+                        "显存峰值 ≈ {value} MB", value=res.estimated_vram_mb)
                 if res.requires:
-                    tip += "\n依赖: " + ", ".join(res.requires)
+                    tip += "\n" + ui_i18n.trf(
+                        "依赖: {requirements}", requirements=", ".join(res.requires))
                 if tip:
                     child.setToolTip(0, tip.strip())
                 top.addChild(child)
             top.setExpanded(True)
-        self.hint.setText(f"共 {len(specs)} 种节点 · 双击添加 · Del 删除")
+        template = ("共 1 种节点 · 双击添加 · Del 删除" if len(specs) == 1
+                    else "共 {count} 种节点 · 双击添加 · Del 删除")
+        self.hint.setText(ui_i18n.trf(template, count=len(specs)))
+        self._apply_filter(self.edit_search.text())
+
+    def retranslate_dynamic(self, *_):
+        """重建分类与提示，保留搜索框中的用户输入。"""
+        self.reload()
 
     def _apply_filter(self, text: str):
         text = (text or "").strip().lower()

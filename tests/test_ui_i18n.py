@@ -691,6 +691,84 @@ def test_region_editor_language():
             dialog.deleteLater()
 
 
+def test_node_palette_language():
+    from unittest.mock import patch
+    from ui.i18n import ui_i18n
+    from ui.workflow_editor.palette import NodePalette
+    from workflow.schema import NodeSpec, ResourceRequirement
+
+    spec = NodeSpec(
+        type="I18nNode", category="模型",
+        resources=ResourceRequirement(estimated_vram_mb=2048, requires=("cuda",)),
+    )
+    old = ui_i18n.language
+    palette = None
+    try:
+        with patch("ui.workflow_editor.palette.registry.load_builtin_nodes"), \
+                patch("ui.workflow_editor.palette.registry.all_specs", return_value={"I18nNode": spec}):
+            ui_i18n.set_language("en")
+            palette = NodePalette()
+            assert palette.findChildren(QLabel)[0].text() == "Node Library"
+            assert palette.tree.topLevelItem(0).text(0) == "Models (1)"
+            assert palette.hint.text() == "1 node type · Double-click to add · Del to delete"
+            assert "Peak VRAM ≈ 2048 MB" in palette.tree.topLevelItem(0).child(0).toolTip(0)
+
+            ui_i18n.set_language("ja")
+            assert palette.tree.topLevelItem(0).text(0) == "モデル（1）"
+            assert palette.hint.text() == "1 種類のノード · ダブルクリックで追加 · Del で削除"
+    finally:
+        ui_i18n.set_language(old)
+        if palette is not None:
+            palette.close()
+            palette.deleteLater()
+
+
+def test_workflow_canvas_language():
+    from unittest.mock import patch
+    from ui.i18n import ui_i18n
+    from ui.workflow_editor.canvas import GraphScene
+    from workflow.schema import DataType, NodeSpec, ParamSpec, PortSpec
+
+    spec = NodeSpec(
+        type="I18nTest",
+        inputs={"image": PortSpec(DataType.IMAGE)},
+        outputs={"out": PortSpec(DataType.IMAGE)},
+        params={
+            "seed": ParamSpec(kind="seed", default=-1),
+            "image": ParamSpec(kind="str", default="", source="images"),
+        },
+    )
+    old = ui_i18n.language
+    scene = None
+    messages = []
+    try:
+        ui_i18n.set_language("en")
+        scene = GraphScene()
+        scene.statusMessage.connect(messages.append)
+        with patch("ui.workflow_editor.canvas.registry.exists", return_value=False):
+            assert scene.add_node("Missing") is None
+            assert messages[-1] == "Unregistered node type: Missing"
+
+        with patch("ui.workflow_editor.canvas.registry.exists", return_value=True), \
+                patch("ui.workflow_editor.canvas.registry.get", return_value=spec):
+            node_id = scene.add_node("I18nTest")
+            assert messages[-1] == "Added I18nTest (i18nTest_1)"
+            item = scene.node_items[node_id]
+            assert item.param_widgets["seed"].specialValueText() == "Random"
+            assert item.preview_note == "No reference image selected"
+            assert scene.connect_ports(item.ports_out["out"], item.ports_in["image"]) is False
+            assert messages[-1] == "Cannot connect to the same node"
+
+            ui_i18n.set_language("ja")
+            assert item.param_widgets["seed"].specialValueText() == "ランダム"
+            assert item.preview_note == "参照画像が選択されていません"
+    finally:
+        ui_i18n.set_language(old)
+        if scene is not None:
+            scene.clear_items()
+            scene.deleteLater()
+
+
 if __name__ == "__main__":
     test_config_language_roundtrip()
     test_translate_and_validate_language()
@@ -712,6 +790,8 @@ if __name__ == "__main__":
     test_workflow_failure_dialog_language()
     test_param_panel_language()
     test_region_editor_language()
+    test_node_palette_language()
+    test_workflow_canvas_language()
     print("UI_I18N_OK")
     sys.stdout.flush()
     # 与现有 Qt 离屏测试一致，跳过 Multimedia/Qt 的进程退出清理。

@@ -24,6 +24,7 @@ from PyQt6.QtGui import (QBrush, QColor, QFont, QPainter, QPainterPath, QPen)
 from PyQt6.QtWidgets import (QGraphicsItem, QGraphicsPathItem, QGraphicsScene,
                              QGraphicsView)
 
+from ui.i18n import ui_i18n
 from workflow import registry
 from workflow.schema import DataType, Node, Workflow, types_compatible
 
@@ -92,7 +93,8 @@ def load_thumbnail(path: str, size: int = PREVIEW_SIZE):
         return None, ""
     key = (str(path), size)
     if key in _THUMB_CACHE:
-        return _THUMB_CACHE[key]
+        pix, err = _THUMB_CACHE[key]
+        return pix, ui_i18n.tr(err)
     result = (None, "")
     try:
         import os
@@ -116,7 +118,7 @@ def load_thumbnail(path: str, size: int = PREVIEW_SIZE):
     while len(_THUMB_ORDER) > _THUMB_MAX:
         old = _THUMB_ORDER.pop(0)
         _THUMB_CACHE.pop(old, None)
-    return result
+    return result[0], ui_i18n.tr(result[1])
 
 
 # ======================================================================
@@ -179,6 +181,7 @@ class NodeItem(QGraphicsItem):
         self.preview_pixmap = None
         self.preview_note = ""
         self._preview_param = ""
+        self._preview_path = ""
         self._preview_h = 0.0
         self.setFlags(QGraphicsItem.GraphicsItemFlag.ItemIsMovable
                       | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
@@ -262,7 +265,7 @@ class NodeItem(QGraphicsItem):
                     w.setRange(lo, hi)
                     w.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
                     if pspec.kind == "seed":
-                        w.setSpecialValueText("随机")
+                        w.setSpecialValueText(ui_i18n.tr("随机"))
                     try:
                         w.setValue(int(cur))
                     except Exception:
@@ -319,9 +322,9 @@ class NodeItem(QGraphicsItem):
                         src_label = param_sources.describe(pspec.source)
                     except Exception:
                         pass
-                    w.setToolTip(
-                        f"{label}：{src_label}共 {len(opts)} 个可选\n"
-                        f"（也可直接粘贴绝对路径）"
+                    w.setToolTip(ui_i18n.trf(
+                        "{label}：{source}共 {count} 个可选\n（也可直接粘贴绝对路径）",
+                        label=label, source=src_label, count=len(opts))
                         + (f"\n{pspec.help}" if pspec.help else ""))
                 else:
                     w = QLineEdit()
@@ -355,14 +358,39 @@ class NodeItem(QGraphicsItem):
     # ------------------------------------------------------------------
     def refresh_preview_from_path(self, path: str) -> None:
         """参考图路径变化 → 重新出缩略图（LoadImage 这类节点）。"""
-        pix, err = load_thumbnail(path or "")
+        self._preview_path = str(path or "")
+        pix, err = load_thumbnail(self._preview_path)
         self.preview_pixmap = pix
         if not path:
-            self.preview_note = "未选择参考图"
+            self.preview_note = ui_i18n.tr("未选择参考图")
         elif pix is None:
-            self.preview_note = err or "无法读取"
+            self.preview_note = err or ui_i18n.tr("无法读取")
         else:
             self.preview_note = ""
+        self.update()
+
+    def retranslate_dynamic(self) -> None:
+        """刷新 graphics 项内不会经过普通控件树翻译的文字。"""
+        for name, widget in self.param_widgets.items():
+            pspec = self.spec.params.get(name)
+            if widget is None or pspec is None:
+                continue
+            if pspec.kind == "seed":
+                widget.setSpecialValueText(ui_i18n.tr("随机"))
+            if pspec.source:
+                try:
+                    from ui.workflow_editor import param_sources
+                    opts = param_sources.options_for(pspec.source)
+                    src_label = param_sources.describe(pspec.source)
+                except Exception:
+                    opts, src_label = [], ""
+                label = pspec.label or name
+                widget.setToolTip(ui_i18n.trf(
+                    "{label}：{source}共 {count} 个可选\n（也可直接粘贴绝对路径）",
+                    label=label, source=src_label, count=len(opts))
+                    + (f"\n{pspec.help}" if pspec.help else ""))
+        if self._preview_param:
+            self.refresh_preview_from_path(self._preview_path)
         self.update()
 
     def set_preview_image(self, image, note: str = "") -> None:
@@ -433,7 +461,7 @@ class NodeItem(QGraphicsItem):
             painter.setFont(f)
             painter.drawText(box,
                              int(Qt.AlignmentFlag.AlignCenter),
-                             self.preview_note or "（无预览）")
+                             self.preview_note or ui_i18n.tr("（无预览）"))
 
     def set_param_widget(self, name: str, value) -> None:
         w = self.param_widgets.get(name)
@@ -488,7 +516,7 @@ class NodeItem(QGraphicsItem):
         painter.setFont(f)
         label = self.ntype
         if self.cached:
-            label += " ♻"
+            label += ui_i18n.tr("（重跑）")
         painter.drawText(QRectF(PAD, 0, NODE_W - PAD * 2, HEADER_H),
                          int(Qt.AlignmentFlag.AlignVCenter
                              | Qt.AlignmentFlag.AlignLeft), label)
@@ -533,7 +561,7 @@ class NodeItem(QGraphicsItem):
         if self.error:
             painter.setPen(QPen(QColor("#f38ba8")))
             painter.drawText(QRectF(0, self.h + 1, NODE_W, 14),
-                             int(Qt.AlignmentFlag.AlignLeft), "⚠ 执行失败")
+                             int(Qt.AlignmentFlag.AlignLeft), ui_i18n.tr("执行失败"))
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
@@ -606,6 +634,12 @@ class GraphScene(QGraphicsScene):
         self._temp_link: QGraphicsPathItem | None = None
         self._link_src: PortItem | None = None
         self.selectionChanged.connect(self._on_selection)
+        ui_i18n.language_changed.connect(self.retranslate_dynamic)
+
+    def retranslate_dynamic(self, *_):
+        for item in self.node_items.values():
+            if isinstance(item, NodeItem):
+                item.retranslate_dynamic()
 
     # ---------------------------------------------------------------- 载入
     def load_workflow(self, wf: Workflow, reset_view: bool = True):
@@ -704,7 +738,7 @@ class GraphScene(QGraphicsScene):
     # ---------------------------------------------------------------- 节点
     def add_node(self, ntype: str, pos: QPointF | None = None) -> str | None:
         if not registry.exists(ntype):
-            self.statusMessage.emit(f"⚠️ 未注册的节点类型: {ntype}")
+            self.statusMessage.emit(ui_i18n.trf("未注册的节点类型：{type}", type=ntype))
             return None
         nid = self._unique_id(ntype)
         spec = registry.get(ntype)
@@ -717,7 +751,7 @@ class GraphScene(QGraphicsScene):
         self.addItem(item)
         self.node_items[nid] = item
         self.graphChanged.emit()
-        self.statusMessage.emit(f"➕ 已添加 {ntype} ({nid})")
+        self.statusMessage.emit(ui_i18n.trf("已添加 {type} ({id})", type=ntype, id=nid))
         return nid
 
     def _unique_id(self, ntype: str) -> str:
@@ -741,7 +775,7 @@ class GraphScene(QGraphicsScene):
                 self.wf.nodes.pop(i)
                 break
         self.graphChanged.emit()
-        self.statusMessage.emit(f"🗑 已删除 {nid}")
+        self.statusMessage.emit(ui_i18n.trf("已删除 {id}", id=nid))
 
     # ---------------------------------------------------------------- 连线
     def _make_link(self, src_id: str, src_port: str,
@@ -784,17 +818,18 @@ class GraphScene(QGraphicsScene):
     def connect_ports(self, src: PortItem, dst: PortItem) -> bool:
         """类型检查后连线。类型不兼容时拒绝并提示。"""
         if src is dst or src.node_item is dst.node_item:
-            self.statusMessage.emit("⚠️ 不能连接到同一个节点")
+            self.statusMessage.emit(ui_i18n.tr("不能连接到同一个节点"))
             return False
         if src.is_output == dst.is_output:
-            self.statusMessage.emit("⚠️ 必须从「输出」连到「输入」")
+            self.statusMessage.emit(ui_i18n.tr("必须从「输出」连到「输入」"))
             return False
         if not src.is_output:                 # 允许反向拖
             src, dst = dst, src
         a, b = src.dtype, dst.dtype
         if not types_compatible(a, b):
-            self.statusMessage.emit(
-                f"❌ 类型不匹配：{a.value} → {b.value}（不会自动转换）")
+            self.statusMessage.emit(ui_i18n.trf(
+                "类型不匹配：{source} → {target}（不会自动转换）",
+                source=a.value, target=b.value))
             return False
         # 一个输入口只接一条线
         for lk in list(self.link_items):
@@ -806,7 +841,7 @@ class GraphScene(QGraphicsScene):
             self.refresh_links()
             self.graphChanged.emit()
             self.statusMessage.emit(
-                f"🔗 {src.node_item.node_id}.{src.name} → "
+                f"{src.node_item.node_id}.{src.name} → "
                 f"{dst.node_item.node_id}.{dst.name}")
         return ok
 
@@ -843,7 +878,7 @@ class GraphScene(QGraphicsScene):
                 target = item
                 break
         if target is None:
-            self.statusMessage.emit("（未连到端口，已取消）")
+            self.statusMessage.emit(ui_i18n.tr("（未连到端口，已取消）"))
             return False
         return self.connect_ports(src, target)
 
