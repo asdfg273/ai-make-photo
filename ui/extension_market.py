@@ -175,6 +175,10 @@ class ExtensionCard(QFrame):
 
     def _refresh_ui(self):
         from ui.i18n import ui_i18n
+        required_tag = f" [{ui_i18n.tr('必需')}]" if self.ext_info.get("required") else ""
+        self.lbl_name.setText(
+            f"<b>{ui_i18n.tr(self.ext_info['name'])}</b>{required_tag}")
+        self.lbl_desc.setText(ui_i18n.tr(self.ext_info.get("desc", "")))
         if self.installed:
             self.lbl_status.setText(ui_i18n.tr("已安装"))
             self.lbl_status.setStyleSheet(

@@ -144,6 +144,9 @@ class ShellMixin:
         self.setWindowTitle(ui_i18n.tr("AI 绘画工作站 v6.0"))
         self._render_resource_label()
         self._render_extension_count()
+        retranslate_video = getattr(self, "_retranslate_video_dynamic", None)
+        if callable(retranslate_video):
+            retranslate_video()
 
     # ---------- 全局快捷键（键位可在 设置→快捷键 改）----------
     def _setup_shortcuts(self):

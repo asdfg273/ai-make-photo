@@ -22,6 +22,7 @@ from PyQt6.QtCore import Qt, pyqtSlot, QMetaObject, Q_ARG
 from PyQt6.QtGui import QIcon, QPixmap, QImage
 
 from utils.system_utils import logger
+from ui.i18n import ui_i18n
 
 
 class VideoPanelMixin:
@@ -63,7 +64,7 @@ class VideoPanelMixin:
 
         try:
             self.btn_gen_video.setEnabled(False)
-            self.btn_gen_video.setText("生成中...")
+            self.btn_gen_video.setText(ui_i18n.tr("生成中..."))
 
             # ---- 1. 模式识别 ----
             mode_idx = self.combo_video_mode.currentIndex()
@@ -71,6 +72,7 @@ class VideoPanelMixin:
                 if 0 <= mode_idx <= 3 else "txt2video"
             mode_label = ["文生视频", "图生视频", "视频转绘", "提示词旅行"][mode_idx] \
                 if 0 <= mode_idx <= 3 else "文生视频"
+            self._video_mode_label = mode_label
 
             logger.debug(f"🔵 [DEBUG] mode = {mode_str} ({mode_label})")
             logger.debug(f"🔵 [DEBUG] _video_input_path = {getattr(self, '_video_input_path', '未设置')}")
@@ -233,8 +235,7 @@ class VideoPanelMixin:
             self._set_status(
                 f"🎬 [{mode_label}] 开始生成: {num_frames}帧 {width}x{height}",
                 "#ff7a17")
-            self.lbl_video_status.setText(f"🎬 [{mode_label}] 生成中...")
-            self.lbl_video_status.setStyleSheet("color:#ff7a17; padding:4px;")
+            self._set_video_status("generating")
 
             # ---- 10. 进度回调 ----
             def progress_callback(pipe, step, timestep, callback_kwargs):
@@ -559,12 +560,39 @@ class VideoPanelMixin:
     # ==========================================================
     #  按钮 / 回调
     # ==========================================================
+    def _set_video_status(self, kind: str, seed: int | None = None):
+        """保存结构化状态并按当前语言渲染，切换语言时无需重跑任务。"""
+        self._video_status_kind = kind
+        self._video_status_seed = seed
+        if not hasattr(self, "lbl_video_status"):
+            return
+        if kind == "generating":
+            mode = ui_i18n.tr(getattr(self, "_video_mode_label", "文生视频"))
+            text = f"[{mode}] {ui_i18n.tr('生成中...')}"
+            color = "#e2a63d"
+        elif kind == "completed":
+            text = f"{ui_i18n.tr('已完成')} (seed={seed})"
+            color = "#dce5f2"
+        else:
+            text = ui_i18n.tr("生成失败")
+            color = "#e2606f"
+        self.lbl_video_status.setText(text)
+        self.lbl_video_status.setStyleSheet(f"color:{color}; padding:4px;")
+
+    def _retranslate_video_dynamic(self):
+        if hasattr(self, "btn_gen_video"):
+            key = "生成中..." if getattr(self, "is_generating", False) else "生成视频"
+            self.btn_gen_video.setText(ui_i18n.tr(key))
+        kind = getattr(self, "_video_status_kind", None)
+        if kind:
+            self._set_video_status(kind, getattr(self, "_video_status_seed", None))
+
     def _reset_video_button(self):
         """恢复视频生成按钮状态"""
         self.is_generating = False
         if hasattr(self, 'btn_gen_video'):
             self.btn_gen_video.setEnabled(True)
-            self.btn_gen_video.setText("🎬 生成视频")
+            self.btn_gen_video.setText(ui_i18n.tr("生成视频"))
 
     @pyqtSlot(str, int)
     def _on_video_generated(self, video_path: str, seed: int):
@@ -576,9 +604,7 @@ class VideoPanelMixin:
             self._set_status(
                 f"✅ 视频生成完成: {os.path.basename(video_path)} (seed={seed})",
                 "#dadbdf")
-            if hasattr(self, 'lbl_video_status'):
-                self.lbl_video_status.setText(f"✅ 已完成 (seed={seed})")
-                self.lbl_video_status.setStyleSheet("color:#dadbdf; padding:4px;")
+            self._set_video_status("completed", seed)
 
             if hasattr(self, 'play_video') and hasattr(self, 'video_widget'):
                 try:
@@ -606,9 +632,7 @@ class VideoPanelMixin:
     def _on_video_gen_error(self, code: int, error_msg: str):
         """视频生成失败回调 (主线程)"""
         self._reset_video_button()
-        if hasattr(self, 'lbl_video_status'):
-            self.lbl_video_status.setText("❌ 生成失败")
-            self.lbl_video_status.setStyleSheet("color:#f38ba8; padding:4px;")
+        self._set_video_status("failed")
         self._set_status(error_msg, "#f38ba8")
 
     def _on_video_player_error(self, error, error_string):

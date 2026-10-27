@@ -303,16 +303,68 @@ def test_extension_market_language_roundtrip():
         first_card = next(iter(dlg.cards.values()))
         assert first_card.lbl_status.text() in {"Installed", "Not installed", "Missing (required)"}
         assert first_card.btn_action.text() in {"Uninstall", "Download"}
+        assert first_card.lbl_name.text() == "<b>Qwen2-VL-2B Prompt Enhancement</b>"
+        assert first_card.lbl_desc.text() == (
+            "AI prompt rewriting, image understanding, and Chinese-Japanese translation")
+        import re
+        for card in dlg.cards.values():
+            assert not re.search(r"[\u4e00-\u9fff]", card.lbl_name.text())
+            assert not re.search(r"[\u4e00-\u9fff]", card.lbl_desc.text())
         ui_i18n.set_language("ja")
         assert dlg.lbl_summary.text() == (
             f"インストール済み: {summary['installed']} / {summary['total']}")
+        assert first_card.lbl_name.text() == "<b>Qwen2-VL-2B プロンプト強化</b>"
+        assert first_card.lbl_desc.text() == "AI プロンプトリライト・画像認識・中国語と日本語の翻訳"
         ui_i18n.set_language("zh")
         assert dlg.lbl_summary.text() == (
             f"已安装: {summary['installed']} / {summary['total']}")
+        assert first_card.lbl_name.text() == "<b>Qwen2-VL-2B 提示词增强</b>"
     finally:
         ui_i18n.set_language(old)
         dlg.close()
         dlg.deleteLater()
+
+
+def test_video_status_language_roundtrip():
+    from PyQt6.QtWidgets import QLabel, QPushButton, QWidget
+    from ui.i18n import ui_i18n
+    from ui.video_panel_mixin import VideoPanelMixin
+
+    class VideoHost(QWidget, VideoPanelMixin):
+        def __init__(self):
+            super().__init__()
+            self.btn_gen_video = QPushButton(self)
+            self.lbl_video_status = QLabel(self)
+            self.is_generating = False
+            self.status_messages = []
+
+        def _set_status(self, text, color):
+            self.status_messages.append(text)
+
+        def set_progress(self, value):
+            pass
+
+    old = ui_i18n.language
+    host = VideoHost()
+    try:
+        ui_i18n.set_language("en")
+        host._on_video_generated("result.mp4", 42)
+        assert host.btn_gen_video.text() == "Generate Video"
+        assert host.lbl_video_status.text() == "Completed (seed=42)"
+        ui_i18n.set_language("ja")
+        host._retranslate_video_dynamic()
+        assert host.btn_gen_video.text() == "動画を生成"
+        assert host.lbl_video_status.text() == "完了 (seed=42)"
+        host._on_video_gen_error(1, "failed")
+        assert host.lbl_video_status.text() == "生成に失敗しました"
+        ui_i18n.set_language("zh")
+        host._retranslate_video_dynamic()
+        assert host.btn_gen_video.text() == "生成视频"
+        assert host.lbl_video_status.text() == "生成失败"
+    finally:
+        ui_i18n.set_language(old)
+        host.close()
+        host.deleteLater()
 
 
 if __name__ == "__main__":
@@ -324,6 +376,7 @@ if __name__ == "__main__":
     test_gallery_count_language_roundtrip()
     test_character_count_language_roundtrip()
     test_extension_market_language_roundtrip()
+    test_video_status_language_roundtrip()
     print("UI_I18N_OK")
     sys.stdout.flush()
     # 与现有 Qt 离屏测试一致，跳过 Multimedia/Qt 的进程退出清理。
