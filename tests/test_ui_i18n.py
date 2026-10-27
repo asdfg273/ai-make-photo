@@ -744,6 +744,150 @@ def test_workflow_report_language():
         window.deleteLater()
 
 
+def test_workflow_validation_language():
+    from unittest.mock import patch
+    from ui.i18n import ui_i18n
+    from workflow import graph
+    from workflow.schema import (
+        DataType, Node, NodeSpec, ParamSpec, PortSpec, Workflow,
+    )
+
+    spec = NodeSpec(
+        type="I18nValidation",
+        inputs={"image": PortSpec(DataType.IMAGE)},
+        params={"steps": ParamSpec(kind="int", default=1, minimum=1, maximum=10)},
+    )
+    wf = Workflow(nodes=[Node(
+        id="n1", type="I18nValidation", params={"steps": 99},
+    )])
+    old = ui_i18n.language
+    try:
+        with patch("workflow.graph.registry.exists", return_value=True), \
+                patch("workflow.graph.registry.get", return_value=spec):
+            ui_i18n.set_language("en")
+            issues = graph.validate(wf, translate=ui_i18n.tr)
+            assert issues[0].message == "Missing required input image(IMAGE)"
+            assert issues[1].message == (
+                "Invalid parameter steps: Parameter value 99 exceeds maximum 10")
+            ui_i18n.set_language("ja")
+            issues = graph.validate(wf, translate=ui_i18n.tr)
+            assert issues[0].message == "必須入力 image(IMAGE) がありません"
+            assert issues[1].message == (
+                "パラメータ steps が無効です: パラメータ値 99 が上限 10 を超えています")
+            assert graph.validate(wf)[0].message == "缺少必填输入 image(IMAGE)"
+    finally:
+        ui_i18n.set_language(old)
+
+
+def test_workflow_validation_window_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox
+    from ui.i18n import ui_i18n
+    from ui.workflow_editor.window import WorkflowEditorWindow
+    from workflow.schema import Node, Workflow
+
+    old = ui_i18n.language
+    window = WorkflowEditorWindow()
+    captured = []
+    wf = Workflow(nodes=[Node(id="bad", type="MissingType")])
+    try:
+        with patch.object(window.scene, "to_workflow", return_value=wf), \
+                patch.object(QMessageBox, "warning", side_effect=(
+                    lambda _parent, title, text, *args: captured.append((title, text)))):
+            ui_i18n.set_language("en")
+            assert window.on_validate() is False
+            assert "Unregistered node type: MissingType" in captured[-1][1]
+            assert "Validation failed: 1 errors" in window.txt_log.toPlainText()
+            ui_i18n.set_language("ja")
+            assert window.on_validate() is False
+            assert "未登録のノードタイプ: MissingType" in captured[-1][1]
+    finally:
+        ui_i18n.set_language(old)
+        window.close()
+        window.deleteLater()
+
+
+def test_workflow_execution_log_language():
+    from unittest.mock import patch
+    from ui.i18n import ui_i18n
+    from workflow import registry
+    from workflow.executor import Executor, NodeContext
+    from workflow.memory_policy import MemoryPolicy
+    from workflow.schema import Node, NodeSpec, Workflow
+
+    spec = NodeSpec(type="I18nRun", run=lambda _ctx, _node, _inputs: {"value": 1})
+    wf = Workflow(name="Test", nodes=[Node(id="n1", type="I18nRun")])
+    old = ui_i18n.language
+    logs = []
+    try:
+        with patch.object(registry, "load_builtin_nodes"), \
+                patch.object(registry, "exists", return_value=True), \
+                patch.object(registry, "get", return_value=spec):
+            ui_i18n.set_language("en")
+            ctx = NodeContext(
+                policy=MemoryPolicy(cache_intermediates=False),
+                log=logs.append, translate=ui_i18n.tr,
+            )
+            result = Executor(ctx).run(wf)
+            assert result["ok"] is True
+            assert logs[0] == "▶️ Workflow started: Test (1 nodes)"
+            assert logs[1].startswith("🧠 Memory policy: ")
+            assert logs[-1].startswith("🏁 Workflow completed in ")
+            ui_i18n.set_language("ja")
+            logs.clear()
+            result = Executor(ctx).run(wf, use_cache=False)
+            assert result["ok"] is True
+            assert logs[0] == "▶️ ワークフロー開始: Test（1 ノード）"
+            assert logs[1].startswith("🧠 VRAM ポリシー: ")
+            assert logs[-1].startswith("🏁 ワークフロー完了、所要時間 ")
+            plain_logs = []
+            plain_ctx = NodeContext(
+                policy=MemoryPolicy(cache_intermediates=False),
+                log=plain_logs.append,
+            )
+            assert Executor(plain_ctx).run(wf, use_cache=False)["ok"] is True
+            assert plain_logs[0] == "▶️ 工作流开始：Test（1 个节点）"
+            assert plain_logs[1].startswith("🧠 显存策略：")
+    finally:
+        ui_i18n.set_language(old)
+
+
+def test_workflow_error_language():
+    from unittest.mock import patch
+    from ui.i18n import ui_i18n
+    from workflow import registry
+    from workflow.executor import Executor, NodeContext
+    from workflow.memory_policy import MemoryPolicy
+    from workflow.schema import Node, NodeSpec, Workflow
+
+    spec = NodeSpec(type="I18nRun", run=None)
+    wf = Workflow(name="Test", nodes=[Node(id="n1", type="I18nRun")])
+    old = ui_i18n.language
+    logs = []
+    try:
+        with patch.object(registry, "load_builtin_nodes"), \
+                patch.object(registry, "exists", return_value=True), \
+                patch.object(registry, "get", return_value=spec):
+            ui_i18n.set_language("en")
+            ctx = NodeContext(
+                policy=MemoryPolicy(cache_intermediates=False),
+                log=logs.append, translate=ui_i18n.tr,
+            )
+            result = Executor(ctx).run(wf)
+            assert result["failed_node"] == "n1"
+            assert result["error"] == "Node run() is not implemented"
+            assert logs[-1] == (
+                "❌ Node failed [n1 / I18nRun] Node run() is not implemented")
+            ui_i18n.set_language("ja")
+            logs.clear()
+            result = Executor(ctx).run(wf)
+            assert result["error"] == "ノードに run() が実装されていません"
+            assert logs[-1] == (
+                "❌ ノード失敗 [n1 / I18nRun] ノードに run() が実装されていません")
+    finally:
+        ui_i18n.set_language(old)
+
+
 def test_node_palette_language():
     from unittest.mock import patch
     from ui.i18n import ui_i18n
@@ -852,6 +996,10 @@ if __name__ == "__main__":
     test_param_panel_language()
     test_region_editor_language()
     test_workflow_report_language()
+    test_workflow_validation_language()
+    test_workflow_validation_window_language()
+    test_workflow_execution_log_language()
+    test_workflow_error_language()
     test_node_palette_language()
     test_workflow_canvas_language()
     print("UI_I18N_OK")

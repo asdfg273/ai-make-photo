@@ -44,15 +44,17 @@ def _spec_of(node: Node) -> Optional[NodeSpec]:
     return registry.get(node.type)
 
 
-def validate(wf: Workflow, *, strict: bool = True) -> List[ValidationIssue]:
-    """全量静态校验。返回问题列表（error 阻断执行）。"""
+def validate(wf: Workflow, *, strict: bool = True,
+             translate=None) -> List[ValidationIssue]:
+    """全量静态校验；后台默认中文，界面可注入翻译函数。"""
+    tr = translate or (lambda text: text)
     issues: List[ValidationIssue] = []
 
     # ---- 1. 重复 id ----
     seen = set()
     for n in wf.nodes:
         if n.id in seen:
-            issues.append(ValidationIssue("error", n.id, "节点 id 重复"))
+            issues.append(ValidationIssue("error", n.id, tr("节点 id 重复")))
         seen.add(n.id)
 
     # ---- 2. 逐节点 ----
@@ -60,7 +62,8 @@ def validate(wf: Workflow, *, strict: bool = True) -> List[ValidationIssue]:
         spec = _spec_of(n)
         if spec is None:
             issues.append(ValidationIssue(
-                "error", n.id, f"未注册的节点类型: {n.type}"))
+                "error", n.id,
+                tr("未注册的节点类型: {type}").format(type=n.type)))
             continue
 
         # 2a. 必填输入
@@ -70,35 +73,42 @@ def validate(wf: Workflow, *, strict: bool = True) -> List[ValidationIssue]:
             if not has_link and not has_lit:
                 if not pspec.optional:
                     issues.append(ValidationIssue(
-                        "error", n.id, f"缺少必填输入 {port}({pspec.type.value})",
-                        port))
+                        "error", n.id,
+                        tr("缺少必填输入 {port}({type})").format(
+                            port=port, type=pspec.type.value), port))
             if port in spec.force_links and not has_link:
                 issues.append(ValidationIssue(
-                    "error", n.id, f"输入 {port} 必须来自连线", port))
+                    "error", n.id,
+                    tr("输入 {port} 必须来自连线").format(port=port), port))
 
         # 2b. 未声明的输入名（拼写错误极易发生）
         declared = set(spec.inputs) | set(spec.params)
         for k in n.inputs:
             if k not in declared:
                 issues.append(ValidationIssue(
-                    "warning", n.id, f"输入 {k!r} 未被节点声明（将被忽略）", k))
+                    "warning", n.id,
+                    tr("输入 {port!r} 未被节点声明（将被忽略）").format(port=k), k))
 
         # 2c. 参数取值
         for pname, pspec in spec.params.items():
             if pname not in n.params:
                 continue
             try:
-                pspec.coerce(n.params[pname])
+                pspec.coerce(n.params[pname], translate=translate)
             except Exception as e:
                 issues.append(ValidationIssue(
-                    "error", n.id, f"参数 {pname} 非法: {e}", pname))
+                    "error", n.id,
+                    tr("参数 {name} 非法: {error}").format(
+                        name=pname, error=str(e)), pname))
 
         # 2d. 连线来源存在性 + 类型
         for port, (src_id, src_port) in n.link_refs().items():
             src = wf.node(src_id)
             if src is None:
                 issues.append(ValidationIssue(
-                    "error", n.id, f"输入 {port} 连到不存在的节点 {src_id}", port))
+                    "error", n.id,
+                    tr("输入 {port} 连到不存在的节点 {source}").format(
+                        port=port, source=src_id), port))
                 continue
             sspec = _spec_of(src)
             if sspec is None:
@@ -106,7 +116,8 @@ def validate(wf: Workflow, *, strict: bool = True) -> List[ValidationIssue]:
             if src_port not in sspec.outputs:
                 issues.append(ValidationIssue(
                     "error", n.id,
-                    f"输入 {port} 连到 {src_id} 的不存在输出 {src_port}", port))
+                    tr("输入 {port} 连到 {source} 的不存在输出 {source_port}").format(
+                        port=port, source=src_id, source_port=src_port), port))
                 continue
             if port in spec.inputs:
                 a = sspec.outputs[src_port].type
@@ -114,12 +125,15 @@ def validate(wf: Workflow, *, strict: bool = True) -> List[ValidationIssue]:
                 if not types_compatible(a, b):
                     issues.append(ValidationIssue(
                         "error", n.id,
-                        f"类型不匹配: {src_id}.{src_port}({a.value}) → "
-                        f"{port}({b.value})", port))
+                        tr("类型不匹配: {source}.{source_port}({source_type}) → "
+                           "{port}({target_type})").format(
+                            source=src_id, source_port=src_port,
+                            source_type=a.value, port=port,
+                            target_type=b.value), port))
 
     # ---- 3. 有环检测（顺带给出参与环的节点）----
     try:
-        topo_sort(wf)
+        topo_sort(wf, translate=translate)
     except WorkflowError as e:
         issues.append(ValidationIssue("error", "", str(e)))
 
@@ -129,8 +143,8 @@ def validate(wf: Workflow, *, strict: bool = True) -> List[ValidationIssue]:
         consumed = {lk[0] for lk in wf.links}
         if not any(n.id not in consumed for n in wf.nodes):
             issues.append(ValidationIssue(
-                "warning", "", "图中所有节点都有下游，没有终点节点"
-                               "（通常意味着忘了接 SaveImage）"))
+                "warning", "", tr("图中所有节点都有下游，没有终点节点"
+                                  "（通常意味着忘了接 SaveImage）")))
 
     return issues
 
@@ -139,8 +153,9 @@ def errors_only(issues: List[ValidationIssue]) -> List[ValidationIssue]:
     return [i for i in issues if i.level == "error"]
 
 
-def topo_sort(wf: Workflow) -> List[str]:
+def topo_sort(wf: Workflow, *, translate=None) -> List[str]:
     """拓扑排序（Kahn）。有环抛 WorkflowError 并指出环上节点。"""
+    tr = translate or (lambda text: text)
     ids = wf.node_ids()
     indeg: Dict[str, int] = {i: 0 for i in ids}
     adj: Dict[str, List[str]] = {i: [] for i in ids}
@@ -162,7 +177,8 @@ def topo_sort(wf: Workflow) -> List[str]:
 
     if len(order) != len(ids):
         stuck = [i for i in ids if i not in set(order)]
-        raise WorkflowError(f"工作流存在环路，涉及节点: {', '.join(stuck)}")
+        raise WorkflowError(tr("工作流存在环路，涉及节点: {nodes}").format(
+            nodes=", ".join(stuck)))
     return order
 
 

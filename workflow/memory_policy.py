@@ -95,18 +95,20 @@ class MemoryPolicy:
     # 诊断
     notes: list = field(default_factory=list)
 
-    def describe(self) -> str:
-        bits = [PRESET_LABELS.get(self.preset, self.preset)]
+    def describe(self, *, translate=None) -> str:
+        tr = translate or (lambda text: text)
+        bits = [tr(PRESET_LABELS.get(self.preset, self.preset))]
         if self.sequential_offload:
-            bits.append("逐层 offload")
+            bits.append(tr("逐层 offload"))
         elif self.cpu_offload:
             bits.append("CPU offload")
         else:
-            bits.append("全 GPU")
+            bits.append(tr("全 GPU"))
         if self.allow_tiled:
-            bits.append(f"分块≥{self.tiled_threshold_mp:.1f}MP")
+            bits.append(tr("分块≥{threshold}MP").format(
+                threshold=f"{self.tiled_threshold_mp:.1f}"))
         if self.cache_intermediates:
-            bits.append(f"缓存{self.cache_max_entries}")
+            bits.append(tr("缓存{count}").format(count=self.cache_max_entries))
         return " · ".join(bits)
 
 

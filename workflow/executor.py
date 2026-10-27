@@ -62,6 +62,8 @@ class NodeContext:
     # 判断模型名：`ctx.capabilities.require("controlnet")`。
     # 由 LoadCheckpoint 加载后写入；没加载模型时为 None。
     capabilities: Any = None
+    # 界面可注入翻译函数；后台与既有调用默认保留中文。
+    translate: Callable[[str], str] = lambda text: text
 
     def cancelled(self) -> bool:
         try:
@@ -90,8 +92,14 @@ class Executor:
         self.last_states: Dict[str, dict] = {}
 
     # ------------------------------------------------------------------
+    def _text(self, text: str, **values) -> str:
+        return self.ctx.translate(text).format(**values)
+
+    def _log(self, text: str, **values) -> None:
+        self.ctx.log(self._text(text, **values))
+
     def validate(self, wf: Workflow) -> List[graph_mod.ValidationIssue]:
-        return graph_mod.validate(wf)
+        return graph_mod.validate(wf, translate=self.ctx.translate)
 
     def plan(self, wf: Workflow) -> dict:
         specs = []
@@ -121,7 +129,7 @@ class Executor:
         issues = self.validate(wf)
         errs = [i for i in issues if i.level == "error"]
         if errs:
-            return {"ok": False, "error": "工作流校验未通过",
+            return {"ok": False, "error": self._text("工作流校验未通过"),
                     "issues": [i.to_dict() for i in issues],
                     "failed_node": errs[0].node_id, "states": {},
                     "outputs": {}, "seconds": 0.0,
@@ -129,7 +137,7 @@ class Executor:
 
         # ---- 2. 执行顺序 ----
         try:
-            order = graph_mod.topo_sort(wf)
+            order = graph_mod.topo_sort(wf, translate=self.ctx.translate)
         except WorkflowError as e:
             return {"ok": False, "error": str(e), "failed_node": "",
                     "issues": [i.to_dict() for i in issues], "states": {},
@@ -148,8 +156,10 @@ class Executor:
                     "outputs": {}, "seconds": 0.0, "plan": plan,
                     "order": order, "dry_run": True}
 
-        self.ctx.log(f"▶️ 工作流开始：{wf.name}（{len(order)} 个节点）")
-        self.ctx.log(f"🧠 显存策略：{self.ctx.policy.describe()}")
+        self._log("▶️ 工作流开始：{name}（{count} 个节点）",
+                  name=wf.name, count=len(order))
+        self._log("🧠 显存策略：{policy}",
+                  policy=self.ctx.policy.describe(translate=self.ctx.translate))
 
         produced: Dict[str, Dict[str, Any]] = {}
         states: Dict[str, dict] = {}
@@ -167,9 +177,10 @@ class Executor:
                 # ---- 取值 ----
                 inputs, missing = graph_mod.resolve_inputs(wf, node, produced)
                 if missing:
-                    raise NodeError(nid, node.type,
-                                    f"缺少输入: {', '.join(missing)}",
-                                    node.inputs)
+                    raise NodeError(
+                        nid, node.type,
+                        self._text("缺少输入: {inputs}", inputs=", ".join(missing)),
+                        node.inputs)
 
                 # ---- 缓存 ----
                 want_cache = (self.cache.enabled if use_cache is None
@@ -190,10 +201,12 @@ class Executor:
                         states[nid] = dict(node.to_dict(True)["_status"])
                         states[nid]["node_id"] = nid
                         cached_nodes.append(nid)
-                        self.ctx.log(f"♻️ 复用缓存: {nid} ({node.type})")
+                        self._log("♻️ 复用缓存: {node} ({type})",
+                                  node=nid, type=node.type)
                         continue
                 elif force_exec:
-                    self.ctx.log(f"🎯 强制重跑: {nid} ({node.type})")
+                    self._log("🎯 强制重跑: {node} ({type})",
+                              node=nid, type=node.type)
 
                 self.ctx.check_cancel()
                 self.ctx.current_node = nid
@@ -202,7 +215,8 @@ class Executor:
 
                 # ---- 执行 ----
                 if spec.run is None:
-                    raise NodeError(nid, node.type, "该节点没有实现 run()")
+                    raise NodeError(
+                        nid, node.type, self._text("该节点没有实现 run()"))
                 try:
                     out = spec.run(self.ctx, node, inputs)
                 except Cancelled:
@@ -215,8 +229,10 @@ class Executor:
                 if out is None:
                     out = {}
                 if not isinstance(out, dict):
-                    raise NodeError(nid, node.type,
-                                    f"run() 必须返回 dict，实际 {type(out).__name__}")
+                    raise NodeError(
+                        nid, node.type,
+                        self._text("run() 必须返回 dict，实际 {type}",
+                                   type=type(out).__name__))
 
                 produced[nid] = out
                 node.status = "ok"
@@ -234,22 +250,24 @@ class Executor:
                 if node.status == "running":
                     node.status = "skipped"
             elapsed = time.time() - t_start
-            self.ctx.log("⏹️ 工作流已取消")
-            return {"ok": False, "cancelled": True, "error": "已取消",
+            self._log("⏹️ 工作流已取消")
+            return {"ok": False, "cancelled": True,
+                    "error": self._text("已取消"),
                     "failed_node": "", "states": states,
                     "outputs": self._leaf_outputs(wf, order, produced),
                     "cached": cached_nodes, "cache_stats": self.cache.stats(),
                     "issues": [i.to_dict() for i in issues],
                     "seconds": elapsed, "plan": plan}
         except NodeError as e:
-            failed_node, error_msg = e.node_id, e.message
+            failed_node, error_msg = e.node_id, self.ctx.translate(e.message)
             n = wf.node(e.node_id)
             if n is not None:
-                n.status, n.error = "error", e.message
+                n.status, n.error = "error", error_msg
             states[e.node_id] = dict(n.to_dict(True)["_status"]) if n else {
-                "status": "error", "error": e.message}
+                "status": "error", "error": error_msg}
             states[e.node_id]["node_id"] = e.node_id
-            self.ctx.log(f"❌ 节点失败 {e}")
+            self._log("❌ 节点失败 [{node} / {type}] {error}",
+                      node=e.node_id, type=e.node_type, error=error_msg)
             # ⚠️ 不能用 `x.__traceback`：类体内的双下划线属性会被 Python
             # 名字改写成 `_Executor__traceback`，结果"记录失败原因"这行
             # 自己先抛 AttributeError，把真正的原因盖掉。必须 getattr。
@@ -260,13 +278,14 @@ class Executor:
                              type(cause), cause, tb)))
         except Exception as e:
             error_msg = f"{type(e).__name__}: {e}"
-            self.ctx.log(f"❌ 工作流异常: {error_msg}")
+            self._log("❌ 工作流异常: {error}", error=error_msg)
             logger.exception("工作流执行异常")
 
         elapsed = time.time() - t_start
         ok = not error_msg
         if ok:
-            self.ctx.log(f"🏁 工作流完成，用时 {elapsed:.1f}s")
+            self._log("🏁 工作流完成，用时 {seconds}s",
+                      seconds=f"{elapsed:.1f}")
         return {"ok": ok, "error": error_msg, "failed_node": failed_node,
                 "states": states, "outputs": self._leaf_outputs(wf, order, produced),
                 "cached": cached_nodes, "cache_stats": self.cache.stats(),
@@ -328,8 +347,8 @@ class Executor:
 def make_context(host=None, ai=None, *, preset: str = "auto",
                  arch_id: str = "", overrides: Optional[dict] = None,
                  cancel_check=None, log=None, status=None,
-                 progress=None, cap: Optional[DeviceCapabilities] = None
-                 ) -> NodeContext:
+                 progress=None, cap: Optional[DeviceCapabilities] = None,
+                 translate=None) -> NodeContext:
     """便捷构造：探测设备 → 解析策略 → 组装 NodeContext。"""
     cap = cap or DeviceCapabilities.detect()
     if not arch_id and ai is not None:
@@ -342,6 +361,7 @@ def make_context(host=None, ai=None, *, preset: str = "auto",
         log=log or (lambda m: logger.info(m)),
         status=status or (lambda m: None),
         progress=progress or (lambda a, b: None),
+        translate=translate or (lambda text: text),
     )
     # 让模型适配器也能拿到能力信息
     ctx.metadata["_device_caps"] = cap
@@ -357,5 +377,6 @@ def run_workflow(wf: Workflow, host=None, ai=None, **kw) -> Dict[str, Any]:
                        cancel_check=kw.pop("cancel_check", None),
                        log=kw.pop("log", None),
                        status=kw.pop("status", None),
-                       progress=kw.pop("progress", None))
+                       progress=kw.pop("progress", None),
+                       translate=kw.pop("translate", None))
     return Executor(ctx, use_cache=kw.pop("use_cache", True)).run(wf, **kw)

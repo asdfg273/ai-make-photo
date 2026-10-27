@@ -96,12 +96,9 @@ class ParamSpec:
     # 只影响界面呈现，不参与 coerce / 执行语义，放最后以便向后兼容。
     source: str = ""
 
-    def coerce(self, value):
-        """把值转成该参数类型的规范形式；越界抛 ValueError。
-
-        执行器在**运行前**会对全部参数调一次，把错误提前暴露，
-        而不是等跑到一半才炸。
-        """
+    def coerce(self, value, *, translate=None):
+        """把值转成规范形式；界面可注入翻译函数，默认保留中文。"""
+        tr = translate or (lambda text: text)
         if self.kind == "bool":
             if isinstance(value, str):
                 return value.strip().lower() in ("1", "true", "yes", "on")
@@ -115,22 +112,24 @@ class ParamSpec:
         elif self.kind == "choice":
             s = "" if value is None else str(value)
             if self.choices and s not in self.choices:
-                raise ValueError(
-                    f"参数取值 {s!r} 不在允许范围 {list(self.choices)}")
+                raise ValueError(tr("参数取值 {value!r} 不在允许范围 {choices}").format(
+                    value=s, choices=list(self.choices)))
             return s
         elif self.kind == "seed":
             v = int(value)
             # -1 表示随机
             if v < -1:
-                raise ValueError(f"seed 不能小于 -1（得到 {v}）")
+                raise ValueError(tr("seed 不能小于 -1（得到 {value}）").format(value=v))
             return v
         else:
             return value
 
         if self.minimum is not None and v < self.minimum:
-            raise ValueError(f"参数值 {v} 小于下限 {self.minimum}")
+            raise ValueError(tr("参数值 {value} 小于下限 {minimum}").format(
+                value=v, minimum=self.minimum))
         if self.maximum is not None and v > self.maximum:
-            raise ValueError(f"参数值 {v} 大于上限 {self.maximum}")
+            raise ValueError(tr("参数值 {value} 大于上限 {maximum}").format(
+                value=v, maximum=self.maximum))
         return v
 
 

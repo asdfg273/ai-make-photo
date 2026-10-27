@@ -1114,4 +1114,132 @@ TRANSLATIONS = {
         "Resources: {required} required, {missing} missing",
         "リソース: 必要 {required} 件、不足 {missing} 件",
     ),
+
+    # 工作流静态校验
+    "节点 id 重复": ("Duplicate node id", "ノード ID が重複しています"),
+    "未注册的节点类型: {type}": (
+        "Unregistered node type: {type}",
+        "未登録のノードタイプ: {type}",
+    ),
+    "缺少必填输入 {port}({type})": (
+        "Missing required input {port}({type})",
+        "必須入力 {port}({type}) がありません",
+    ),
+    "输入 {port} 必须来自连线": (
+        "Input {port} must come from a connection",
+        "入力 {port} は接続から供給する必要があります",
+    ),
+    "输入 {port!r} 未被节点声明（将被忽略）": (
+        "Input {port!r} is not declared by the node (ignored)",
+        "入力 {port!r} はノードで宣言されていません（無視されます）",
+    ),
+    "参数 {name} 非法: {error}": (
+        "Invalid parameter {name}: {error}",
+        "パラメータ {name} が無効です: {error}",
+    ),
+    "输入 {port} 连到不存在的节点 {source}": (
+        "Input {port} connects to missing node {source}",
+        "入力 {port} が存在しないノード {source} に接続されています",
+    ),
+    "输入 {port} 连到 {source} 的不存在输出 {source_port}": (
+        "Input {port} connects to missing output {source_port} on {source}",
+        "入力 {port} が {source} の存在しない出力 {source_port} に接続されています",
+    ),
+    "类型不匹配: {source}.{source_port}({source_type}) → {port}({target_type})": (
+        "Type mismatch: {source}.{source_port}({source_type}) → {port}({target_type})",
+        "タイプ不一致: {source}.{source_port}({source_type}) → {port}({target_type})",
+    ),
+    "工作流存在环路，涉及节点: {nodes}": (
+        "Workflow contains a cycle involving nodes: {nodes}",
+        "ワークフローに循環があります。関連ノード: {nodes}",
+    ),
+    "图中所有节点都有下游，没有终点节点（通常意味着忘了接 SaveImage）": (
+        "Every node has a downstream connection and there is no terminal node (usually means SaveImage is not connected)",
+        "すべてのノードに下流があり、終端ノードがありません（通常は SaveImage の接続漏れです）",
+    ),
+    "参数取值 {value!r} 不在允许范围 {choices}": (
+        "Parameter value {value!r} is outside the allowed choices {choices}",
+        "パラメータ値 {value!r} は許可された選択肢 {choices} に含まれていません",
+    ),
+    "seed 不能小于 -1（得到 {value}）": (
+        "Seed cannot be less than -1 (received {value})",
+        "シードは -1 未満にできません（指定値: {value}）",
+    ),
+    "参数值 {value} 小于下限 {minimum}": (
+        "Parameter value {value} is below minimum {minimum}",
+        "パラメータ値 {value} が下限 {minimum} を下回っています",
+    ),
+    "参数值 {value} 大于上限 {maximum}": (
+        "Parameter value {value} exceeds maximum {maximum}",
+        "パラメータ値 {value} が上限 {maximum} を超えています",
+    ),
+
+    # 工作流执行与错误定位
+    "工作流校验未通过": (
+        "Workflow validation failed",
+        "ワークフロー検証に失敗しました",
+    ),
+    "▶️ 工作流开始：{name}（{count} 个节点）": (
+        "▶️ Workflow started: {name} ({count} nodes)",
+        "▶️ ワークフロー開始: {name}（{count} ノード）",
+    ),
+    "🧠 显存策略：{policy}": (
+        "🧠 Memory policy: {policy}",
+        "🧠 VRAM ポリシー: {policy}",
+    ),
+    "缺少输入: {inputs}": ("Missing inputs: {inputs}", "入力がありません: {inputs}"),
+    "♻️ 复用缓存: {node} ({type})": (
+        "♻️ Reusing cache: {node} ({type})",
+        "♻️ キャッシュを再利用: {node} ({type})",
+    ),
+    "🎯 强制重跑: {node} ({type})": (
+        "🎯 Forced rerun: {node} ({type})",
+        "🎯 強制再実行: {node} ({type})",
+    ),
+    "该节点没有实现 run()": (
+        "Node run() is not implemented",
+        "ノードに run() が実装されていません",
+    ),
+    "run() 必须返回 dict，实际 {type}": (
+        "run() must return a dict, received {type}",
+        "run() は dict を返す必要があります（実際: {type}）",
+    ),
+    "⏹️ 工作流已取消": (
+        "⏹️ Workflow cancelled",
+        "⏹️ ワークフローをキャンセルしました",
+    ),
+    "❌ 节点失败 [{node} / {type}] {error}": (
+        "❌ Node failed [{node} / {type}] {error}",
+        "❌ ノード失敗 [{node} / {type}] {error}",
+    ),
+    "❌ 工作流异常: {error}": (
+        "❌ Workflow error: {error}",
+        "❌ ワークフローエラー: {error}",
+    ),
+    "🏁 工作流完成，用时 {seconds}s": (
+        "🏁 Workflow completed in {seconds}s",
+        "🏁 ワークフロー完了、所要時間 {seconds}s",
+    ),
+
+    # 执行日志中的显存策略
+    "节省显存（6~8GB，允许 CPU offload 与分块）": (
+        "VRAM saver (6–8 GB, allows CPU offload and tiling)",
+        "VRAM 節約（6～8 GB、CPU オフロードとタイル処理を許可）",
+    ),
+    "平衡模式（8~16GB，优先速度与稳定性）": (
+        "Balanced mode (8–16 GB, prioritizes speed and stability)",
+        "バランスモード（8～16 GB、速度と安定性を優先）",
+    ),
+    "高性能（16GB+，尽量常驻模型与附加组件）": (
+        "High performance (16 GB+, keeps models and add-ons loaded when possible)",
+        "高性能（16 GB 以上、可能な限りモデルと追加コンポーネントを常駐）",
+    ),
+    "自定义（手动设置 offload / 缓存 / 精度 / 批量）": (
+        "Custom (manually configure offload / cache / precision / batch)",
+        "カスタム（オフロード・キャッシュ・精度・バッチを手動設定）",
+    ),
+    "逐层 offload": ("Layer-by-layer offload", "レイヤーごとのオフロード"),
+    "全 GPU": ("Full GPU", "フル GPU"),
+    "分块≥{threshold}MP": ("Tiling ≥ {threshold} MP", "タイル処理 ≥ {threshold} MP"),
+    "缓存{count}": ("Cache {count}", "キャッシュ {count}"),
 }

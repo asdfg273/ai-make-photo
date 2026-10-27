@@ -64,7 +64,8 @@ class WorkflowRunThread(QThread):
                 cancel_check=lambda: self._cancel,
                 log=lambda m: self.progress.emit(str(m)),
                 status=lambda m: self.progress.emit(str(m)),
-                progress=lambda a, b: None)
+                progress=lambda a, b: None,
+                translate=ui_i18n.tr)
             self.progress.emit(ui_i18n.trf("显存策略预设: {preset}", preset=preset))
             ex = Executor(ctx)
             res = ex.run(self.wf, only=self.only)
@@ -326,7 +327,7 @@ class WorkflowEditorWindow(QMainWindow):
     # ------------------------------------------------------------------ 校验
     def on_validate(self, silent_ok: bool = False) -> bool:
         wf = self.scene.to_workflow()
-        issues = G.validate(wf)
+        issues = G.validate(wf, translate=ui_i18n.tr)
         errs = [i for i in issues if i.level == "error"]
         warns = [i for i in issues if i.level == "warning"]
         for i in issues:
