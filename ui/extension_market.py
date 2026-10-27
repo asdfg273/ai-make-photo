@@ -214,15 +214,19 @@ class ExtensionCard(QFrame):
             """)
 
     def _on_click(self):
+        from ui.i18n import ui_i18n
         if self.busy:
             return
         action = "uninstall" if self.installed else "install"
+        name = ui_i18n.tr(self.ext_info["name"])
 
         # 卸载必需项二次确认
         if action == "uninstall" and self.ext_info.get("required"):
             reply = QMessageBox.warning(
-                self, "确认卸载",
-                f"「{self.ext_info['name']}」是必需扩展,卸载后相关功能将无法使用!\n\n确定继续?",
+                self, ui_i18n.tr("确认卸载"),
+                ui_i18n.trf(
+                    "「{name}」是必需扩展,卸载后相关功能将无法使用!\n\n确定继续?",
+                    name=name),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -230,8 +234,8 @@ class ExtensionCard(QFrame):
                 return
         elif action == "uninstall":
             reply = QMessageBox.question(
-                self, "确认卸载",
-                f"确定卸载「{self.ext_info['name']}」吗?\n(可随时重新下载)",
+                self, ui_i18n.tr("确认卸载"),
+                ui_i18n.trf("确定卸载「{name}」吗?\n(可随时重新下载)", name=name),
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
@@ -422,7 +426,9 @@ class ExtensionMarketDialog(QDialog):
         self._update_summary()
 
         if not success:
-            QMessageBox.critical(self, "操作失败", f"[{ext_id}]\n\n{error}")
+            from ui.i18n import ui_i18n
+            QMessageBox.critical(
+                self, ui_i18n.tr("操作失败"), f"[{ext_id}]\n\n{error}")
 
     def closeEvent(self, event):
         """关闭窗口 = 收工，但下载继续在后台跑。
@@ -435,8 +441,11 @@ class ExtensionMarketDialog(QDialog):
         if running:
             logger.info("⏳ 关闭扩展市场：%d 个任务转入后台继续", len(running))
             try:
+                from ui.i18n import ui_i18n
                 self._set_status(
-                    f"⏳ {len(running)} 个下载任务已在后台继续，完成后会自动安装",
+                    ui_i18n.trf(
+                        "{count} 个下载任务已在后台继续，完成后会自动安装",
+                        count=len(running)),
                     "#89dceb")
             except Exception:
                 pass

@@ -980,7 +980,9 @@ class ShellMixin:
             import traceback
             traceback.print_exc()
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "错误", f"打开扩展市场失败:\n{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"),
+                ui_i18n.trf("打开扩展市场失败:\n{error}", error=e))
 
     # ==================================================================
     #  工作流（节点编辑器 / 用引擎生成）
@@ -994,7 +996,9 @@ class ShellMixin:
             import traceback
             traceback.print_exc()
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "错误", f"打开工作流编辑器失败:\n{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"),
+                ui_i18n.trf("打开工作流编辑器失败:\n{error}", error=e))
 
     def _open_workflow_from_ui(self):
         """把当前界面设置编译成工作流图并打开编辑器。"""
@@ -1006,7 +1010,9 @@ class ShellMixin:
             import traceback
             traceback.print_exc()
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "错误", f"生成工作流失败:\n{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"),
+                ui_i18n.trf("生成工作流失败:\n{error}", error=e))
 
     def _workflow_from_ui_or_warn(self):
         """编译当前界面 → Workflow；失败时弹窗并返回 None。"""
@@ -1016,9 +1022,9 @@ class ShellMixin:
             return builder.build_from_ui(self)
         except Exception as e:
             QMessageBox.warning(
-                self, "无法生成工作流",
+                self, ui_i18n.tr("无法生成工作流"),
                 f"{type(e).__name__}: {e}\n\n"
-                "请确认模型列表已加载（等主界面显示「系统就绪」后再试）。")
+                + ui_i18n.tr("请确认模型列表已加载（等主界面显示「系统就绪」后再试）。"))
             return None
 
     def _check_workflow_from_ui(self):
@@ -1032,22 +1038,23 @@ class ShellMixin:
             res = run_preflight(wf, host=self, ai=getattr(self, "ai", None))
             text = (f"节点链：\n{_describe_chain(wf)}\n\n" + res.to_text())
             if res.errors:
-                QMessageBox.warning(self, "🩺 预检未通过", text)
+                QMessageBox.warning(self, ui_i18n.tr("预检未通过"), text)
             else:
-                QMessageBox.information(self, "🩺 预检结果", text)
+                QMessageBox.information(self, ui_i18n.tr("预检结果"), text)
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"预检失败:\n{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"), ui_i18n.trf("预检失败:\n{error}", error=e))
 
     def _run_workflow_from_ui(self):
         """按当前界面设置生成工作流并立即执行（在工作线程里跑）。"""
         from PyQt6.QtWidgets import QMessageBox
         if getattr(self, "is_generating", False):
-            QMessageBox.information(self, "正在生成",
-                                    "当前已有生成任务在跑，请等它结束。")
+            QMessageBox.information(
+                self, ui_i18n.tr("正在生成"), ui_i18n.tr("当前已有生成任务在跑，请等它结束。"))
             return
         if getattr(self, "ai", None) is None:
-            QMessageBox.warning(self, "引擎未就绪",
-                                "AI 引擎还在预热，请稍后再试。")
+            QMessageBox.warning(
+                self, ui_i18n.tr("引擎未就绪"), ui_i18n.tr("AI 引擎还在预热，请稍后再试。"))
             return
         wf = self._workflow_from_ui_or_warn()
         if wf is None:
@@ -1061,7 +1068,8 @@ class ShellMixin:
         except Exception as e:
             import traceback
             traceback.print_exc()
-            QMessageBox.critical(self, "错误", f"执行工作流失败:\n{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"), ui_i18n.trf("执行工作流失败:\n{error}", error=e))
 
     def _open_workflow_dir(self):
         import os
@@ -1101,29 +1109,32 @@ class ShellMixin:
     def _show_about(self):
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.about(
-            self, "关于",
-            "<b>AI 绘画工作站 v6.0</b><br>"
-            "基于 Stable Diffusion + ADetailer<br>"
-            "支持 LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer")
+            self, ui_i18n.tr("关于"),
+            f"<b>{ui_i18n.tr('AI 绘画工作站 v6.0')}</b><br>"
+            + ui_i18n.tr(
+                "基于 Stable Diffusion + ADetailer<br>"
+                "支持 LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer"))
 
     def on_unload_models(self):
         from PyQt6.QtWidgets import QMessageBox
         if getattr(self, 'is_generating', False):
-            QMessageBox.warning(self, "提示", "请先停止当前生成任务")
+            QMessageBox.warning(
+                self, ui_i18n.tr("提示"), ui_i18n.tr("请先停止当前生成任务"))
             return
         try:
-            self._set_status("🧹 正在释放模型...", "#ff7a17")
+            self._set_status(ui_i18n.tr("正在释放模型..."), "#ff7a17")
             if hasattr(self, 'ai'):
                 self.ai.unload_all()
             try:
                 import psutil
                 mem = psutil.Process().memory_info().rss / 1024 / 1024
                 self._set_status(
-                    f"✅ 模型已释放 (当前内存 {mem:.0f} MB)", "#dadbdf")
+                    ui_i18n.trf("模型已释放 (当前内存 {memory} MB)", memory=f"{mem:.0f}"),
+                    "#dadbdf")
             except ImportError:
-                self._set_status("✅ 模型已释放", "#dadbdf")
+                self._set_status(ui_i18n.tr("模型已释放"), "#dadbdf")
         except Exception as e:
-            QMessageBox.critical(self, "释放失败", str(e))
+            QMessageBox.critical(self, ui_i18n.tr("释放失败"), str(e))
 
     def _show_memory(self):
         from PyQt6.QtWidgets import QMessageBox
@@ -1131,11 +1142,13 @@ class ShellMixin:
             import psutil
             mem = psutil.Process().memory_info().rss / 1024 / 1024
             QMessageBox.information(
-                self, "内存使用情况",
-                f"当前进程内存: {mem:.1f} MB\n\n如果数值过大,可以点'释放内存'清理。")
+                self, ui_i18n.tr("内存使用情况"),
+                ui_i18n.trf(
+                    "当前进程内存: {memory} MB\n\n如果数值过大,可以点'释放内存'清理。",
+                    memory=f"{mem:.1f}"))
         except ImportError:
             QMessageBox.information(
-                self, "提示", "请安装 psutil: pip install psutil")
+                self, ui_i18n.tr("提示"), ui_i18n.tr("请安装 psutil: pip install psutil"))
 
     def _goto_page(self, page_id: str):
         page = getattr(self, "_pages", {}).get(page_id)

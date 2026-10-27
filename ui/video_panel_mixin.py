@@ -58,7 +58,7 @@ class VideoPanelMixin:
         logger.debug("🔵 [DEBUG] on_generate_video 被调用")
 
         if getattr(self, 'is_generating', False):
-            self._set_status("⚠️ 正在生成中,请等待", "#ff7a17")
+            self._set_status(ui_i18n.tr("正在生成中,请等待"), "#ff7a17")
             return
         self.is_generating = True
 
@@ -87,7 +87,7 @@ class VideoPanelMixin:
 
             if not prompt and mode_str != "prompt_travel":
                 self._reset_video_button()
-                self._set_status("⚠️ 请输入正面提示词", "#ff7a17")
+                self._set_status(ui_i18n.tr("请输入正面提示词"), "#ff7a17")
                 return
 
             # ---- 3. 输入文件校验 ----
@@ -95,17 +95,19 @@ class VideoPanelMixin:
             if mode_str in ("img2video", "vid2vid"):
                 if not input_path or not os.path.exists(input_path):
                     self._reset_video_button()
-                    self._set_status(f"⚠️ {mode_label}需要选择输入文件", "#ff7a17")
+                    self._set_status(
+                        ui_i18n.trf("{mode}需要选择输入文件", mode=ui_i18n.tr(mode_label)),
+                        "#ff7a17")
                     return
 
                 ext = os.path.splitext(input_path)[1].lower()
                 if mode_str == "img2video" and ext not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
                     self._reset_video_button()
-                    self._set_status("⚠️ 图生视频请选择图片文件", "#ff7a17")
+                    self._set_status(ui_i18n.tr("图生视频请选择图片文件"), "#ff7a17")
                     return
                 if mode_str == "vid2vid" and ext not in (".mp4", ".mov", ".avi", ".webm", ".gif"):
                     self._reset_video_button()
-                    self._set_status("⚠️ 视频转绘请选择视频文件", "#ff7a17")
+                    self._set_status(ui_i18n.tr("视频转绘请选择视频文件"), "#ff7a17")
                     return
 
             # ---- 4. 基本参数 ----
@@ -157,7 +159,7 @@ class VideoPanelMixin:
 
                 if len(prompt_travel) < 2:
                     self._reset_video_button()
-                    self._set_status("⚠️ 提示词旅行至少需要 2 个关键帧", "#ff7a17")
+                    self._set_status(ui_i18n.tr("提示词旅行至少需要 2 个关键帧"), "#ff7a17")
                     return
 
                 if not prompt:
@@ -367,7 +369,7 @@ class VideoPanelMixin:
         except Exception as e:
             logger.error(f"[VIDEO PARAM ERROR]\n{traceback.format_exc()}")
             self._reset_video_button()
-            self._set_status(f"⚠️ 参数校验失败: {e}", "#ff7a17")
+            self._set_status(ui_i18n.trf("参数校验失败: {error}", error=e), "#ff7a17")
 
     # ==========================================================
     #  TTS 配音 + FFmpeg 合并
@@ -602,7 +604,8 @@ class VideoPanelMixin:
             self.set_progress(100)
 
             self._set_status(
-                f"✅ 视频生成完成: {os.path.basename(video_path)} (seed={seed})",
+                ui_i18n.trf("视频生成完成: {path} (seed={seed})",
+                            path=os.path.basename(video_path), seed=seed),
                 "#dadbdf")
             self._set_video_status("completed", seed)
 
@@ -626,7 +629,7 @@ class VideoPanelMixin:
                     except Exception:
                         pass
         except Exception as e:
-            self._set_status(f"⚠️ 视频生成后处理失败: {e}", "#ff7a17")
+            self._set_status(ui_i18n.trf("视频生成后处理失败: {error}", error=e), "#ff7a17")
 
     @pyqtSlot(int, str)
     def _on_video_gen_error(self, code: int, error_msg: str):
@@ -637,7 +640,7 @@ class VideoPanelMixin:
 
     def _on_video_player_error(self, error, error_string):
         """QMediaPlayer 播放错误"""
-        self._set_status(f"⚠️ 视频播放错误: {error_string}", "#ff7a17")
+        self._set_status(ui_i18n.trf("视频播放错误: {error}", error=error_string), "#ff7a17")
         if hasattr(self, 'video_stacked'):
             self.video_stacked.setCurrentIndex(0)
         elif hasattr(self, 'lbl_video_placeholder'):
@@ -866,7 +869,7 @@ class VideoPanelMixin:
         if not self.travel_segments:
             return
         self._auto_distribute_frames()
-        self._set_status("✅ 已均匀分布旅行分段帧号", "#dadbdf")
+        self._set_status(ui_i18n.tr("已均匀分布旅行分段帧号"), "#dadbdf")
 
     def _scan_motion_loras(self):
         """扫描 models/motion_lora 目录"""
@@ -896,8 +899,8 @@ class VideoPanelMixin:
     def _clear_video_input(self):
         """清除已选视频/图片输入文件"""
         self._video_input_path = None
-        self.lbl_video_input.setText("未选择文件")
-        self._set_status("🗑️ 已清除输入文件", "#dadbdf")
+        self.lbl_video_input.setText(ui_i18n.tr("未选择文件"))
+        self._set_status(ui_i18n.tr("已清除输入文件"), "#dadbdf")
 
     def on_pick_video_input(self):
         from PyQt6.QtWidgets import QFileDialog
@@ -958,7 +961,7 @@ class VideoPanelMixin:
     def _save_current_video(self):
         """保存当前播放的视频"""
         if not hasattr(self, 'current_video_path') or not self.current_video_path:
-            self._set_status("⚠️ 没有正在播放的视频", "#ff7a17")
+            self._set_status(ui_i18n.tr("没有正在播放的视频"), "#ff7a17")
             return
         try:
             from PyQt6.QtWidgets import QFileDialog
@@ -970,9 +973,10 @@ class VideoPanelMixin:
             if save_path:
                 shutil.copy2(current_path, save_path)
                 self._set_status(
-                    f"✅ 视频已保存: {os.path.basename(save_path)}", "#dadbdf")
+                    ui_i18n.trf("视频已保存: {path}", path=os.path.basename(save_path)),
+                    "#dadbdf")
         except Exception as e:
-            self._set_status(f"⚠️ 保存失败: {e}", "#ff7a17")
+            self._set_status(ui_i18n.trf("保存失败: {error}", error=e), "#ff7a17")
 
     def _on_video_media_changed(self, status):
         """视频媒体状态变化回调"""

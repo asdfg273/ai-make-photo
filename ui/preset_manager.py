@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QInputDialog, QMessageBox, QFileDialog, QMenu
 )
 from ui.tooltips import tip
+from ui.i18n import ui_i18n
 logger = logging.getLogger(__name__)
 
 
@@ -150,23 +151,25 @@ class PresetManagerMixin:
         from core.presets import load_user_presets, save_user_presets, is_builtin_preset, PROMPT_PRESETS
 
         name, ok = QInputDialog.getText(
-            self, "💾 保存预设",
-            "请输入预设名称（不能与内置同名）:", text=""
+            self, ui_i18n.tr("保存预设"),
+            ui_i18n.tr("请输入预设名称（不能与内置同名）:"), text=""
         )
         name = name.strip()
         if not ok or not name:
             return
 
         if is_builtin_preset(name):
-            QMessageBox.warning(self, "❌ 名称冲突",
-                f"「{name}」是内置预设，不能覆盖。\n建议加前缀，如「我的-{name}」。")
+            QMessageBox.warning(
+                self, ui_i18n.tr("名称冲突"),
+                ui_i18n.trf("「{name}」是内置预设，不能覆盖。\n建议加前缀，如「我的-{name}」。",
+                            name=name))
             return
 
         user = load_user_presets()
         if name in user:
             ret = QMessageBox.question(
-                self, "⚠️ 已存在",
-                f"用户预设「{name}」已存在，是否覆盖？",
+                self, ui_i18n.tr("已存在"),
+                ui_i18n.trf("用户预设「{name}」已存在，是否覆盖？", name=name),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if ret != QMessageBox.StandardButton.Yes:
@@ -178,10 +181,11 @@ class PresetManagerMixin:
         if save_user_presets(user):
             PROMPT_PRESETS[name] = preset
             self._refresh_preset_combo(select_name=name)
-            self._set_status(f"💾 已保存预设「{name}」", "#a6e3a1")
+            self._set_status(ui_i18n.trf("已保存预设「{name}」", name=name), "#a6e3a1")
             logger.info(f"💾 保存用户预设: {name}")
         else:
-            QMessageBox.critical(self, "❌ 保存失败", "写入 user_presets.json 失败。")
+            QMessageBox.critical(
+                self, ui_i18n.tr("保存失败"), ui_i18n.tr("写入 user_presets.json 失败。"))
 
     def delete_current_preset(self):
         """🗑️ 删除当前选中的用户预设"""
@@ -191,12 +195,14 @@ class PresetManagerMixin:
         if not name or name == "（无）":
             return
         if is_builtin_preset(name):
-            QMessageBox.warning(self, "❌ 无法删除", f"「{name}」是内置预设，不能删除。")
+            QMessageBox.warning(
+                self, ui_i18n.tr("无法删除"),
+                ui_i18n.trf("「{name}」是内置预设，不能删除。", name=name))
             return
 
         ret = QMessageBox.question(
-            self, "🗑️ 删除预设",
-            f"确定要删除用户预设「{name}」吗？\n此操作不可撤销。",
+            self, ui_i18n.tr("删除预设"),
+            ui_i18n.trf("确定要删除用户预设「{name}」吗？\n此操作不可撤销。", name=name),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if ret != QMessageBox.StandardButton.Yes:
@@ -208,7 +214,7 @@ class PresetManagerMixin:
 
         if save_user_presets(user):
             self._refresh_preset_combo(select_name="（无）")
-            self._set_status(f"🗑️ 已删除预设「{name}」", "#fab387")
+            self._set_status(ui_i18n.trf("已删除预设「{name}」", name=name), "#fab387")
             logger.info(f"🗑️ 删除用户预设: {name}")
 
     def export_user_presets(self):
@@ -217,11 +223,12 @@ class PresetManagerMixin:
 
         user = load_user_presets()
         if not user:
-            QMessageBox.information(self, "📤 导出", "当前没有用户预设可导出。")
+            QMessageBox.information(
+                self, ui_i18n.tr("导出"), ui_i18n.tr("当前没有用户预设可导出。"))
             return
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出用户预设", "my_presets.json", "JSON Files (*.json)"
+            self, ui_i18n.tr("导出用户预设"), "my_presets.json", "JSON Files (*.json)"
         )
         if not path:
             return
@@ -229,17 +236,17 @@ class PresetManagerMixin:
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(user, f, ensure_ascii=False, indent=2)
-            self._set_status(f"📤 已导出 {len(user)} 个预设", "#a6e3a1")
+            self._set_status(ui_i18n.trf("已导出 {count} 个预设", count=len(user)), "#a6e3a1")
             logger.info(f"📤 导出预设到 {path}")
         except Exception as e:
-            QMessageBox.critical(self, "❌ 导出失败", str(e))
+            QMessageBox.critical(self, ui_i18n.tr("导出失败"), str(e))
 
     def import_user_presets(self):
         """📥 从外部 JSON 导入用户预设"""
         from core.presets import load_user_presets, save_user_presets, is_builtin_preset, PROMPT_PRESETS
 
         path, _ = QFileDialog.getOpenFileName(
-            self, "导入用户预设", "", "JSON Files (*.json)"
+            self, ui_i18n.tr("导入用户预设"), "", "JSON Files (*.json)"
         )
         if not path:
             return
@@ -250,14 +257,16 @@ class PresetManagerMixin:
             if not isinstance(new_data, dict):
                 raise ValueError("根节点必须是字典")
         except Exception as e:
-            QMessageBox.critical(self, "❌ 导入失败", f"读取文件失败:\n{e}")
+            QMessageBox.critical(
+                self, ui_i18n.tr("导入失败"), ui_i18n.trf("读取文件失败:\n{error}", error=e))
             return
 
         skipped = [n for n in new_data if is_builtin_preset(n)]
         valid   = {n: v for n, v in new_data.items() if not is_builtin_preset(n)}
 
         if not valid:
-            QMessageBox.warning(self, "⚠️ 无可导入项", "所有预设都与内置同名，已跳过。")
+            QMessageBox.warning(
+                self, ui_i18n.tr("无可导入项"), ui_i18n.tr("所有预设都与内置同名，已跳过。"))
             return
 
         user = load_user_presets()
@@ -265,8 +274,9 @@ class PresetManagerMixin:
         if overlap:
             preview = ", ".join(list(overlap)[:5]) + ("..." if len(overlap) > 5 else "")
             ret = QMessageBox.question(
-                self, "⚠️ 名称冲突",
-                f"有 {len(overlap)} 个预设同名：\n{preview}\n\n是否覆盖？\n（选'否'跳过冲突项）",
+                self, ui_i18n.tr("名称冲突"),
+                ui_i18n.trf("有 {count} 个预设同名：\n{preview}\n\n是否覆盖？\n（选'否'跳过冲突项）",
+                            count=len(overlap), preview=preview),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
             )
             if ret == QMessageBox.StandardButton.Cancel:
@@ -279,9 +289,9 @@ class PresetManagerMixin:
 
         if save_user_presets(user):
             self._refresh_preset_combo()
-            msg = f"📥 已导入 {len(valid)} 个预设"
+            msg = ui_i18n.trf("已导入 {count} 个预设", count=len(valid))
             if skipped:
-                msg += f"（跳过 {len(skipped)} 个内置同名）"
+                msg += ui_i18n.trf("（跳过 {count} 个内置同名）", count=len(skipped))
             self._set_status(msg, "#a6e3a1")
             logger.info(msg)
 

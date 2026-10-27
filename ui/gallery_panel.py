@@ -889,13 +889,16 @@ class GalleryPanel(QWidget):
         self._save_favs()
         self._apply_filter()  # 刷新 ⭐ 前缀
         QMessageBox.information(
-            self, "收藏",
-            f"⭐ 新增 {n_add} 张 | 💔 取消 {n_del} 张\n共 {len(self._favs)} 张收藏"
+            self, ui_i18n.tr("收藏"),
+            ui_i18n.trf(
+                "新增收藏 {n_add} 张 | 取消收藏 {n_del} 张\n共 {total} 张收藏",
+                n_add=n_add, n_del=n_del, total=len(self._favs))
         )
 
     # ========== 批量导出 ==========
     def _batch_export(self, paths):
-        dst_dir = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
+        dst_dir = QFileDialog.getExistingDirectory(
+            self, ui_i18n.tr("选择导出文件夹"))
         if not dst_dir:
             return
         ok, fail = 0, 0
@@ -907,8 +910,9 @@ class GalleryPanel(QWidget):
                 logger.warning(f"⚠️ 导出失败 {p}: {e}")
                 fail += 1
         QMessageBox.information(
-            self, "批量导出",
-            f"✅ 成功 {ok} 张\n❌ 失败 {fail} 张\n📁 目录: {dst_dir}"
+            self, ui_i18n.tr("批量导出"),
+            ui_i18n.trf("成功 {ok} 张\n失败 {fail} 张\n目录: {directory}",
+                        ok=ok, fail=fail, directory=dst_dir)
         )
 
     # ========== 从画廊移除 (不删文件) ==========
@@ -923,8 +927,9 @@ class GalleryPanel(QWidget):
     # ========== 批量删除文件 ==========
     def _batch_delete_files(self, paths):
         ret = QMessageBox.warning(
-            self, "确认删除",
-            f"⚠️ 即将永久删除 {len(paths)} 个文件！\n此操作不可恢复，是否继续？",
+            self, ui_i18n.tr("确认删除"),
+            ui_i18n.trf("即将永久删除 {count} 个文件！\n此操作不可恢复，是否继续？",
+                        count=len(paths)),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -948,7 +953,9 @@ class GalleryPanel(QWidget):
             self.image_deleted.emit(p)
         self._save_favs()
         self.meta_panel.clear()
-        QMessageBox.information(self, "删除完成", f"✅ 已删除 {ok} 张\n❌ 失败 {fail} 张")
+        QMessageBox.information(
+            self, ui_i18n.tr("删除完成"),
+            ui_i18n.trf("已删除 {ok} 张\n失败 {fail} 张", ok=ok, fail=fail))
 
     # ========== 复制 Prompt ==========
     def _copy_prompt(self, path: str):
@@ -957,7 +964,8 @@ class GalleryPanel(QWidget):
             img = Image.open(path)
             raw = img.info.get("parameters") or img.info.get("meta", "")
             if not raw:
-                QMessageBox.information(self, "提示", "图片中没有 prompt 信息")
+                QMessageBox.information(
+                    self, ui_i18n.tr("提示"), ui_i18n.tr("图片中没有 prompt 信息"))
                 return
             try:
                 meta = json.loads(raw)
@@ -965,13 +973,17 @@ class GalleryPanel(QWidget):
             except Exception:
                 prompt = raw.split("Negative prompt:")[0].strip()
             if not prompt:
-                QMessageBox.information(self, "提示", "未找到 prompt")
+                QMessageBox.information(
+                    self, ui_i18n.tr("提示"), ui_i18n.tr("未找到 prompt"))
                 return
             QApplication.clipboard().setText(prompt)
             preview = prompt[:200] + ("..." if len(prompt) > 200 else "")
-            QMessageBox.information(self, "✅ 已复制", f"Prompt 已复制到剪贴板\n\n{preview}")
+            QMessageBox.information(
+                self, ui_i18n.tr("已复制"),
+                ui_i18n.trf("Prompt 已复制到剪贴板\n\n{preview}", preview=preview))
         except Exception as e:
-            QMessageBox.warning(self, "失败", f"读取失败: {e}")
+            QMessageBox.warning(
+                self, ui_i18n.tr("失败"), ui_i18n.trf("读取失败: {error}", error=e))
 
     # ========== 文件夹 ==========
     def _open_folder(self, path: str):

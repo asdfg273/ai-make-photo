@@ -103,6 +103,10 @@ class UiLanguageManager(QObject):
         translated = pair[0] if lang == "en" else pair[1]
         return translated or source
 
+    def trf(self, text: str, /, **values) -> str:
+        """翻译带命名占位符的动态文案，再填回文件名、数量和错误正文。"""
+        return self.tr(text).format(**values)
+
     def translate_all_windows(self) -> None:
         app = self._app or QApplication.instance()
         if app is None:

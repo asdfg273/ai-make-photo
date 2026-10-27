@@ -367,6 +367,141 @@ def test_video_status_language_roundtrip():
         host.deleteLater()
 
 
+def test_gallery_favorite_dialog_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox
+    from ui.gallery_panel import GalleryPanel
+    from ui.i18n import ui_i18n
+
+    old = ui_i18n.language
+    gallery = GalleryPanel()
+    gallery._favs = set()
+    gallery._save_favs = lambda: None
+    gallery._apply_filter = lambda: None
+    captured = []
+    try:
+        with patch.object(QMessageBox, "information", side_effect=(
+                lambda _parent, title, text, *args: captured.append((title, text)))):
+            ui_i18n.set_language("en")
+            gallery._toggle_fav(["example.png"])
+            assert captured[-1] == (
+                "Favorites", "Added 1 | Removed 0\n1 favorite in total")
+            ui_i18n.set_language("ja")
+            gallery._toggle_fav(["example.png"])
+            assert captured[-1] == (
+                "お気に入り", "追加 0 枚 | 解除 1 枚\nお気に入り合計 0 枚")
+    finally:
+        ui_i18n.set_language(old)
+        gallery.close()
+        gallery.deleteLater()
+
+
+def test_extension_uninstall_dialog_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox
+    from ui.extension_market import ExtensionCard
+    from ui.i18n import ui_i18n
+
+    old = ui_i18n.language
+    card = ExtensionCard("test-required", {
+        "name": "ControlNet 姿势 (OpenPose)",
+        "desc": "通过骨骼图控制人物姿势",
+        "size_mb": 1,
+        "required": True,
+    }, True)
+    captured = []
+    try:
+        with patch.object(QMessageBox, "warning", side_effect=(
+                lambda _parent, title, text, *args: (
+                    captured.append((title, text)), QMessageBox.StandardButton.No)[1])):
+            ui_i18n.set_language("en")
+            card._on_click()
+            assert captured[-1][0] == "Confirm Uninstall"
+            assert "ControlNet Pose (OpenPose)" in captured[-1][1]
+            assert "required extension" in captured[-1][1]
+    finally:
+        ui_i18n.set_language(old)
+        card.close()
+        card.deleteLater()
+
+
+def test_preset_empty_export_dialog_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox, QWidget
+    from ui.i18n import ui_i18n
+    from ui.preset_manager import PresetManagerMixin
+
+    class PresetHost(QWidget, PresetManagerMixin):
+        pass
+
+    old = ui_i18n.language
+    host = PresetHost()
+    captured = []
+    try:
+        with patch("core.presets.load_user_presets", return_value={}), patch.object(
+                QMessageBox, "information", side_effect=(
+                    lambda _parent, title, text, *args: captured.append((title, text)))):
+            ui_i18n.set_language("en")
+            host.export_user_presets()
+            assert captured[-1] == ("Export", "There are no user presets to export.")
+    finally:
+        ui_i18n.set_language(old)
+        host.close()
+        host.deleteLater()
+
+
+def test_shell_busy_dialog_language():
+    from unittest.mock import patch
+    from PyQt6.QtWidgets import QMessageBox, QWidget
+    from ui.i18n import ui_i18n
+    from ui.shell import ShellMixin
+
+    class ShellHost(QWidget, ShellMixin):
+        pass
+
+    old = ui_i18n.language
+    host = ShellHost()
+    host.is_generating = True
+    captured = []
+    try:
+        with patch.object(QMessageBox, "warning", side_effect=(
+                lambda _parent, title, text, *args: captured.append((title, text)))):
+            ui_i18n.set_language("en")
+            host.on_unload_models()
+            assert captured[-1] == (
+                "Notice", "Stop the current generation task first.")
+    finally:
+        ui_i18n.set_language(old)
+        host.close()
+        host.deleteLater()
+
+
+def test_video_validation_status_language():
+    from PyQt6.QtWidgets import QWidget
+    from ui.i18n import ui_i18n
+    from ui.video_panel_mixin import VideoPanelMixin
+
+    class VideoHost(QWidget, VideoPanelMixin):
+        def __init__(self):
+            super().__init__()
+            self.is_generating = True
+            self.status_messages = []
+
+        def _set_status(self, text, color):
+            self.status_messages.append(text)
+
+    old = ui_i18n.language
+    host = VideoHost()
+    try:
+        ui_i18n.set_language("en")
+        host.on_generate_video()
+        assert host.status_messages[-1] == "Generation is already in progress. Please wait."
+    finally:
+        ui_i18n.set_language(old)
+        host.close()
+        host.deleteLater()
+
+
 if __name__ == "__main__":
     test_config_language_roundtrip()
     test_translate_and_validate_language()
@@ -377,6 +512,11 @@ if __name__ == "__main__":
     test_character_count_language_roundtrip()
     test_extension_market_language_roundtrip()
     test_video_status_language_roundtrip()
+    test_gallery_favorite_dialog_language()
+    test_extension_uninstall_dialog_language()
+    test_preset_empty_export_dialog_language()
+    test_shell_busy_dialog_language()
+    test_video_validation_status_language()
     print("UI_I18N_OK")
     sys.stdout.flush()
     # 与现有 Qt 离屏测试一致，跳过 Multimedia/Qt 的进程退出清理。

@@ -415,4 +415,177 @@ TRANSLATIONS = {
     "强度:": ("Strength:", "強度:"),
     "图像:": ("Image:", "画像:"),
     "删除": ("Delete", "削除"),
+
+    # 通用对话框与动态操作结果
+    "提示": ("Notice", "通知"),
+    "错误": ("Error", "エラー"),
+    "成功": ("Success", "成功"),
+    "失败": ("Failed", "失敗"),
+    "确认": ("Confirm", "確認"),
+    "导出": ("Export", "エクスポート"),
+    "已复制": ("Copied", "コピーしました"),
+    "确认删除": ("Confirm Deletion", "削除の確認"),
+    "删除完成": ("Deletion Complete", "削除完了"),
+    "批量导出": ("Batch Export", "一括エクスポート"),
+    "选择导出文件夹": ("Choose Export Folder", "エクスポート先フォルダーを選択"),
+    "新增收藏 {n_add} 张 | 取消收藏 {n_del} 张\n共 {total} 张收藏": (
+        "Added {n_add} | Removed {n_del}\n{total} favorite in total",
+        "追加 {n_add} 枚 | 解除 {n_del} 枚\nお気に入り合計 {total} 枚",
+    ),
+    "成功 {ok} 张\n失败 {fail} 张\n目录: {directory}": (
+        "Succeeded: {ok}\nFailed: {fail}\nFolder: {directory}",
+        "成功 {ok} 枚\n失敗 {fail} 枚\nフォルダー: {directory}",
+    ),
+    "即将永久删除 {count} 个文件！\n此操作不可恢复，是否继续？": (
+        "Permanently delete {count} files?\nThis cannot be undone. Continue?",
+        "{count} 個のファイルを完全に削除します。\n元に戻せません。続行しますか？",
+    ),
+    "已删除 {ok} 张\n失败 {fail} 张": (
+        "Deleted: {ok}\nFailed: {fail}",
+        "削除完了 {ok} 枚\n失敗 {fail} 枚",
+    ),
+    "图片中没有 prompt 信息": ("No prompt information in this image", "画像にプロンプト情報がありません"),
+    "未找到 prompt": ("Prompt not found", "プロンプトが見つかりません"),
+    "Prompt 已复制到剪贴板\n\n{preview}": (
+        "Prompt copied to clipboard\n\n{preview}",
+        "プロンプトをクリップボードにコピーしました\n\n{preview}",
+    ),
+    "读取失败: {error}": ("Read failed: {error}", "読み込みに失敗しました: {error}"),
+
+    # 扩展市场操作
+    "确认卸载": ("Confirm Uninstall", "アンインストールの確認"),
+    "「{name}」是必需扩展,卸载后相关功能将无法使用!\n\n确定继续?": (
+        "\"{name}\" is a required extension. Related features will stop working after uninstallation.\n\nContinue?",
+        "「{name}」は必須拡張です。アンインストールすると関連機能を使用できなくなります。\n\n続行しますか？",
+    ),
+    "确定卸载「{name}」吗?\n(可随时重新下载)": (
+        "Uninstall \"{name}\"?\n(You can download it again later.)",
+        "「{name}」をアンインストールしますか？\n（後で再ダウンロードできます）",
+    ),
+    "操作失败": ("Operation Failed", "操作に失敗しました"),
+    "{count} 个下载任务已在后台继续，完成后会自动安装": (
+        "{count} downloads are continuing in the background and will install automatically",
+        "{count} 件のダウンロードをバックグラウンドで続行し、完了後に自動インストールします",
+    ),
+
+    # 预设管理
+    "保存预设": ("Save Preset", "プリセットを保存"),
+    "请输入预设名称（不能与内置同名）:": (
+        "Enter a preset name (must differ from built-in names):",
+        "プリセット名を入力（組み込みプリセットと同名不可）:",
+    ),
+    "名称冲突": ("Name Conflict", "名前の競合"),
+    "「{name}」是内置预设，不能覆盖。\n建议加前缀，如「我的-{name}」。": (
+        "\"{name}\" is a built-in preset and cannot be overwritten.\nTry a prefix such as \"My-{name}\".",
+        "「{name}」は組み込みプリセットのため上書きできません。\n「マイ-{name}」などの接頭辞を付けてください。",
+    ),
+    "已存在": ("Already Exists", "既に存在します"),
+    "用户预设「{name}」已存在，是否覆盖？": (
+        "User preset \"{name}\" already exists. Overwrite it?",
+        "ユーザープリセット「{name}」は既に存在します。上書きしますか？",
+    ),
+    "已保存预设「{name}」": ("Preset \"{name}\" saved", "プリセット「{name}」を保存しました"),
+    "保存失败": ("Save Failed", "保存に失敗しました"),
+    "写入 user_presets.json 失败。": ("Failed to write user_presets.json.", "user_presets.json の書き込みに失敗しました。"),
+    "无法删除": ("Cannot Delete", "削除できません"),
+    "「{name}」是内置预设，不能删除。": (
+        "\"{name}\" is a built-in preset and cannot be deleted.",
+        "「{name}」は組み込みプリセットのため削除できません。",
+    ),
+    "删除预设": ("Delete Preset", "プリセットを削除"),
+    "确定要删除用户预设「{name}」吗？\n此操作不可撤销。": (
+        "Delete user preset \"{name}\"?\nThis cannot be undone.",
+        "ユーザープリセット「{name}」を削除しますか？\n元に戻せません。",
+    ),
+    "已删除预设「{name}」": ("Preset \"{name}\" deleted", "プリセット「{name}」を削除しました"),
+    "当前没有用户预设可导出。": ("There are no user presets to export.", "エクスポート可能なユーザープリセットがありません。"),
+    "导出用户预设": ("Export User Presets", "ユーザープリセットをエクスポート"),
+    "已导出 {count} 个预设": ("Exported {count} presets", "{count} 件のプリセットをエクスポートしました"),
+    "导出失败": ("Export Failed", "エクスポートに失敗しました"),
+    "导入用户预设": ("Import User Presets", "ユーザープリセットをインポート"),
+    "导入失败": ("Import Failed", "インポートに失敗しました"),
+    "读取文件失败:\n{error}": ("Failed to read file:\n{error}", "ファイルの読み込みに失敗しました:\n{error}"),
+    "无可导入项": ("Nothing to Import", "インポート可能な項目がありません"),
+    "所有预设都与内置同名，已跳过。": (
+        "All presets conflict with built-in names and were skipped.",
+        "すべてのプリセットが組み込み名と競合したためスキップしました。",
+    ),
+    "有 {count} 个预设同名：\n{preview}\n\n是否覆盖？\n（选'否'跳过冲突项）": (
+        "{count} presets have conflicting names:\n{preview}\n\nOverwrite them?\n(Choose No to skip conflicts.)",
+        "{count} 件のプリセット名が競合しています:\n{preview}\n\n上書きしますか？\n（「いいえ」で競合項目をスキップ）",
+    ),
+    "已导入 {count} 个预设": ("Imported {count} presets", "{count} 件のプリセットをインポートしました"),
+    "（跳过 {count} 个内置同名）": (" ({count} built-in conflicts skipped)", "（組み込み名の競合を {count} 件スキップ）"),
+
+    # 主界面与工作流对话框
+    "请先停止当前生成任务": ("Stop the current generation task first.", "現在の生成タスクを先に停止してください。"),
+    "正在释放模型...": ("Releasing models...", "モデルを解放中..."),
+    "模型已释放 (当前内存 {memory} MB)": (
+        "Models released (current memory: {memory} MB)",
+        "モデルを解放しました（現在のメモリ {memory} MB）",
+    ),
+    "模型已释放": ("Models released", "モデルを解放しました"),
+    "释放失败": ("Release Failed", "解放に失敗しました"),
+    "内存使用情况": ("Memory Usage", "メモリ使用状況"),
+    "当前进程内存: {memory} MB\n\n如果数值过大,可以点'释放内存'清理。": (
+        "Current process memory: {memory} MB\n\nIf this is too high, use Release Memory to clean up.",
+        "現在のプロセスメモリ: {memory} MB\n\n使用量が大きい場合は「メモリを解放」で整理できます。",
+    ),
+    "请安装 psutil: pip install psutil": (
+        "Install psutil: pip install psutil",
+        "psutil をインストールしてください: pip install psutil",
+    ),
+    "打开扩展市场失败:\n{error}": ("Failed to open Extension Market:\n{error}", "拡張マーケットを開けませんでした:\n{error}"),
+    "打开工作流编辑器失败:\n{error}": ("Failed to open Workflow Editor:\n{error}", "ワークフローエディターを開けませんでした:\n{error}"),
+    "生成工作流失败:\n{error}": ("Failed to build workflow:\n{error}", "ワークフローの作成に失敗しました:\n{error}"),
+    "执行工作流失败:\n{error}": ("Failed to run workflow:\n{error}", "ワークフローの実行に失敗しました:\n{error}"),
+    "预检失败:\n{error}": ("Preflight failed:\n{error}", "事前チェックに失敗しました:\n{error}"),
+    "无法生成工作流": ("Cannot Build Workflow", "ワークフローを作成できません"),
+    "有设置没进工作流": ("Some Settings Were Not Applied", "一部の設定がワークフローに反映されていません"),
+    "请确认模型列表已加载（等主界面显示「系统就绪」后再试）。": (
+        "Make sure the model list is loaded (wait until the main window shows System Ready).",
+        "モデル一覧の読み込みを確認してください（メイン画面に「システム準備完了」と表示されるまでお待ちください）。",
+    ),
+    "以下设置在界面上是开着的，但没有进入生成的工作流（通常是缺少参考图/姿势图）：": (
+        "These settings are enabled in the interface but were not included in the workflow (usually because a reference or pose image is missing):",
+        "以下の設定は画面で有効ですが、ワークフローに含まれていません（通常は参照画像・ポーズ画像の不足が原因です）:",
+    ),
+    "补齐后重试即可。": ("Add the missing items and try again.", "不足項目を補って再試行してください。"),
+    "节点链：": ("Node chain:", "ノードチェーン:"),
+    "预检未通过": ("Preflight Failed", "事前チェック未合格"),
+    "预检结果": ("Preflight Results", "事前チェック結果"),
+    "引擎未就绪": ("Engine Not Ready", "エンジン未準備"),
+    "当前已有生成任务在跑，请等它结束。": (
+        "A generation task is already running. Wait for it to finish.",
+        "生成タスクを実行中です。終了するまでお待ちください。",
+    ),
+    "AI 引擎还在预热，请稍后再试。": (
+        "The AI engine is still warming up. Try again shortly.",
+        "AI エンジンを初期化中です。しばらくしてから再試行してください。",
+    ),
+    "无法打开目录": ("Cannot Open Folder", "フォルダーを開けません"),
+    "基于 Stable Diffusion + ADetailer<br>支持 LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer": (
+        "Based on Stable Diffusion + ADetailer<br>Supports LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer",
+        "Stable Diffusion + ADetailer ベース<br>LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer に対応",
+    ),
+
+    # 视频校验与操作状态
+    "正在生成中,请等待": ("Generation is already in progress. Please wait.", "生成中です。しばらくお待ちください。"),
+    "请输入正面提示词": ("Enter a positive prompt.", "ポジティブプロンプトを入力してください。"),
+    "{mode}需要选择输入文件": ("{mode} requires an input file.", "{mode}では入力ファイルの選択が必要です。"),
+    "图生视频请选择图片文件": ("Choose an image file for Image to Video.", "画像から動画では画像ファイルを選択してください。"),
+    "视频转绘请选择视频文件": ("Choose a video file for Video Style Transfer.", "動画スタイル変換では動画ファイルを選択してください。"),
+    "提示词旅行至少需要 2 个关键帧": ("Prompt Travel requires at least 2 keyframes.", "プロンプトトラベルには最低 2 つのキーフレームが必要です。"),
+    "参数校验失败: {error}": ("Parameter validation failed: {error}", "パラメーター検証に失敗しました: {error}"),
+    "视频生成完成: {path} (seed={seed})": (
+        "Video generated: {path} (seed={seed})",
+        "動画を生成しました: {path}（シード={seed}）",
+    ),
+    "视频生成后处理失败: {error}": ("Video post-processing failed: {error}", "動画の後処理に失敗しました: {error}"),
+    "视频播放错误: {error}": ("Video playback error: {error}", "動画再生エラー: {error}"),
+    "已均匀分布旅行分段帧号": ("Travel segment frame numbers distributed evenly", "トラベルセグメントのフレーム番号を均等に配置しました"),
+    "已清除输入文件": ("Input file cleared", "入力ファイルをクリアしました"),
+    "没有正在播放的视频": ("No video is currently playing", "再生中の動画がありません"),
+    "视频已保存: {path}": ("Video saved: {path}", "動画を保存しました: {path}"),
+    "保存失败: {error}": ("Save failed: {error}", "保存に失敗しました: {error}"),
 }
