@@ -178,7 +178,7 @@
 
 实测效果对比（每个节点真的有效果，含径向模糊与阈值）：
 
-![后处理节点效果对比](postprocess_nodes_preview.png)
+![后处理节点效果对比](docs/images/postprocess_nodes_preview.png)
 
 保证：不改动上游图（返回新对象，`amount=0` / 全默认参数时与原图逐字节一致）、
 尺寸不变、`ImageNoise` 固定种子可复现（`seed=-1` 为随机）。
@@ -299,9 +299,9 @@
 **编辑器**：拖框新增 / 导入蒙版 / 每个区域独立设置提示词·负面词·权重·羽化 /
 可选的局部 ControlNet·局部 ADetailer / 区域集存成 JSON 复用。
 
-**实测证据**（`regional_preview.png`，自左至右）：
+**实测证据**（`docs/images/regional_preview.png`，自左至右）：
 
-![区域提示词实测](regional_preview.png)
+![区域提示词实测](docs/images/regional_preview.png)
 
 1. 底图 `empty room, white walls`
 2. 左右两半两个区域（`a red apple` / `a blue banana`）→ **左右互不相同**
@@ -850,8 +850,12 @@ ai  make photo/
 ├── requirements.txt           # 依赖清单（torch 需按注释单独安装 CUDA 版）
 ├── requirements-lock.txt      # 本机完整冻结环境（pip freeze）
 ├── app_config.json            # 应用配置（运行时自动生成/更新）
-├── aiUsemono.md               # 使用说明
-├── 结构.txt                   # 项目结构图
+├── docs/
+│   ├── design/xai_inspiration.md  # xAI 风格设计分析
+│   ├── images/                 # README 功能预览图
+│   ├── audits/                 # UI 结构与交接审计
+│   ├── media/                  # 操作演示视频（本地文件，不入库）
+│   └── project_structure.txt   # 项目结构图
 │
 ├── core/                      # 核心模块
 │   ├── arch/                  # 架构识别（signatures 指纹 + registry 能力声明）

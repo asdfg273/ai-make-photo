@@ -32,6 +32,7 @@ photo/
 output/
 outputs/
 logs/
+tests/artifacts/
 *.log
 *.wav
 *.mp4

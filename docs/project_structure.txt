@@ -8,9 +8,10 @@ ai make photo/
 ├── 📄 app_config.json.bak        # 应用配置备份
 ├── 📄 config.json
 ├── 📄 weight.json
-├── 📄 aiUsemono.md               # 使用说明
-├── 📄 操作方法.mp4               # 操作演示视频
-├── 📄 结构.txt                   # 本文件
+├── 📁 docs/
+│   ├── design/xai_inspiration.md # xAI 风格设计分析
+│   ├── media/操作方法.mp4        # 操作演示视频
+│   └── project_structure.txt    # 本文件
 │
 ├── 📁 core/                      # 核心模块
 │   ├── __init__.py

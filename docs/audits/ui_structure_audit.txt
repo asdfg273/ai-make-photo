@@ -1,0 +1,1428 @@
+================================================================================
+  AI 绘画工作站 (PyQt6) —— 当前 UI 结构 / 问题 / 必须保留的接口 · 交接审计文档
+  文件名: docs/audits/ui_structure_audit.txt      生成方式: 源码静态审计 + 离屏实测（未加载任何模型）
+  审计对象: 工作目录 E:\pythonprojects\ai  make photo
+================================================================================
+
+【本文档的用法】这是一份"改造前体检报告"。两天后要重做外观与布局时，
+先读第 4 节（硬约束）和第 6 节（必须保持可调用的方法），再看第 7 节（问题清单）
+和第 8 节（风险点）。第 9 节是改完之后的自检命令。
+
+--------------------------------------------------------------------------------
+1. 文档目的与适用范围
+--------------------------------------------------------------------------------
+
+1.1 目的
+    本文档描述「当前 UI 的真实结构」：窗口 → 页面 → 面板 → 分组，
+    以及被机器校验的控件/方法命名契约。它服务于一次**外观与布局重构**
+    （换配色、换布局、换控件排布），目标是让重构者在不破坏功能的前提下改视觉。
+
+1.2 适用范围
+    - 覆盖: 工作目录下 ui/ 全部 Python 文件，以及主窗口 main.py、
+      utils/app_events.py、utils/app_generation.py 中与 UI 直接相关的部分。
+    - 不覆盖: 生成管线内部算法、模型加载、workflow 引擎语义、nodes/ 目录。
+    - 全部结论基于**本次审计时刻**的源码。审计时未加载任何模型
+      （只用 QT_QPA_PLATFORM=offscreen 离屏构造外壳），因此凡是需要真实推理
+      才能观察到的现象，本文档一律标注 （未验证）。
+
+1.3 审计方法与可信度
+    - 行号、数量、属性名均来自源码实测（脚本统计，见第 2 节的计数说明）。
+    - 结构类结论（页面数、栈成员、信号连接是否成功、菜单项、快捷键）
+      通过离屏构造 ShellMixin 迷你宿主实测得到，属于"真实结构"，非推测。
+    - 涉及运行期观感的结论（例如"控件叠加"）以源码注释与修复痕迹为依据，
+      并标注为历史缺陷/已修。
+
+--------------------------------------------------------------------------------
+2. 目录与文件清单（ui/ 下全部 .py，行数为实测）
+--------------------------------------------------------------------------------
+
+2.1 顶层 ui/ 文件
+    ui/__init__.py                32 行  UI 模块公共 API 汇总导出（注意：这里导入了旧界面）
+    ui/contracts.py              138 行  ★控件/方法命名契约 + 启动自检 + 降级（最重要的文件）
+    ui/theme.py                   71 行  ★主题中枢：PALETTE 调色板 + APP_QSS + apply_theme()
+    ui/design_tokens.py          140 行  旧设计令牌 DESIGN_TOKENS / DARK_STYLE / VIDEO_TAB_QSS
+    ui/widgets.py                184 行  自定义控件 FloatSlider / GpuCanvas / CompareCanvas
+    ui/nav.py                     38 行  左侧导航栏 NavRail（QToolButton 单选）
+    ui/shell.py                 1121 行  ★v6 外壳 ShellMixin（当前默认 UI 的 setup_ui）
+    ui/core_panel.py             358 行  ★生成核心区 build_core / build_gen_area / build_status_widgets / _wire
+    ui/shared_groups.py          433 行  ★共享折叠分组 LoRA/ControlNet/高级/X-Y
+    ui/param_snapshot.py         306 行  预设快照/还原/闪烁/差异报告 ParamSnapshotMixin
+    ui/preset_manager.py         344 行  预设下拉管理 PresetManagerMixin + TooltipMixin
+    ui/video_panel_mixin.py      986 行  动画页业务逻辑 VideoPanelMixin（不含控件创建）
+    ui/ui_builder.py            2650 行  ⚠旧界面（legacy）UIBuilderMixin，默认不生效
+    ui/gallery_panel.py          976 行  GalleryPanel 统一画廊 + MetadataPanel + ImageViewerDialog
+    ui/region_editor.py          569 行  ★较新：区域提示词编辑器 RegionCanvas / RegionEditorDialog
+    ui/ipa_editor.py             430 行  ★较新：多参考图编辑器 IPARefEditorDialog（角色/权重/区域蒙版）
+    ui/extension_market.py       439 行  扩展市场对话框 ExtensionMarketDialog + 下载 QThread
+    ui/scene_batch_dialog.py     542 行  角色场景批量生成对话框 SceneBatchDialog
+    ui/settings_dialog.py        206 行  偏好设置对话框 SettingsDialog（含快捷键改键）
+    ui/disclaimer.py             294 行  免责声明 / 声音克隆授权对话框
+    ui/splash.py                 112 行  启动闪屏 SplashScreen + create_splash()
+    ui/tooltips.py               158 行  控件提示文案表 PARAM_TOOLTIPS + tip()
+
+2.2 ui/components/
+    ui/components/__init__.py          0 行  空
+    ui/components/collapsible.py      43 行  ★CollapsibleSection 折叠分组容器
+    ui/components/filmstrip.py        96 行  底部胶片条 FilmStrip（点击回填参数 / 右键菜单）
+
+2.3 ui/pages/
+    ui/pages/__init__.py               9 行  ★页面注册表 PAGES = [Txt2Img, Img2Img, Video, Gallery, Characters]
+    ui/pages/base.py                  22 行  页面基类 PageBase（page_id/title/icon + build/workspace/params_widget）
+    ui/pages/txt2img_page.py          92 行  文生图页（中央预览 + 5 个操作按钮 + 日志）
+    ui/pages/img2img_page.py         189 行  图生图页专属参数区（参考图/IP-Adapter/Pose Transfer/角色一致性）
+    ui/pages/video_page.py           668 行  动画页（参数区 + 播放工作区），控件最多的一页
+    ui/pages/gallery_page.py          85 行  画廊页（媒体三态工具条 + 画廊 + 元数据侧栏）
+    ui/pages/characters_page.py     1015 行  ★较新：角色库页（角色卡片网格 + 编辑器 + 批量场景）
+
+2.4 ui/workflow_editor/（★最新加入的模块）
+    ui/workflow_editor/__init__.py        46 行  对外只暴露 open_editor(host, parent)
+    ui/workflow_editor/window.py         534 行  WorkflowEditorWindow + WorkflowRunThread
+    ui/workflow_editor/canvas.py         951 行  节点画布 GraphScene/GraphView/NodeItem/LinkItem
+    ui/workflow_editor/palette.py        108 行  节点面板 NodePalette
+    ui/workflow_editor/param_panel.py    264 行  ★ParamPanel 按 ParamSpec 自动生成控件（_clear 有重要注释）
+    ui/workflow_editor/param_sources.py  213 行  模型/LoRA/VAE/图片资源扫描
+    ui/workflow_editor/resource_panel.py 308 行  资源下载面板 ResourceDialog
+
+2.5 ui/ 合计
+    .py 文件 38 个（不含 __pycache__），合计 14740 行。
+
+2.6 计数说明
+    本文件的"行数"用 Python 逐行统计（io.open 按行迭代），
+    与 PowerShell `Get-Content | Measure-Object -Line` 会略有差异，
+    本文档统一采用 Python 口径。
+
+--------------------------------------------------------------------------------
+3. 界面结构总览（窗口 → 页面 → 面板 → 分组）
+--------------------------------------------------------------------------------
+
+3.1 整体层级（ShellMixin.setup_ui，ui/shell.py:35-122）
+
+    QMainWindow「AI 绘画工作站 v6.0」      shell.py:36 setMinimumSize(1320, 820) / :37 标题
+    └─ centralWidget (QWidget)            shell.py:43-44
+       └─ root QVBoxLayout (margins 6, spacing 6)   shell.py:45-47
+          ├─ body QHBoxLayout (spacing 6)           shell.py:50
+          │   ├─ self.nav = NavRail()   固定宽 64px  shell.py:53 / nav.py:12
+          │   ├─ self.center_stack = QStackedWidget() 拉伸因子 1  shell.py:56-57
+          │   └─ self.params_panel (由 _build_params_panel 建)  固定宽 400px  shell.py:60 / :288
+          └─ self.filmstrip = FilmStrip()  固定高 116px  shell.py:66-68 / filmstrip.py:23
+
+    params_panel 内部（shell.py:286-340）:
+       params_panel (QWidget, setFixedWidth(400))
+       └─ QVBoxLayout (margins 0, spacing 6)
+          ├─ self.params_scroll (QScrollArea, widgetResizable=True,
+          │     水平滚动条永久关闭)                     shell.py:294-297
+          │   └─ content QWidget → clay QVBoxLayout (margins 4, spacing 8)
+          │      ├─ self.core_wrap  ← 生成核心区（常驻，动画页整体隐藏）
+          │      │     self.core_area = QVBoxLayout; build_core(self, self.core_area)
+          │      │     水平策略强制 Ignored（防长文本撑爆 400px 面板） shell.py:304-313
+          │      ├─ self.params_stack = QStackedWidget()  ← 页面专属参数区
+          │      │     水平策略 Ignored                          shell.py:315-319
+          │      └─ shared_wrap ← self.shared_groups = QVBoxLayout()
+          │            build_shared_groups() 返回 self._group_sections
+          │            水平策略 Ignored                          shell.py:321-329
+          │      └─ addStretch()                                 shell.py:330
+          └─ self.gen_wrap ← 生成/中断按钮（固定底部，永不随滚动移动）
+                self.gen_area = QVBoxLayout; build_gen_area(self, self.gen_area)
+                                                              shell.py:335-339
+
+    ★要点：整个右侧面板是「一个滚动区 + 三个垂直堆叠块」，
+      生成按钮刻意留在滚动区**外面**（固定底部）。重构布局时若把
+      gen_wrap 放进 params_scroll，生成按钮会随内容滚走，属于体验回退。
+
+3.2 三个 QStackedWidget 的实测成员（离屏实测，本次审计）
+
+    center_stack（中央工作区，实测 count = 4）:
+      [0] QWidget  ← 由 txt2img 与 img2img **共用**（img2img.workspace() 返回
+                     txt2img 的 workspace，img2img_page.py:183-186）
+      [1] QWidget  ← video
+      [2] QWidget  ← gallery
+      [3] QWidget  ← characters
+    params_stack（右侧页面专属参数区，实测 count = 3）:
+      [0] img2img 的 params_widget（img2img_page.py:188-189）
+      [1] video 的 params_widget（video_page.py:99）
+      [2] characters 的 params_widget
+      （txt2img 与 gallery 返回 None，因此不占栈位）
+    video 页内部还有 host.video_stacked（video_page.py:621）：
+      索引 0 = 占位提示，索引 1 = 视频播放器（play_video 里 setCurrentIndex(1)，shell.py:392-396）。
+
+3.3 页面切换流程（shell.py:171-221  _on_page_selected）
+
+    触发链: NavRail 按钮 clicked → NavRail.page_selected(str)
+            → ShellMixin._on_page_selected(page_id)（shell.py:95 连接）
+            → center_stack.setCurrentWidget(page.workspace())        shell.py:186
+            → params_panel.setVisible(page_id != "gallery")          shell.py:189
+            → core_wrap / gen_wrap 仅动画页隐藏                      shell.py:192-194
+            → params_stack.setCurrentWidget(pw) + 撑高 + setVisible   shell.py:197-205
+            → 四个折叠分组仅动画页隐藏（shell.py:207-208）
+            → 进动画页: QTimer 100ms 后刷新视频列表                   shell.py:209-211
+            → 进画廊页: QTimer 100ms 后 reload_from_dir(limit=80)     shell.py:213-221
+
+    离开动画页时会先 self.stop_video()（shell.py:176-181）。
+    进入文生图页时若存在参考图会 clear_reference()（shell.py:183-184）。
+
+3.4 菜单栏（_build_menu_v6，shell.py:790-870）实测结果
+
+    📁 文件      加载图片 (无快捷键) / 打开输出目录 / --- / 退出
+    🔧 工具      清空日志 / --- / 🛒 扩展市场... (Ctrl+E) / 🔄 刷新扩展状态
+    🧩 工作流    🧩 打开工作流编辑器… (Ctrl+W)
+                 ✨ 用当前界面设置生成流程图 (无)
+                 ---
+                 ▶️ 用工作流引擎生成 (Ctrl+Shift+W)
+                 🩺 预检当前工作流 (无)
+                 ---
+                 📂 打开工作流目录
+    🧹 内存      释放内存 / 查看当前内存
+    ❓ 关于      关于本软件
+    ⚙️ 设置      偏好设置... (Ctrl+,)
+
+    扩展市场菜单项被记到 self._act_market（shell.py:818），
+    改快捷键后由 _rebuild_shortcuts 同步其 shortcut（shell.py:166-168）。
+
+3.5 全局快捷键（core/config_manager.py:13-19 的 DEFAULT_SHORTCUTS，可由用户改键）
+
+    generate        Ctrl+Return   → 点击 btn_generate（shell.py:157-158）
+    interrupt       Esc           → 点击 btn_interrupt（shell.py:159-160）
+    page_txt2img    Ctrl+1        → nav.select("txt2img")
+    page_img2img    Ctrl+2        → nav.select("img2img")
+    page_video      Ctrl+3        → nav.select("video")
+    page_gallery    Ctrl+4        → nav.select("gallery")
+    extension_market 由设置改键后写入菜单项（shell.py:166-168）
+
+    实测 _shortcuts 键位序列: Ctrl+Return / Esc / Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4。
+    ⚠ characters 页没有默认快捷键（DEFAULT_SHORTCUTS 里只有 4 个 page_*），
+      这不是 bug，但新增页面时容易漏配（参见第 7.9 条）。
+
+3.6 状态栏（_build_statusbar_v6，shell.py:343-351 + 119-122）
+
+    QStatusBar
+    ├─ addWidget(self.lbl_status, 1)                左对齐、可伸缩   shell.py:349
+    ├─ addPermanentWidget(self.progress_gen)        最大宽 220        shell.py:350 / :348
+    ├─ addPermanentWidget(self.lbl_resource)        💾 内存/显存监控  shell.py:705
+    └─ addPermanentWidget(self.lbl_ext_count)       🧩 扩展: n/N      shell.py:121
+
+    注意: lbl_status / progress_gen 在 setup_ui 最开始就由
+    core_panel.build_status_widgets(self) 创建（shell.py:40-41），
+    状态栏只是"摆放"它们（shell.py:346-347 有 getattr 兜底）。
+    progress_gen 实测尺寸: 固定宽 160、固定高 8、不显示文字（core_panel.py:353-357）。
+    lbl_resource 由 QTimer 每 2000ms 刷新（shell.py:706-709）。
+    实测 statusBar 子控件: QSizeGrip / QLabel(lbl_status) / QProgressBar /
+    QLabel(lbl_resource) / QLabel(lbl_ext_count) 等。
+
+3.7 底部胶片条 FilmStrip（ui/components/filmstrip.py）
+
+    QListWidget，IconMode、LeftToRight、不换行、图标 96x96、固定高 116（:19-27）。
+    信号: media_clicked(str)、reuse_requested(str)（:13-14）。
+    与画廊联动: items_changed → _refresh_filmstrip（shell.py:102），
+    最多取 24 条当前可见项（shell.py:230-236）。
+    单击 = 原地回填参数不跳页（shell.py:238-267）；右键"套用参数"= reuse_requested（:269-278）。
+
+3.8 主题应用位置（谁把样式刷到窗口上）
+
+    main.py:964-969   环境变量 AI_STUDIO_UI == "old" → design_tokens.DARK_STYLE
+                      否则 → ui.theme.apply_theme(app)（qdarkstyle + APP_QSS 拼接）
+    main.py:971-973   QApplication.setWindowIcon(logo/dzbut-9fc5g-001.ico)
+    ⚠ shell.py 里**没有** setWindowIcon（只有旧 ui_builder.py:41-43 有），
+      新界面靠 main.py 给 QApplication 设图标，属可接受但值得注意的差异。
+    ⚠ design_tokens.VIDEO_TAB_QSS 只在旧界面被 setStyleSheet（ui_builder.py:997），
+      新版 video_page.py 仍设置了 objectName "animRoot"（video_page.py:107），
+      但当前主题没有任何 #animRoot 规则 → 该 objectName 目前是"空钩子"。
+      同理 gallery_page.py:41-43 的 btnMediaAll/btnMediaImage/btnMediaVideo
+      在 UI 层没有对应 QSS（只在测试 tests/test_gallery_unified.py:200-202 被引用）。
+
+--------------------------------------------------------------------------------
+4. 控件契约（重构的硬约束）★最重要
+--------------------------------------------------------------------------------
+
+4.1 ui/contracts.py 是什么
+    它是"业务层依赖 UI 层命名"这件事的**唯一集中声明**，并在启动时自检 + 降级。
+    文件头注释（contracts.py:1-5）:
+        UI 控件/方法契约 — 业务 mixin 依赖的命名契约集中在此
+        启动自检: check_contract(); 关键缺失降级: apply_degradation()
+
+4.2 五个数据结构（实测条目数）
+
+    GLOBAL_WIDGETS   list   82 条   全局单例控件，由 shell/core_panel 创建一次，
+                                    页面禁止重建同名控件
+    PAGE_WIDGETS     dict   4 个键  页面专属控件:
+                              txt2img = 0 条（专属区为空）
+                              img2img = 7 条
+                              video   = 37 条
+                              gallery = 0 条（复用全局 self.gallery）
+                              合计 44 条
+    METHOD_CONTRACT  list   4 条    业务层调用的、定义在 UI 层的方法:
+                              append_log / set_status / set_progress / play_video
+    ALIASES          dict   8 条    兼容别名（旧名 → 真名）
+    LIST_ALIASES     dict   2 条    combo_loras / scale_loras（各 3 个槽位）
+    CRITICAL         set    11 条   关键契约，缺失则禁用生成入口:
+                              btn_generate, btn_interrupt, txt_prompt, txt_neg,
+                              combo_model, lbl_preview, progress_gen,
+                              + METHOD_CONTRACT 的 4 个方法
+
+    实测交叉检查: GLOBAL_WIDGETS 内部无重名（82 条全唯一）；
+    GLOBAL 与 PAGE 之间无重名；PAGE 展平后也无重名。
+
+4.3 实际内容抽样（GLOBAL_WIDGETS 前 34 行 + 别名 + 关键集，原文照录）
+
+    GLOBAL_WIDGETS = [
+        # 生成核心
+        "combo_model", "combo_model_type", "combo_sampler", "combo_res",
+        "txt_prompt", "txt_neg", "spin_steps", "spin_width", "spin_height",
+        "spin_seed", "spin_count", "combo_img_format", "combo_device",
+        "chk_auto_enhance", "chk_auto_features", "btn_enhance_prompt",
+        "btn_vision_prompt", "lbl_model_info",
+        "combo_ai_model", "combo_trans_mode", "scale_cfg", "spin_batch",
+        "lbl_dynamic_hint", "chk_make_comic",
+        # 生成控制
+        "btn_generate", "btn_interrupt", "progress_gen", "lbl_status",
+        "btn_preset_menu", "btn_save_preset", "btn_restore_preset",
+        "combo_preset", "lbl_preset_badge",
+        # 预览区
+        "lbl_preview", "btn_open_editor", "btn_save_as",
+        "btn_send_img2img", "btn_send_inpaint", "txt_log_image",
+        # 画廊
+        "gallery",
+        # 共享折叠分组（LoRA/ControlNet/高级/X-Y）
+        "combo_lora_0", "combo_lora_1", "combo_lora_2",
+        ...
+        "chk_use_preview", "spin_preview_interval",
+    ]
+
+    ALIASES = {
+        "btn_gen": "btn_generate",
+        "btn_stop": "btn_interrupt",
+        "scale_str": "scale_strength",
+        "scale_hires": "scale_hires_denoise",
+        "progress_total": "progress_gen",
+        "progress": "progress_gen",
+        "preview_canvas": "lbl_preview",
+        "pose_canvas": "lbl_cn_thumb",
+    }
+
+    CRITICAL = {
+        "btn_generate", "btn_interrupt", "txt_prompt", "txt_neg",
+        "combo_model", "lbl_preview", "progress_gen",
+        *METHOD_CONTRACT,
+    }
+
+4.4 自检与降级的确切行为（contracts.py:99-138）
+
+    install_aliases(host)   :99-107
+        逐个别名 setattr；目标不存在只记 warning，不抛异常。
+        LIST_ALIASES 无条件安装成 list（缺失项为 None）：contracts.py:106-107。
+
+    check_contract(host)   :110-125  → 返回 (critical_missing, minor_missing)
+        1) 遍历 GLOBAL_WIDGETS + PAGE_WIDGETS 全部控件名（:112）；
+           判定标准是 `hasattr(host, 名字) and getattr(...) is not None`（:115）；
+           不在 CRITICAL 里的缺失归入 minor（:117）。
+        2) METHOD_CONTRACT 里每个名字用 `callable(getattr(host, name, None))`
+           判定，缺失**一律计入 critical**（:118-121）。
+        3) 别名若指向的对象与真名不是同一实例 → 记成 minor "alias:xxx"（:122-124）。
+
+    apply_degradation(host, critical_missing)   :128-138
+        - 记录 logger.error；
+        - 把 btn_generate 与 btn_gen_video **置灰并写 tooltip**
+          "⚠️ 关键组件缺失: ..."（:134-138）。
+        - 也就是说：重命名/漏建关键控件不会崩，而是"生成按钮永久点不动"，
+          这是最容易被误判成"功能坏了"的失败模式。
+
+4.5 谁在什么时候调用（证据）
+
+    ui/shell.py:13        from ui.contracts import install_aliases, check_contract, apply_degradation
+    ui/shell.py:108-113   启动末尾执行自检: install_aliases → check_contract →
+                          有 minor 打 warning → apply_degradation(crit)
+    ⚠ 旧界面路径（AI_STUDIO_UI=old）不经过这一段，
+      手工别名写在 ui_builder.py:73-88。
+
+4.6 测试如何校验（tests/test_ui_contract.py，191 行 / 8 个用例）
+
+    test_contract_lists      :15-24  断言 txt_prompt/combo_model/btn_generate 在
+                                    GLOBAL_WIDGETS；PAGE_WIDGETS 的键**必须恰好等于**
+                                    {"txt2img","img2img","video","gallery"}
+                                    （:21 —— 注意：characters 页不在这个集合里，
+                                     但它是真实页面；加页面时不要顺手改这一行）
+                                    play_video 在 METHOD_CONTRACT；
+                                    ALIASES["btn_gen"] == "btn_generate"。
+    test_check_and_degrade   :27-43  造一个只有两个控件的假宿主，断言关键缺失被识别、
+                                    生成按钮被置灰、别名指向同一对象。
+    test_shell_skeleton      :46-61  离屏跑通 setup_ui（MiniApp = QMainWindow + ShellMixin）。
+    test_core_widgets        :64-85  逐个体检 10 个核心控件存在 + 别名同实例。
+    test_txt2img_page        :88-108 校验页面注册、预览/日志/画廊存在、
+                                    append_log 真的写进了 txt_log_image、
+                                    nav.select 后 center_stack 当前页正确。
+    test_img2img_page        :111-128 校验 btn_load_img/scale_strength 与别名 scale_str。
+    test_shared_groups       :131-149 断言 crit == []（关键契约零缺失），
+                                    折叠分组控件存在，len(combo_loras) == 3。
+    test_video_page          :152-170 动画页控件存在、切页后 params_stack 正确、
+                                    params_scroll 未隐藏。
+    收尾                     :182-191 停掉 QMediaPlayer 后 os._exit(0)
+                                    （Qt offscreen teardown 可能段错误，故意跳过）。
+
+    运行方式: venv\Scripts\python.exe tests\test_ui_contract.py（必须 exit 0）
+
+4.7 ★重构的实践规则（请照做）
+
+    可以改：外观、配色、字号、圆角、间距、控件排布顺序、分组标题文案、
+            面板宽度/位置、是否用新的容器或新的自定义控件。
+    不要改：GLOBAL_WIDGETS / PAGE_WIDGETS / METHOD_CONTRACT / ALIASES /
+            CRITICAL 里的**名字**，不要改控件的**页面归属**，
+            不要把一个全局单例控件挪到页面专属区（或反之）。
+    真要改：必须**同步三处**——
+            (1) ui/contracts.py 的对应列表；
+            (2) tests/test_ui_contract.py 的相关断言；
+            (3) 所有通过 self.xxx 访问该控件的业务代码
+                （grep 范围：utils/、workflow/、ui/、main.py）。
+            只改 (1) 会让测试红；只改代码不改 (1) 会让生成按钮被静默置灰。
+
+    另外两类"隐形契约"同样不能动（详见第 7.7 条）：
+    - setObjectName：navBtn（nav.py:24）、btnGenVideo（video_page.py:543）、
+      animRoot（video_page.py:107）、btnMediaAll/Image/Video（gallery_page.py:41-43）、
+      splash_container（splash.py:33）、btnConfirm（disclaimer.py:227）。
+    - setProperty：
+      role ∈ {hint, title, value, field, body, pill}、kind="primary"、
+      accent=True、mediaMode ∈ {all,image,video}。这些是 QSS 选择器钩子。
+
+--------------------------------------------------------------------------------
+5. 页面 / 分组职责（控件 + 连接的方法）
+--------------------------------------------------------------------------------
+
+5.1 页面注册表（ui/pages/__init__.py:9）
+    PAGES = [Txt2ImgPage, Img2ImgPage, VideoPage, GalleryPage, CharactersPage]
+    新增页面 = 新建文件 + 在此加一行（base.py:7 的注释也这么说）。
+
+5.2 文生图页 Txt2ImgPage（page_id="txt2img", title="文生图", icon="🎨"）
+    源码: ui/pages/txt2img_page.py:18-92   中央工作区，params_widget() 返回 None
+    创建的 host 属性（9 个）：
+      host.lbl_preview      GpuCanvas 预览画布（:29-32）
+      host.compare_canvas   CompareCanvas 修前/修后滑条（:36）
+      host.preview_stack    QStackedWidget（0=普通预览, 1=对比）（:37-41）
+      host.btn_open_editor  "🖌️ 编辑"          :52  → open_gallery_to_edit   :68
+      host.btn_save_as      "💾 另存为"        :53  → save_current_image_as  :69
+      host.btn_send_img2img "🔄 转图生图"      :54  → send_preview_to_img2img :70
+      host.btn_send_inpaint "🎭 转重绘"        :55  → send_preview_to_inpaint :71
+      host.btn_compare      "⚖️ 对比"（checkable，初始禁用）:56-58
+                                                   → _on_compare_toggled    :72
+      host.txt_log_image    QTextEdit 只读，最大高 140  :81-84
+    布局: 预览区拉伸因子 1，日志拉伸因子 1（:75、:84）。
+
+5.3 图生图页 Img2ImgPage（page_id="img2img", title="图生图", icon="🖼️"）
+    源码: ui/pages/img2img_page.py:19-189
+    中央工作区: 与 txt2img **共用**（workspace() 返回 txt2img 的 workspace，:183-186）
+    专属参数区（params_widget，:188-189）创建的 host 属性（17 个）：
+      参考图:  host.btn_load_img  :34 → select_image        :35
+               host.btn_clear_img :36 → clear_reference     :37
+               host.lbl_img_path  :42
+               host.lbl_ref_thumb :46（固定高 120）
+               host.scale_strength FloatSlider(0.05,1.0,0.05,0.6) :53
+      IP-Adapter: host.chk_use_ipa :62
+               （加载按钮是局部变量 btn_load_ipa，未挂 host）:65-67
+               host.lbl_ipa_image :69
+               host.spin_ipa_scale QDoubleSpinBox 0~1.5 默认 0.6 :74-79
+               host.combo_ipa_variant :82-84 ["plus (推荐)","standard (轻量)"]
+      Pose Transfer: host.chk_pose_transfer :92 → _on_pose_transfer_toggled :101
+               host.lbl_pt_tip / lbl_pt_cn :104 / :119
+               host.slider_pt_cn QSlider 30~120 默认 65（=0.65）:115-118
+      角色一致性: host.chk_auto_features（默认勾选）:144-152
+               host.chk_reference_only（默认不勾）:154-157
+               host.scale_ref_fidelity QSlider 50~100 默认 70 :161-164
+               host.lbl_ref_fidelity :165
+    ⚠ 注意 scale_ref_fidelity / slider_pt_cn 是 **QSlider（整数）**，不是 FloatSlider；
+      param_snapshot 读值时要区分（param_snapshot.py:83-90 有 QSlider 分支）。
+
+5.4 动画页 VideoPage（page_id="video", title="动画", icon="🎬"）
+    源码: ui/pages/video_page.py:88-668
+    模块级布局工厂（:25-85）: _field/_hint/_group/_spin/_dspin/_pill/_grid
+      —— 与旧 ui_builder.py:491-554 的同名工厂是**两套实现**（见第 7.2 条）。
+    参数区（_build_params，:105-582）创建的 host 属性 63 个（实测），主要分组:
+      模式:    combo_video_mode, lbl_video_mode_desc
+      输入:    grp_video_input, lbl_video_input, btn_pick_video_input, btn_clear_video_input
+      提示词:  txt_video_prompt, txt_video_neg, btn_enhance_video_prompt,
+               btn_vision_video_prompt, btn_enhance_travel
+      旅行:    grp_prompt_travel, combo_travel_mode, wrap_travel_segments,
+               travel_container, wrap_travel_text, txt_prompt_travel,
+               travel_segments, grp_travel（grp_prompt_travel 的兼容别名，:270）
+      视频参数: spin_video_frames/fps/steps/cfg/w/h, lbl_video_duration,
+               combo_video_sched, chk_long_video, combo_video_fmt
+      运动LoRA: cmb_motion_lora_pick, motion_lora_container, motion_lora_items,
+               lbl_motion_lora_hint
+      配音:    chk_video_voice, combo_tts_engine, txt_video_voice, wrap_chattts,
+               spin_video_voice_seed, wrap_sovits, combo_sovits_ref,
+               txt_sovits_reftext, spin_sovits_speed, chk_sovits_auto_translate,
+               lbl_voice_hint
+      后处理:  chk_frame_interp, combo_frame_interp, chk_video_upscale,
+               combo_upscale_factor, chk_rife, combo_rife_fps
+      生成:    btn_gen_video（objectName="btnGenVideo"）:542 → on_generate_video :546
+               lbl_video_status :550
+    工作区（_build_workspace，:584-668）:
+      host.video_player / host.audio_output / host.video_widget / host.video_stacked
+      host.lbl_video_placeholder / host.btn_video_{save,refresh,pause,stop}
+      host.video_list / host.txt_log_video
+      → 播放控制方法: _save_current_video / _refresh_video_gallery / pause_video /
+        stop_video（:633-636），视频状态回调 _on_video_media_changed /
+        _on_video_player_error（:607-608）。
+    ⚠ host.audio_output 在本次离屏审计里是 None：video_page.py:596-600 在
+      QtMultimedia 导入失败时会把它设成 None。真实桌面环境下应为 QAudioOutput
+      （本次未在真实 GUI 环境验证 → （未验证））。
+      它也是唯一一个出现在 check_contract 的 minor 缺失里的键。
+
+5.5 画廊页 GalleryPage（page_id="gallery", title="画廊", icon="🖼️"）
+    源码: ui/pages/gallery_page.py:19-85；params_widget() 返回 None（:84-85）
+    创建 host.gallery = GalleryPanel()（:54）——**全局单例，只有这一处创建**。
+    顶部工具条三个 QPushButton: btnMediaAll/btnMediaImage/btnMediaVideo（:41-43），
+      property mediaMode ∈ all/image/video（:46），点击 → gallery.set_media_filter（:76-77）。
+    右侧元数据侧栏来自 host.gallery.meta_panel，被改成内嵌控件后放进 QSplitter
+      （:61-73，初始尺寸 [1000, 340]）。
+    切到画廊页时 params_panel 整体隐藏（shell.py:189），画廊占满宽度。
+    连接: host.gallery.image_selected → host._on_gallery_picked（:55-56）；
+          host.gallery.apply_params_signal → host.apply_meta_params（:57-58）。
+
+5.6 角色库页 CharactersPage（page_id="characters", title="角色库", icon="🧍"）
+    源码: ui/pages/characters_page.py:412-1015
+    ⚠ 它继承 QObject，**不是 PageBase**（:412）；PageBase 的注释（base.py:7）说的
+      "扩展新功能 = 新建 page 文件 + PAGES 加一行"对它不完全成立。
+    接口仍是鸭子类型: page_id/title/icon（:413）、build(shell)（:428）、
+      workspace()（:446）、params_widget()（:451）、以及额外的 dispose()（:434-444）。
+    ⚠ dispose() 定义了但**全项目没有任何调用点**（grep dispose 只命中定义本身）→
+      shell 重建页面时并不会走到它，"页面销毁时必须走到这里"的注释目前是空承诺。
+    它创建的控件都挂在 page 自己身上（如 self.grid_host / self.grid_scroll /
+      self.grid_layout，见 :426、:443-444），基本不往 host 上挂控件；
+      实测 host.<x> = 赋值数量为 0（唯一的例外见 7.2 节末）。
+    对外行为: 卡片网格、复制/保存/删除角色、批量场景用 SceneBatchDialog
+      （:788-789）、套用角色到 shell（_apply_character_to_shell，:867）。
+    ⚠ 它会直接改 shell 的状态栏颜色与文字（:735-737、:750-752、:1008），
+      用 f"color:{GREEN}; font-size:13px;" 硬编码样式，绕过了主题系统。
+
+5.7 共享折叠分组 build_shared_groups（ui/shared_groups.py:19-28）
+    返回 dict，实测键: sections["lora"] / ["ctrl"] / ["advanced"] / ["xy"]
+    该 dict 被 shell 存为 self._group_sections（shell.py:323），
+    页面切换时用来整组显隐（shell.py:207-208）。
+    CollapsibleSection 默认全部折叠（collapsed=True）。
+    实测每个分组的 content_layout 直接子项数: lora=7 / ctrl=2 / advanced=10 / xy=1。
+
+    ── sections["lora"]「🧩 LoRA」（_build_lora，:34-80）
+       host.btn_refresh_lora     :40  → refresh_lora_by_model   :42
+       host.combo_lora_0/1/2     :55（setattr 动态名）
+       host.scale_lora_0/1/2     :56（FloatSlider(0.0,2.0,0.05,0.8)）
+                                  combo.currentIndexChanged → load_lora_info :57
+       host.text_lora_info       :60-63（只读，固定高 120）
+       host.btn_insert_lora_all  :66 → lambda: host._insert_lora_triggers(None) :67-68
+       三个"槽N"按钮（局部变量，未挂 host）→ _insert_lora_triggers(idx) :71-76
+
+    ── sections["ctrl"]「🕹 ControlNet」（_build_ctrl，:86-126）
+       host.chk_use_pose         :93  → _toggle_cn        :94
+       host.combo_cn_type        :97-99（OpenPose/Canny/Depth/Scribble/SoftEdge）
+       host.scale_cn_strength    :102（FloatSlider 0~2, 默认 1.0）
+       host.scale_cn_weight      :104（= scale_cn_strength 的老名兼容）
+       host.btn_load_cn_img      :106 → load_pose_image   :107
+       host.lbl_pose_path        :110
+       host.lbl_cn_thumb         :114 GpuCanvas（固定高 180）
+       tip 是局部 QLabel（:120-125）
+
+    ── sections["advanced"]「⚙️ 高级选项」（_build_advanced，:132-399，最大的一组）
+       修脸:  host.chk_use_adetailer :139 → _toggle_adetailer :140
+              host.combo_adetailer_model :143（真人脸/二次元脸）
+              host.combo_ad_target :147（现实脸部/二次元脸部）
+              host.lbl_ad_str / host.scale_adetailer_strength（0.1~0.9 默认 0.35）:151-153
+       修手:  host.chk_use_ad_hand :159 → _toggle_ad_hand :160
+              host.combo_ad_hand :163
+              host.lbl_ad_hand_str / host.scale_ad_hand（0.1~0.6 默认 0.25）:167-169
+              host.lbl_ad_hand_blend / host.scale_ad_hand_blend（0~1 默认 0.65）:171-173
+       区域:  host.chk_use_regions :182（无信号连接，靠 closeEvent 保存）
+              host.btn_edit_regions :190 → open_region_editor :196
+              host.btn_clear_regions :199 → clear_regions :201
+              host.lbl_regions_summary :205（内联 setStyleSheet "color:#7f849c"）
+       多参考图: host.chk_use_ipa_refs :152 → _toggle_ipa_refs :159
+                 host.btn_edit_ipa_refs :163 → open_ipa_ref_editor :169
+                 host.btn_clear_ipa_refs :172 → clear_ipa_refs :174
+                 host.lbl_ipa_refs_summary :178（内联 setStyleSheet "color:#7f849c"）
+                 ★较新（多参考图 IP-Adapter，2026-09 加）：
+                   · 分组标题「🎭 多参考图 (IP-Adapter)」，CollapsibleSection 默认折叠
+                   · 每张参考图各有**角色**（身份/风格/构图）与**权重**，
+                     角色映射到不同的官方权重文件：身份→plus-face、风格→plus、构图→base
+                   · ⚠️ 与「图生图」页的**单张** IP-Adapter 是两套东西：
+                     两个都开时**以多参考图为准**，单张那条不会被安装
+                   · 缺档位时自动降级到已装档位并写 warning（不静默、不整体失败）
+       FreeU: host.chk_freeu :212 → _toggle_freeu :216
+       CLIP:  host.combo_clip_skip :220-231 → _on_clip_skip_changed :232
+       Hires: host.chk_hires :242 → _toggle_hires :243
+              host.chk_enable_hires :246
+              host.combo_hires_scale :249（1.5/2.0/2.5/3.0，默认 2.0）
+              host.scale_hires_denoise :254（0.1~0.9 默认 0.45）
+              host.combo_hires_upscaler :257
+              host.combo_hires_mode :263-269（自动/整图/分块）
+              host.combo_hires_order :272-278（先高清后修脸/先修脸后高清）
+       大图:  host.chk_use_tiled :285
+              host.spin_tiled_w/h :293-303
+              host.combo_tile_size :308-312
+              host.spin_tile_overlap :314-319
+              host.scale_tile_strength :321-324
+              host.btn_run_tiled :326 → run_tiled_diffusion :327
+       输出:  host.combo_output_dir :334-340（可编辑，默认 utils.paths.default_output_dir()）
+              host.combo_img_format :342-344（PNG/JPEG/WEBP）
+       水印:  host.chk_watermark :351
+              host.edit_watermark_text :357
+              host.btn_watermark_image :362 → _pick_watermark_image :366
+              host.lbl_watermark_image :367（内联样式）
+              host.btn_watermark_clear :369 → _clear_watermark_image :370
+              host.combo_watermark_pos :378-381（来自 utils.watermark.POSITIONS）
+              host.scale_watermark_opacity :383（0.05~1.0 默认 0.6）
+              host.scale_watermark_size :386（0.3~3.0 默认 1.0）
+              host.lbl_watermark_hint :389-393（内联样式）
+       杂项:  host.btn_read_png :396 → read_png_info :397
+
+    ── sections["xy"]「📊 X/Y 矩阵」（_build_xy，:405-433）
+       host.chk_enable_xy :412 → _toggle_xy :413
+       host.combo_x_type :416-419 / host.entry_x_vals :420-422
+       host.combo_y_type :424-427 / host.entry_y_vals :428-430
+
+5.8 生成核心区 build_core（ui/core_panel.py:29-331）创建的 host 属性
+      模型: host.combo_model_type :37 → _on_model_type_changed :53
+            host.combo_model :56 → on_model_selected :63
+            host.btn_model_diag "🔬" :68-73 → _show_model_diagnostics :72
+            host.combo_device :76（AUTO/CUDA/MPS/CPU）
+            host.lbl_model_info :80
+      预设: host.combo_preset :89 → show_preset_menu :92 / apply_preset :93
+            host.lbl_preset_badge :98
+            host.btn_save_preset :103 → save_current_as_preset :106
+            host.btn_restore_preset :109 → restore_preset_backup :112
+            host.btn_preset_menu :115 → lambda: host.show_preset_menu(...) :118-119
+      提示词: host.txt_prompt（固定高 100）:134-137
+            host.lbl_dynamic_hint :139
+            host.txt_neg（固定高 70）:147-150
+            host.btn_enhance_prompt :156 → on_enhance_prompt :164
+            host.combo_enhance_mode :168-181（①严格翻译/②适当润色/③关键词帮写）
+            host.btn_vision_prompt :184 → on_vision_prompt :187
+            host.chk_auto_enhance :190
+            host.combo_ai_model :198-207 → _on_ai_model_changed :206
+            host.combo_trans_mode :216-225（默认 index 2）
+            host.btn_trans_compare :232 → _on_trans_compare :238
+      预览: host.chk_use_preview :248 / host.spin_preview_interval :257-263
+      基础: host.spin_steps :272（1~150 默认 30）
+            host.scale_cfg :277 FloatSlider(1,20,0.5,7.0)
+            host.combo_res :280-291（13 个分辨率选项，默认 512x768）
+            host.spin_width :300 / host.spin_height :304（★不加入布局的隐藏兼容字段）
+            host.spin_count :309（1~32 默认 1）
+            host.spin_batch = host.spin_count :313（★两个名字同一对象）
+            host.spin_seed :315-319（默认 -1，显示"随机"）
+            host.combo_sampler :321-326
+            host.chk_make_comic :328
+      build_gen_area（:334-346）: host.btn_generate（固定高 46，property kind=primary）
+            → start_generation :339；host.btn_interrupt（固定高 32，初始禁用）
+            → stop_generation :345
+
+5.9 关于 _wire：为什么存在（ui/core_panel.py:20-26）
+
+    def _wire(host, signal, method_name: str) -> None:
+        """防御性信号连接：宿主缺方法时告警而不是崩溃（页面隔离需要）。"""
+        fn = getattr(host, method_name, None)
+        if callable(fn):
+            signal.connect(fn)
+        else:
+            logger.warning(f"⚠️ 信号未连接（宿主缺方法）: {method_name}")
+
+    为什么必须有它：页面/分组是在**不知道宿主具体是谁**的前提下构建的。
+    tests/test_ui_contract.py 里的 MiniApp 只继承 QMainWindow + ShellMixin，
+    没有 EventMixin/GenerationMixin/VideoPanelMixin，所以
+    start_generation / select_image / on_generate_video 等 50+ 个业务方法都不存在。
+    本次离屏审计实测：用 MiniApp 构造外壳时，_wire 打印了 **54 条**
+    "信号未连接（宿主缺方法）"告警，但 **setup_ui 依然成功、契约 critical 为空**。
+    如果没有 _wire（改为 host.btn.clicked.connect(host.meth)），
+    这些页面会直接 AttributeError 崩在启动路径上 —— 也就是说
+    _wire 是"页面可独立构建/可被测试桩驱动"的前提。
+
+    ★重构规则：新写的页面/分组里，凡是连接"宿主方法"的地方都要用 _wire(host, ...)，
+      不要写成 host.btn.clicked.connect(host.method)。
+    引用位置（共 6 个文件 import 它）:
+      ui/shared_groups.py:14、ui/pages/txt2img_page.py:13、ui/pages/img2img_page.py:14、
+      ui/pages/video_page.py:18、ui/shell.py:40/:307（只导 build_* 函数）。
+    例外（直接 .connect）：三处刻意不用 _wire，因为连接的是**局部** lambda 或
+      确定存在的方法：core_panel.py:118-119（局部 lambda 调 show_preset_menu）、
+      shell.py:157-168（lambda 包一层判 isEnabled）、
+      video_page.py:520（局部 _toggle_rife）、
+      img2img_page.py:121-122 / :135 / :167-168（局部 lambda）。
+
+--------------------------------------------------------------------------------
+6. 宿主的公共接口（重构必须保持可调用的东西）
+--------------------------------------------------------------------------------
+
+6.1 定义来源与 MRO（实测 AIDesktopApp.__mro__）
+
+    0 main.AIDesktopApp
+    1 PyQt6.QtWidgets.QMainWindow
+    2 PyQt6.QtWidgets.QWidget
+    3 PyQt6.QtCore.QObject
+    4 PyQt6.sip.wrapper
+    5 PyQt6.QtGui.QPaintDevice
+    6 PyQt6.sip.simplewrapper
+    7 ui.shell.ShellMixin                    ← 默认 _UIMixin
+    8 ui.param_snapshot.ParamSnapshotMixin
+    9 utils.app_events.EventMixin
+   10 utils.app_generation.GenerationMixin
+   11 ui.preset_manager.PresetManagerMixin
+   12 ui.preset_manager.TooltipMixin
+   13 ui.video_panel_mixin.VideoPanelMixin
+   14 builtins.object
+
+    声明位置: main.py:77-79
+      class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
+                         GenerationMixin, PresetManagerMixin, TooltipMixin,
+                         VideoPanelMixin)
+    实测 mixin 数量: **7 个**（_UIMixin + 6 个具名 mixin），加上 QMainWindow 共 8 个基类。
+    _UIMixin 由 main.py:49-52 决定:
+      AI_STUDIO_UI == "old" → ui.ui_builder.UIBuilderMixin
+      否则                  → ui.shell.ShellMixin（默认）
+
+6.2 ui/shell.py ShellMixin（49 个方法，1921 行文件里的主干）
+
+    外壳/页面切换
+      setup_ui()                                  :35    页面注册、三栏装配、契约自检
+      _on_page_selected(page_id)                  :171
+      _rebuild_shortcuts() / _setup_shortcuts()    :136 / :126
+      _shortcut_map() -> dict                     :129
+      _build_params_panel() -> QWidget            :286
+      _build_menu_v6()                            :790
+      _build_statusbar_v6()                       :343
+      _goto_page(page_id)                         :1105  ⚠ 全项目无调用点（仅定义）
+      _page_call(page_id, method, *args)          :1114  ⚠ 全项目无调用点（仅内部调用 _goto_page）
+    状态与日志（★方法契约）
+      append_log(text, color="#dfe5ec")           :354   写 txt_log_image + txt_log_video 并滚底
+      set_status(text, color="#dfe5ec")           :371   写 lbl_status
+      set_progress(value: int)                    :375   写 progress_gen
+      play_video(video_path)                      :379   用 video_player + video_stacked
+      _setup_resource_monitor() / _update_resource_label()  :701 / :712
+    控件联动（信号回调，均带 hasattr 兜底）
+      _toggle_adetailer / _toggle_ad_hand         :425 / :433
+      _toggle_hires / _toggle_xy / _toggle_cn     :477 / :485 / :493
+      _toggle_freeu（空钩子）                      :441
+      _init_defaults                              :413   refresh_models + 5 个 _toggle_*
+      _on_clip_skip_changed(index)                :445
+      _on_pose_transfer_toggled(checked)          :501
+      _on_ai_model_changed(index)                 :518
+      _init_defaults 还依赖宿主有 refresh_models（EventMixin:228）
+    对比/回译
+      _on_prefix_image(path)                      :532
+      _on_compare_toggled(checked)                :540   依赖 preview_stack / compare_canvas
+      _on_trans_compare() / _show_trans_compare() :564 / :648
+    画廊与胶片条
+      _refresh_filmstrip                          :224
+      _on_filmstrip_clicked(path)                 :238
+      _on_filmstrip_reuse(path)                   :269
+      _on_gallery_video_picked(path)              :280
+      _on_gallery_picked(path)                    :730
+    预设与触发词
+      _insert_lora_triggers(slot_idx=None)        :752   读 self.combo_loras
+      _open_settings()                            :872   打开 SettingsDialog + apply_config_to_ui
+    扩展
+      _refresh_extension_count                    :903
+      _open_extension_market                      :915
+    工作流
+      _open_workflow_editor                       :934
+      _open_workflow_from_ui                      :945
+      _workflow_from_ui_or_warn                   :957
+      _check_workflow_from_ui                     :989
+      _run_workflow_from_ui                       :1006
+      _open_workflow_dir                          :1031
+    文件/杂项
+      _open_output_folder                         :1048
+      _show_about                                 :1066
+      on_unload_models                            :1074
+      _show_memory                                :1093
+    模块级函数
+      _describe_chain(wf) -> str                  :18    工作流链一行描述
+
+6.3 ui/core_panel.py 模块级函数（不是方法，直接 import 使用）
+
+    _wire(host, signal, method_name) -> None        :20  ★另有 5 个文件 import（见 5.9）
+    build_core(host, layout) -> None               :29  由 shell.py:307-308 调用
+    build_gen_area(host, layout) -> None           :334 由 shell.py:338 调用
+    build_status_widgets(host) -> None             :349 由 shell.py:40-41 调用
+
+6.4 ui/param_snapshot.py ParamSnapshotMixin（11 个方法 + 1 个类属性）
+
+    _CONTROL_LABELS  dict  33 条（控件名 → (中文名, 所属分组)）  :14-48
+    _safe_set_check(name, val)          :51    hasattr 兜底，失败只 warning
+    _safe_set_combo(name, text)         :60    精确匹配失败会做**子串模糊匹配** :69-73
+    _safe_set_float(name, val)          :77    适配 FloatSlider.set_value / QSlider(×100) / setValue
+    _safe_set_int(name, val)            :94
+    _read_float(w)                      :103   按 value → get_value 顺序尝试
+    _get_widget_value(name)             :115   按控件类型分派（QCheckBox/QComboBox/QSpinBox/
+                                               QSlider/QTextEdit/有 value 的/FloatSlider）
+    _snapshot_current_params()          :135   ★硬取 30 个 self.xxx（:139-170），
+                                               缺任何一个都会走 except 把 _preset_backup 置 None
+    _update_preset_badge(n, lines)      :175
+    restore_preset_backup()             :199   用 _safe_set_* 逐个回填并调用 4 个 _toggle_*
+    _flash_widget(name, color="#dadbdf") :245  用 QGraphicsColorizeEffect 做 2.5s 高亮
+    _build_diff_report(before, after)   :283   返回 (改动行列表, 受影响分组集合)
+
+    调用方（实测）: main.py（apply_preset :371-437、apply_meta_params :687-721）、
+    ui/preset_manager.py、ui/core_panel.py:112（btn_restore_preset）。
+
+6.5 utils/app_events.py EventMixin（58 个方法，1498 行；与 UI 强相关的如下）
+
+    配置同步
+      apply_config_to_ui()                :46  ★181 行，32 处 hasattr，逐字段回填
+      _show_model_diagnostics()           :41  （core_panel.py:72 的 🔬 按钮指向它）
+    模型与 LoRA
+      refresh_models()                    :228
+      refresh_lora_by_model()             :241
+      load_model_info(index=None)         :283
+      load_lora_info(index=None)          :299
+      _current_model_data()               :235
+    参考图 / 蒙版
+      select_image()                      :364
+      set_reference_image(path, mask)     :372
+      _update_ref_thumb()                 :381
+      clear_reference()                   :412
+    区域提示词（★较新）
+      open_region_editor()                :517  → ui/region_editor.RegionEditorDialog
+      _region_canvas_size()               :549
+      clear_regions()                     :561
+      regions() -> list                   :576
+      _refresh_regions_summary()          :584
+      _apply_regions_if_enabled(...)      :603
+      _region_progress(i, n)              :660
+    多参考图 IP-Adapter（★较新，2026-09 加）
+      open_ipa_ref_editor()               :688  → ui/ipa_editor.IPARefEditorDialog
+      clear_ipa_refs()                    :718
+      ipa_refs() -> list                  :733
+      _refresh_ipa_refs_summary()         :770
+      _apply_ipa_refs_if_enabled(ctx)     :784  ← 主生成路径真正生效的地方
+      ⚠️ 重构注意：
+        · 这 4 个控件名已进 `ui/contracts.py` 的 GLOBAL_WIDGETS
+          （"chk_use_ipa_refs","btn_edit_ipa_refs","btn_clear_ipa_refs",
+            "lbl_ipa_refs_summary"）→ 改名必须同步 contracts.py 与
+          tests/test_ui_contract.py，否则契约测试红。
+        · 配置字段：`use_ipa_refs`（bool）/ `ipa_refs`（list[dict]），
+          与 `use_regions`/`regions` 同构；持久化走 apply_config_to_ui + closeEvent。
+        · 参考图 dict 的字段：path / role / weight / mask_path / enabled，
+          与 core/ipa_multi.IpaReference 同构（中文角色别名也认）。
+        · 工作流侧对应节点：IPAdapterIdentity / IPAdapterStyle /
+          IPAdapterComposition（节点库「适配」分类，共 33 个节点）；
+          builder 会把主界面的参考图编译成这些节点，保证两种模式是同一件事。
+    水印
+      _refresh_watermark_label(path="")   :460
+      _pick_watermark_image()             :473
+      _clear_watermark_image()            :505
+    姿态 / 预览
+      load_pose_image()                   :667
+      show_preview(img_path)              :708
+      update_preview_ui(preview_img)      :733
+      show_pose_preview(img)              :740
+    编辑器
+      open_editor()                       :793
+      _send_editor_to_inpaint(...)        :759
+      open_gallery_to_edit()              :886
+    AI 改写 / 识图
+      on_model_selected(index=0)          :998
+      _refresh_model_note()               :1004
+      on_enhance_prompt()                 :1033
+      _apply_enhance_result(pos, neg)     :1107
+      _restore_enhance_button()           :1118
+      on_enhance_video_prompt()           :1126  / _apply_video_enhance :1157 / _restore_video_enhance_button :1167
+      on_vision_video_prompt()            :1174  / _on_video_vision_done :1208
+      on_enhance_travel_prompts()         :1219  / _apply_travel_seg_enhance :1266 /
+                                                  _restore_travel_enhance_button :1278
+      load_ipa_image()                    :1288
+      _on_enhance_done(result)            :1304
+      on_vision_prompt()                  :1337
+    大图后处理
+      run_tiled_diffusion()               :1399
+
+6.6 utils/app_generation.py GenerationMixin（UI 侧对外的方法）
+
+    _ui_read(fn, default=None)            :133  ★**跨线程安全读控件**：GUI 线程直接执行；
+                                               否则通过 _UiInvoker.call_signal 派发到主线程
+                                               阻塞取值，超时 30 秒兜底（:151）。
+                                               这是"业务层读控件"的唯一合法通道。
+    _cbo(w) / _chk(w) / _sld(w) / ...     :156-186  围绕 _ui_read 的类型化读值助手
+    start_generation()                    :204  （core_panel.py:339 的生成按钮指向它）
+    stop_generation()                     :1936 （core_panel.py:345 的中断按钮指向它）
+    _gt_* 内部方法                        实测 **20 个**（见 7.3）
+    调用方: main.py、ui/video_panel_mixin.py:252/:324/:506、utils/batch_runner.py:108/:143/:187。
+
+6.7 ui/preset_manager.py
+
+    PresetManagerMixin（10 个方法）:
+      _refresh_preset_combo(select_name=None)  :25  ⚠ 用 disconnect(self.apply_preset) 断开信号
+      _get_current_preset_name()               :63
+      _get_float(widget)                       :78
+      _collect_current_state_as_preset()       :86
+      save_current_as_preset()                 :148  （core_panel.py:106 指向它）
+      delete_current_preset()                  :186
+      export_user_presets()                    :214
+      import_user_presets()                    :237
+      show_preset_menu(pos)                    :288  （core_panel.py:92/:118 指向它）
+      apply_tooltips()                         :311（TooltipMixin）
+    TooltipMixin                               :310
+
+6.8 ui/video_panel_mixin.py VideoPanelMixin（31 个方法，只做逻辑不建控件）
+
+    on_generate_video :?（video_page.py:546 指向它）
+    _add_voice_to_video / _set_status_via_bridge / _maybe_run_rife / _reset_video_button
+    _on_video_generated / _on_video_gen_error / _on_video_player_error
+    _set_video_duration / _add_travel_segment / _remove_travel_segment /
+      _auto_distribute_frames
+    _refresh_video_gallery / _on_video_item_clicked
+    _add_motion_lora_item / _remove_motion_lora_item / _collect_motion_loras
+    _on_video_mode_changed / _on_travel_edit_mode_changed / _spread_travel_frames /
+      _scan_motion_loras / _update_video_duration_hint
+    _clear_video_input / on_pick_video_input
+    _on_tts_engine_changed / _on_pick_sovits_ref / _on_long_video_toggled
+    _save_current_video / _on_video_media_changed / stop_video / pause_video
+    （行号见该文件；本文件顶部注释 :46 明确写出"需要宿主提供 self._set_status(text, color)"，
+      即 VideoPanelMixin 也依赖状态栏方法契约。）
+
+6.9 main.py AIDesktopApp 自己的方法（与 UI 相关）
+
+    _set_status(text, color="#89dceb")        :268  ★**与 ShellMixin.set_status 不同名但同职责**；
+                                                    大量业务代码调用的是这个（见下）
+    _emit_status(text, color)                 :271
+    apply_preset(idx=None)                    :346
+    read_png_info(path=None)                  :449
+    closeEvent(event)                         :508  ★保存配置 + 收尾线程
+    _on_gallery_pick / show_preview_image / _on_new_image_saved   :634/:640/:659
+    _on_apply_gallery_params(meta) / apply_meta_params(meta)      :668/:701
+    save_current_image_as / send_preview_to_img2img /
+      send_preview_to_inpaint / reuse_params_from_path            :723/:742/:762/:780
+    send_path_to_img2img / send_path_to_face_fix / send_path_to_editor  :857/:863/:886
+    _on_model_type_changed(idx) / _on_model_changed(idx)          :902/:939
+
+    ⚠ 状态方法与日志方法的实际调用面（grep 实测）:
+      _set_status 被调用 **150+ 次**，分布在 utils/app_events.py、ui/video_panel_mixin.py、
+        ui/shell.py、ui/preset_manager.py、main.py、photo_turn/mixin_tools.py。
+      set_status（方法契约里的那个）在本项目内**几乎没有业务调用点**，
+        真正被外部依赖的是 _set_status。
+      ⇒ 重构时两个名字都要留着；把 set_status 删掉会让 check_contract 判定
+        critical 缺失并禁用生成按钮；把 _set_status 删掉会让 150+ 处调用点崩。
+
+6.10 页面协议（PageBase，ui/pages/base.py:5-22）
+
+    page_id: str / title: str / icon: str      :8-10   类属性，NavRail 读它们生成按钮
+    build(host) -> None                        :12-14  在 host 上挂页面控件
+    workspace() -> QWidget                     :16-18  中央工作区
+    params_widget() -> QWidget | None          :20-22  右侧专属参数区（None = 本页无专属参数）
+    实测各页实现（见 5.2-5.6），characters 页偏离（QObject 鸭子类型）。
+
+--------------------------------------------------------------------------------
+7. 目前 UI 的问题清单
+--------------------------------------------------------------------------------
+
+7.1 【历史缺陷·已修】ParamPanel._clear() 只用 deleteLater() 导致切换节点时控件叠加
+
+    症状: 在工作流编辑器里快速切换节点（或连续 show_node）时，面板里出现
+          "两个采样器 / 两组参数"叠在一起。
+    根因: 只调 deleteLater() 时，控件只是**排队**等待事件循环删除，这期间它仍是
+          父控件的可见子控件，会停在原坐标继续绘制。
+    证据: ui/workflow_editor/param_panel.py:41-69 的 _clear()，其中 :44-49 的
+          注释原文写明了这个陷阱；修法是先 setParent(None) 立即解除父子关系
+          （:56-57、:66-67），再 deleteLater()。子布局也要连里面的控件一起摘
+          （:60-68），否则 QFormLayout 里的行还会残留。
+    影响: 已修，当前行为正确。但它代表的是一类通用陷阱 ——
+          **任何"清空后重建"的面板都必须先 setParent(None)**。
+    建议: 把这套清空逻辑抽成一个公共工具函数（例如
+          ui/components/clear_layout.py: clear_layout(layout)），
+          让以后所有"动态重建"的面板复用。目前项目里只有这一份正确实现，
+          其他地方若将来引入清空重建很容易再犯。
+    同类风险点（可用同一工具统一）: QStackedWidget 页面/参数区切换、
+          shared_groups 若将来支持动态重排、画廊列表若是重建而非清空。
+
+7.2 【严重·重复实现】ui_builder.py 与 core_panel.py / shared_groups.py /
+      param_snapshot.py / shell.py / video_panel_mixin.py 大面积重复
+
+    症状: 同一个控件、同一个方法在旧文件和新文件里各写一份，
+          改一处漏一处；两份的默认值/选项还可能不一致。
+    实测数据（AST 统计 host.X = / self.X = 的控件赋值）:
+      - ui_builder.py 自己画了 **160** 个控件；
+        core_panel.py + shared_groups.py 画了 **92** 个；
+        两者**重名 73 个**（例如 btn_generate、txt_prompt、combo_res、spin_steps…）。
+      - ui_builder.py 独有          87 个（旧界面才有的视频/图生图控件）。
+      - 新层独有                    19 个（chk_freeu、chk_watermark、combo_clip_skip、
+        combo_hires_mode、combo_hires_order、btn_edit_regions、btn_clear_regions、
+        lbl_regions_summary、combo_enhance_mode、btn_trans_compare、
+        scale_watermark_*、edit_watermark_text、combo_watermark_pos、
+        btn_watermark_image、btn_watermark_clear、lbl_watermark_image、
+        lbl_watermark_hint、chk_use_regions）。
+      - 方法级重名（两个文件都定义同一方法名）**46 组**，例如
+        _init_defaults、_toggle_cn、_toggle_hires、_toggle_xy、_toggle_adetailer、
+        _toggle_ad_hand、_on_pose_transfer_toggled、_on_ai_model_changed、
+        _on_gallery_picked、_insert_lora_triggers、append_log、set_status、set_progress、
+        play_video、on_unload_models、_show_about、_show_memory、_open_output_folder、
+        _refresh_extension_count、_open_extension_market，以及 param_snapshot 的全部
+        11 个方法（_safe_set_check / _safe_set_combo / _safe_set_float / _safe_set_int /
+        _read_float / _get_widget_value / _snapshot_current_params / _update_preset_badge /
+        restore_preset_backup / _flash_widget / _build_diff_report）。
+      - **已经产生真实行为差异的实例**（同名字、不同内容）:
+          combo_res:  ui_builder.py:439-441 只有 7 个选项
+                      （512x512/512x768/768x512/768x768/1024x1024/832x1216/1216x832）
+                      新版 core_panel.py:284-290 有 13 个选项（多出 640x960、960x640、
+                      768x1024、1024x768、1024x1536、1536x1024）。
+          _CONTROL_LABELS: param_snapshot.py:14-48 有 33 条；
+                      ui_builder.py 的同名副本只有 32 条，**少一个 chk_freeu**
+                      （即"预设 diff 报告"在旧界面里看不到 FreeU 的改动）。
+          btn_generate: 旧版用内联 setStyleSheet（ui_builder.py:1843）；
+                      新版用 setProperty("kind","primary")（core_panel.py:338）。
+          btn_save_preset / btn_restore_preset / btn_preset_menu / btn_model_diag:
+                      旧版各有一份内联样式函数（ui_builder.py:257-290、:205-221），
+                      新版完全没有样式（交给 QSS）。
+          combo_preset 的信号: 旧版直接 connect（ui_builder.py:243-244），
+                      新版用 _wire（core_panel.py:92-93）。
+    影响: 重构时"改对了新文件、忘了旧文件"不会立刻报错，
+          但一旦有人切到 AI_STUDIO_UI=old 对比，看到的就是另一个界面；
+          而像 _CONTROL_LABELS 这种副本差异，会以"预设对比少了一项"的形式隐性出错。
+    建议: (1) 两天重构期间**只改新层**（ui/shell.py、ui/core_panel.py、
+              ui/shared_groups.py、ui/param_snapshot.py、ui/pages/*），
+              明确在 ui_builder.py 顶部加一行醒目注释"legacy，勿改"；
+          (2) 若时间允许，重构结束后删除 ui_builder.py 及其回退分支
+              （main.py:49-52、:964-966、ui/__init__.py:27 的导入），
+              一并清理 design_tokens.DARK_STYLE/VIDEO_TAB_QSS 的引用；
+          (3) 删除前先确认没有外部脚本依赖 AI_STUDIO_UI=old
+              （仓库内只有 main.py:49/:964 与 tests/test_real_startup.py:19 提到它，
+                后者断言的正是"默认必须是 ShellMixin"）。
+
+7.3 【严重·主窗口体量与耦合】main.py 与 utils/app_generation.py 过大，
+      AIDesktopApp 继承 7 个 mixin，生成流程 20 个 _gt_* 私有方法
+
+    实测数字:
+      main.py                    992 行
+      utils/app_generation.py   2564 行
+      utils/app_events.py       1498 行
+      ui/shell.py               1121 行
+      ui/ui_builder.py          2650 行（旧）
+      AIDesktopApp 基类: QMainWindow + **7 个 mixin**（main.py:77-79）
+      utils/app_generation.py 里 **_gt_* 方法 20 个**:
+        _gt_apply_loras, _gt_apply_prompt_enhance, _gt_aux_state, _gt_cleanup,
+        _gt_confirm_batch, _gt_extract_character_features, _gt_generate_one,
+        _gt_load_model, _gt_main_loop, _gt_make_inpaint_masks, _gt_pixel_composite,
+        _gt_pose_pil_image, _gt_prepare_context, _gt_region_blend, _gt_run_base_pipe,
+        _gt_run_pose_transfer, _gt_safe_pipe_call, _gt_save_image, _gt_setup_ipa,
+        _gt_try_xy_plot
+      _gt_* 被引用的地方（grep 计数）: utils/app_generation.py 自身 55 处、
+        workflow/builder.py 13 处、tests/test_builder_aux.py 21 处、
+        utils/batch_runner.py 1 处、utils/image_metadata.py 1 处、
+        tests/test_regional.py 1 处、ui/pages/characters_page.py 1 处。
+    影响: UI 与业务之间是"互相知道对方内部命名"的关系：
+          _gt_prepare_context 之类直接从 self.xxx 读控件；UI 改名会顺着
+          app_generation.py 一路炸到 workflow/。重构风险最高的地方不在视觉，
+          而在这种**跨层命名耦合**。
+    建议: 重构只动"视图层"文件；把 _gt_* 视为黑盒；
+          若确实要动，先跑 tests/test_builder_aux.py 与 tests/test_regional.py。
+
+7.4 【严重·手工同步】app_config.json ↔ UI 控件靠逐字段 hasattr 手工同步
+
+    症状: 新增/改名一个控件，必须在至少 2 个地方（回填 + 回存）手工加代码，
+          漏一处就是"设置不生效"或"存了不还原"。
+    实测数字:
+      utils/app_events.py:apply_config_to_ui   46-226（181 行）
+        含 **32 处 hasattr(**、36 处 getattr(，涉及 **31 个不同的 self.xxx 控件名**。
+      main.py:closeEvent                       508-630（123 行）
+        含 **14 处 hasattr(**，涉及 14 个 self.xxx（其中 12 个是控件，
+        另 2 个是线程 _enhance_thread/_video_thread）。
+      两处共同处理的控件字段（举例 5 个，读/写都手工）:
+        chk_freeu              读 app_events.py:116   写 main.py:552-553
+        chk_watermark          读 app_events.py:206   写 main.py:562-563
+        combo_clip_skip        读 app_events.py:121   写 main.py:555-556
+        combo_hires_mode       读 app_events.py:144   写 main.py:542-546
+        scale_watermark_opacity读 app_events.py:216   写 main.py:568-570
+      ⚠ **不对称的字段**（只在一边出现，属真实隐患）:
+        - app_events.py:combobox 里写了 combo_output_dir（:195-202），
+          closeEvent 也写了（:559）→ 对称。
+        - 但 apply_config_to_ui 回填的 `combo_img_format`（:170-174）与
+          closeEvent 回存的 `combo_img_format`（:558）对称；而
+          `combo_device` 只在 closeEvent 写（:585-586），回填时的设备同步
+          是在 ui/shell.py:893-897（_open_settings 里）另做一遍 —— 同一件事两处实现。
+        - `use_regions`：apply_config_to_ui 只 setChecked（:161-165），
+          closeEvent 保存时还额外做 `any(r.get("enabled"))` 的过滤（:577-582）。
+      ⚠ **完全没有 hasattr 保护的字段**（改名/删除会直接抛异常）:
+        main.py:515 self.spin_steps、:517 self.combo_res、:524 self.spin_batch、
+        :525 self.scale_cfg、:526 self.scale_strength、:527 self.combo_sampler、
+        :529 self.txt_prompt、:530 self.txt_neg、:532 self.chk_use_adetailer、
+        :533 self.scale_adetailer_strength、:534 self.chk_use_ad_hand、
+        :535 self.scale_ad_hand、:536 self.scale_ad_hand_blend、
+        :538 self.chk_hires、:539 self.scale_hires_denoise、
+        :558 self.combo_img_format、:559 self.combo_output_dir。
+        （closeEvent 整体包在 try/except 里，:590-591 只 warning 不崩，
+          所以症状是"配置静默不保存"，比崩溃更难查。）
+    影响: 重构中若重命名任一控件（或把它挪进新面板），配置的存/取会静默失效。
+    建议: 把 apply_config_to_ui 与 closeEvent 的字段清单统一到一张表
+          （例如 core/config_manager.py 里加 FIELD_MAP: 控件名 → config 字段 → 读/写方式），
+          两边都按表循环；至少在重构前把 closeEvent 里那 17 个无保护字段补上 hasattr。
+
+7.5 【中等·主题无法统一】硬编码颜色散落在 30+ 个文件
+
+    实测 #rrggbb 字面量（严格 6 位十六进制）出现次数:
+      ui/ 合计 **449 处**，分布（前 12）:
+        ui/ui_builder.py              129   （旧界面，可随删除消失）
+        ui/design_tokens.py            92   （旧令牌，只被旧界面用）
+        ui/workflow_editor/canvas.py   49   （节点画布：类型配色）
+        ui/video_panel_mixin.py        31
+        ui/shell.py                    27   ← 当前外壳里也有 27 处硬编码
+        ui/disclaimer.py               25
+        ui/theme.py                    21   （PALETTE 定义 8 处 + APP_QSS 13 处）
+        ui/region_editor.py            15
+        ui/pages/characters_page.py    11
+        ui/workflow_editor/param_panel.py 8
+        ui/widgets.py                   8
+        ui/extension_market.py          7
+        （其余各文件 ≤6）
+      ui/ 之外还有 **163 处**: utils/app_events.py 67、utils/app_generation.py 53、
+        main.py 37、core/regional.py 3、core/model_diagnostics.py 3。
+      另有 134 处 setStyleSheet(...) 调用散落在 ui/ 下
+        （ui_builder.py 51 处、characters_page.py 22 处、extension_market.py 12 处…）。
+    色系不统一的确凿证据:
+      - ui/theme.py:10-20 PALETTE 是 **qdarkstyle 深蓝灰**系
+        （accent #4a9eff、bg #19232d、fg #dfe5ec、fg_mute #8fa1b3）。
+      - ui/design_tokens.py:9-28 DESIGN_TOKENS 是**另一套**（xAI 风黑/白/橙：
+        primary #ffffff、canvas #0a0a0a、accent-sunset #ff7a17…）。
+      - ui/pages/characters_page.py:36-44 用的是**第三套**（Catppuccin 色名：
+        mantle #181825、surface0 #313244、blue #89b4fa…）。
+      - ui/workflow_editor/param_panel.py、palette.py、canvas.py 用**第四套**
+        （#7f849c / #cdd6f4 / #94e2d5 / #89b4fa）。
+      - ui/region_editor.py:38 的 PALETTE 甚至不是调色板，而是
+        **区域边框颜色数组**（同名字、不同语义，极易误用）。
+      - 同一语义的字面量重复出现: "#7f849c"（21 次级别）、"#7d8187"、"#22303d"、
+        "#4a9eff" 等在多文件各写一遍。
+    ★额外发现（真实缺陷，非风格问题）:
+      ui/pages/characters_page.py:24-34 尝试 `from ui.design_tokens import COLORS`，
+      但 ui/design_tokens.py **只导出 DESIGN_TOKENS 和 DARK_STYLE/VIDEO_TAB_QSS，
+      没有 COLORS**（该文件全文 140 行，无 COLORS 定义）。
+      实测后果: 导入永远失败 → `_TOKENS = {}` → `C()` 始终返回 fallback 字面量
+      （即 :36-44 那 9 个硬编码色）。也就是说"主题色兼容层"是**从未生效的死代码**。
+    影响: 做美术重构时，"改一处全局生效"是不可能的；必须逐个文件替换，
+          漏掉的控件会保留旧配色，界面出现花斑。
+    建议: (1) 先建立**单一**令牌源（保留 ui/theme.py 的 PALETTE 并在其中补齐
+              语义色：success/warning/danger/muted/surface/card…）；
+          (2) 删除 ui/design_tokens.DESIGN_TOKENS 或把它改为从 theme.PALETTE 派生；
+          (3) 让 characters_page 真正从 theme.PALETTE 取色（顺手删掉无效的
+              `from ui.design_tokens import COLORS`）；
+          (4) 把内联 setStyleSheet 收敛为 setProperty + 集中 QSS；
+          (5) 重命名 ui/region_editor.py:38 的 PALETTE 以免与 theme.PALETTE 混淆。
+
+7.6 【中等·QSS 钩子脆弱】样式依赖 objectName / property，但它们没有测试保护
+
+    实测在用的钩子:
+      setObjectName: navBtn（nav.py:24，theme.py:37-42 有对应规则）
+                     btnGenVideo（video_page.py:543，但主题里**没有**对应规则；
+                       规则只在 design_tokens.VIDEO_TAB_QSS:134-139，而它只被旧界面 setStyleSheet）
+                     animRoot（video_page.py:107，同样只有旧 QSS 有规则）
+                     btnMediaAll / btnMediaImage / btnMediaVideo（gallery_page.py:41-43，无任何 QSS）
+                     splash_container（splash.py:33）、btnConfirm（disclaimer.py:227）
+      setProperty:  role ∈ {hint, title, value, field, body, pill}
+                    kind="primary"
+                    accent=True
+                    mediaMode ∈ {all,image,video}
+      对应 QSS: ui/theme.py:23-47（APP_QSS）只覆盖了 role 三态 + kind=primary +
+                #navBtn + #collapsibleHeader；video_page.py:27-72 用的
+                role="field"/"pill" 与 accent=True 的规则在 design_tokens.VIDEO_TAB_QSS 里，
+                新版主题并未加载 → **动画页目前有一部分样式规则是"孤儿"**。
+    影响: 重构时若把 Qt 控件换成自定义控件、或重建对象但忘了 setObjectName/setProperty，
+          样式会静默消失（不报错）。而 tests 里没有任何一条断言这些属性存在。
+    建议: 重构时把"需要的钩子"写成清单（本文 4.7 已列），改完手工核对；
+          顺手补一条轻量测试：遍历关键控件断言 property("role")/objectName 符合预期。
+
+7.7 【中等·_wire 造成的静默失效】连不上的信号只打 warning，按钮可能永久无效
+
+    症状: 控件创建了、也显示了，但点击毫无反应；日志里只有一行
+          "⚠️ 信号未连接（宿主缺方法）: xxx"。
+    证据: ui/core_panel.py:20-26；本次离屏审计用 MiniApp（只有 ShellMixin）实测
+          打印了 54 条此类告警（例如 start_generation、stop_generation、
+          select_image、on_generate_video、_on_video_mode_changed…）。
+          在**真实** app 里，这些方法由 EventMixin/GenerationMixin/VideoPanelMixin
+          提供，不会缺；但如果重构中把某个页面从 shell 的构建链里挪走、
+          或改了 mixin 继承，就会退化成"按钮能点但没反应"。
+    影响: 最难排查的一类 bug（无异常、无弹窗）。
+    建议: (1) 保留 _wire 的写法；(2) 重构后**务必看启动日志**，正常启动时
+              不应出现任何"信号未连接"告警
+              （真实启动可能出现少数，例如 audio_output 相关的 minor 项，
+               但"宿主缺方法"的 warning 应当为零）；
+          (3) 建议以后把 warning 升格为可选的严格模式（环境变量控制），
+              在 CI/自检里跑一次"零告警"断言。
+
+7.8 【中等·布局靠"补丁式"尺寸策略维持】400px 面板与长文本控件的对抗
+
+    症状（历史）: 长度很长的下拉框/复选框会把 400px 宽的参数面板撑爆，
+                 右侧控件被整体裁掉，看起来"控件少了"。
+    根因与现有补丁（都在注释里写明）:
+      - params_panel.setFixedWidth(400)                          shell.py:288
+      - params_scroll 水平滚动条永久关闭 + setWidgetResizable   shell.py:294-297
+      - core_wrap / params_stack / shared_wrap 三处都强制
+        SizePolicy.Horizontal = Ignored                          shell.py:310-312 / :316-318 / :326-328
+      - 每个页面 params_widget 也被强制 Ignored                   shell.py:91-93
+      - combo_model / combo_model_type / combo_ai_model /
+        combo_enhance_mode / combo_trans_mode 各自 setMinimumContentsLength
+        （core_panel.py:38-40、:60-62、:179-181、:203-205、:222-224）
+      - params_stack 用 setMinimumHeight(max(sizeHint, 80)) 撑高，
+        滚动交给外层（shell.py:202）
+      - NavRail 固定宽 64（nav.py:12）
+    影响: 这套"到处 Ignored"的策略是**为了让布局不溢出而加的多点补丁**，
+          彼此耦合：改动任一处宽度/滚动策略都可能让长文本控件再次溢出或
+          让面板出现空白滚动条。重构布局时这是最容易踩的地方。
+    建议: 重构时把"面板宽度、滚动区边界、Ignored 策略"当成一个整体重新设计
+          （例如用 QFormLayout 的 FieldGrowthPolicy + 明确的 minimumWidth），
+          而不是在现有补丁上再叠一层；改完必须实测"最长模型名/最长 LoRA 名"
+          时的显示效果（这需要真实模型目录 → （未验证，本次未跑真实 GUI））。
+
+7.9 【轻微但真实】其他实测发现
+
+    a) characters 页偏离 PageBase 协议: 继承 QObject（characters_page.py:412），
+       并额外定义 dispose()（:434-444）——**dispose 全项目无调用点**。
+       影响: 若将来 shell 支持重建页面，事件过滤器不会被摘除（:436-442 的意图落空）。
+    b) 同一个 QWidget 被两页共享: img2img.workspace() 返回 txt2img 的 workspace
+       （img2img_page.py:183-186）。实测 center_stack 只有 4 个成员而不是 5 个。
+       影响: 这是刻意设计（共享预览区），但重构时若"给每页一个独立中央区"，
+       会连带影响预览/日志的所属关系（txt_log_image 由 txt2img 页创建）。
+    c) host.spin_batch = host.spin_count（core_panel.py:313）: 两个名字同一个对象。
+       同时 spin_width/spin_height 是**不加入任何布局**的隐藏字段
+       （core_panel.py:299-307 注释"兼容隐藏字段"）。
+       影响: 重构时若"删掉看不见的控件"，会直接破坏 closeEvent（:522-524）
+       与契约（spin_width/spin_height 在 GLOBAL_WIDGETS 里）。
+    d) _goto_page / _page_call（shell.py:1105、:1114）无任何调用点。
+       影响: 属预留 API；若重构删掉不报错，但契约测试也没覆盖它们。
+    e) _refresh_preset_combo（preset_manager.py:34-37）用
+       `self.combo_preset.currentIndexChanged.disconnect(self.apply_preset)`
+       断开信号，然后 :61 重新连接。若 combo_preset 被换成别的控件类型
+       （例如自定义下拉），这段 disconnect 会静默失效（被 except TypeError 吞掉），
+       导致"刷新预设列表时意外触发 apply_preset"。
+    f) 状态栏颜色由业务代码直接改写: ui/pages/characters_page.py:737/:752/:1008
+       直接 setStyleSheet(f"color:{GREEN}; font-size:13px;") 到 shell.lbl_status。
+       影响: 改主题时这条颜色不会跟着变。
+    g) 无 windowIcon 的兜底: 新 shell 不在窗口上设图标（旧 ui_builder.py:41-43 设了），
+       只靠 main.py:971-973 给 QApplication 设。差异本身无害，但说明
+       "新旧两套外壳的功能对齐并不完整"。
+    h) 未发现的问题: 我没有发现"控件创建后从未加入任何布局"的真实案例
+       （core_panel 的两个隐藏字段是有意为之，且有注释）；
+       也没有发现 _wire 目标方法在真实 app 中缺失的情况（真实 app 未构造验证 → （未验证））。
+
+--------------------------------------------------------------------------------
+8. 重构建议与风险点
+--------------------------------------------------------------------------------
+
+8.1 建议（按优先级，1-4 是"做美术重构前后各一次"的动作）
+
+    (1) 先冻结接口，再动视觉。
+        把本文第 4 节（contracts）与第 6 节（宿主接口）当作不可变清单。
+        动手前先跑一次 `venv\Scripts\python.exe tests\test_ui_contract.py` 记录基线（应 exit 0）。
+    (2) 只改"视图层"的 5 个文件 + 1 个新令牌文件。
+        安全区: ui/theme.py（令牌）、ui/shell.py（外壳布局）、ui/core_panel.py（核心区）、
+        ui/shared_groups.py（分组）、ui/pages/*（页面）、ui/components/*（自定义控件）。
+        危险区: utils/app_events.py、utils/app_generation.py、utils/app_events 里的
+        apply_config_to_ui、main.py 的 closeEvent —— 这些是"按名字读控件"的地方，
+        控件改名 = 连锁修改（详见 8.2）。
+    (3) 建立单一设计令牌源。
+        以 ui/theme.py 的 PALETTE 为唯一真源，补齐语义色（success/warning/danger/
+        muted/surface/card/border），把 QSS 全部改成引用令牌值（Python f-string 拼接），
+        然后**逐个文件**消灭 449 处硬编码色（建议从 ui/shell.py 的 27 处、
+        ui/widgets.py 的 8 处、ui/components/collapsible.py 的 1 处开始，
+        因为这几个是"当前默认 UI"实际用到的）。
+        顺手处理 7.5 里那个真实缺陷（characters_page 的 COLORS 导入永远失败）。
+    (4) 自定义控件的公开 API 必须整体保留或整体替换。
+        FloatSlider: valueChanged(float) 信号、float_value()、value()、setValue(v)
+                     （会 clamp 到 min/max）、setEnabled(bool)（会同步改内部
+                     QSlider 与数值标签颜色）。证据: ui/widgets.py:13-69。
+                     ⚠ 生成管线读它用的是 _sld() → float_value()（app_generation.py:171），
+                       预设系统读它用 _read_float() → value()（param_snapshot.py:103-112）。
+                       两个方法都要在。
+        GpuCanvas: set_pixmap(QPixmap)（内部 _refresh 自适应缩放）、resizeEvent 自动重绘。
+                   证据: ui/widgets.py:72-96。⚠ shell.py:258 与 gallery 相关路径调用
+                   lbl_preview.set_pixmap(...)，少了它预览就没了。
+        CompareCanvas: set_images(before, after) / has_images()、鼠标拖拽分割线。
+                   证据: ui/widgets.py:99-184；调用点 shell.py:551。
+        CollapsibleSection: 构造(title, collapsed=True)、content / content_layout、
+                   set_collapsed(bool) / is_collapsed()。
+                   证据: ui/components/collapsible.py:7-43。
+                   ⚠ 它现在的标题按钮样式是**内联硬编码** "#22303d"（:21-23），
+                     与 theme.APP_QSS 里给 QWidget#collapsibleHeader 的规则重复但
+                     没有真正用上（该 objectName 从未被设置）→ 改主题时必须一起处理。
+    (5) 保留全部 QSS 钩子（objectName/property 清单见 4.7），并在重构后做一次
+        "启动日志零告警"的检查（7.7）。
+    (6) 处理 legacy 重复: 至少在 ui_builder.py 顶部加醒目"legacy/勿改"注释；
+        有余力则删除它以及 main.py:49-52、main.py:964-966、ui/__init__.py:27
+        的三处引用（删除前确认没有人依赖 AI_STUDIO_UI=old）。
+    (7) 把"动态重建面板"的清空逻辑抽成公共工具（见 7.1 建议），
+        避免重蹈 deleteLater-only 的坑。
+    (8) 收敛 apply_config_to_ui / closeEvent 的字段清单为一张表（见 7.4 建议），
+        并给 closeEvent 里那 17 个无 hasattr 保护的字段补上保护。
+
+8.2 ★一动就引发连锁修改的地方（改之前先 grep 全仓库）
+
+    A. 重命名任何控件属性名
+       → 连锁点: ui/contracts.py（列表）+ tests/test_ui_contract.py（断言）+
+         utils/app_events.py:apply_config_to_ui（31 个名字）+
+         main.py:closeEvent（14 个）+ main.py:apply_preset/apply_meta_params +
+         ui/param_snapshot.py（_CONTROL_LABELS 33 条 + _snapshot_current_params
+         硬取 30 个属性 + restore_preset_backup 30 行）+
+         ui/shell.py（_toggle_* 5 处、append_log、_insert_lora_triggers、_on_compare_*）+
+         ui/video_panel_mixin.py（约 41 处 hasattr/12 处 getattr）+
+         utils/app_generation.py（43 处 hasattr/124 处 getattr）+
+         ui/preset_manager.py + core/config_manager.py 的字段名。
+       结论: 这是**成本最高**的一类改动，两天重构里应尽量避免。
+
+    B. 删除或移动 spin_width / spin_height / spin_batch / combo_res 的任一个
+       → closeEvent（main.py:517-524）、apply_config_to_ui（:72-83）、
+         contracts.GLOBAL_WIDGETS、tests/test_ui_contract.py:76-78。
+       （这三个是"不可见但被读写"的字段，最容易在视觉重构中被当垃圾删掉。）
+
+    C. 删除或合并折叠分组（LoRA/ControlNet/高级/X-Y）
+       → build_shared_groups 返回的 dict 键被 shell 用来整组显隐
+         （shell.py:207-208 遍历 _group_sections.values()）；
+         分组内控件全在 contracts.GLOBAL_WIDGETS 里；
+         tests/test_ui_contract.py:144-146 断言其中 6 个控件存在。
+
+    D. 改页面注册表 PAGES 或页面 page_id
+       → ui/pages/__init__.py:9、NavRail 按钮生成（nav.py:21-32）、
+         DEFAULT_SHORTCUTS 的 page_* 键（core/config_manager.py:16-19）、
+         shell.py:163-164 的快捷键安装循环、
+         tests/test_ui_contract.py:21（PAGE_WIDGETS 键集合断言）、
+         tests/test_real_startup.py:32（核心页面子集断言）。
+       ⚠ PAGE_WIDGETS 的键集合被测试写死为 4 个，新增页面若也想加专属控件，
+         必须同步改 test_ui_contract.py:21 的集合（characters 页就是"有页面但没有
+         PAGE_WIDGETS 条目"的现成例子）。
+
+    E. 改主题入口 / 替换 qdarkstyle
+       → main.py:964-969（分支）、ui/theme.py:50-71（apply_theme 返回主题名，
+         tests/test_theme.py:11-15 断言 PALETTE 是 dict 且含 accent、APP_QSS 含
+         "QPushButton"）、ui/splash.py:34、ui/disclaimer.py:183、
+         ui/extension_market.py:22、ui/gallery_panel.py:68（这 4 个文件从
+         ui.theme 导入 PALETTE）。
+       ⚠ 若把 PALETTE 改成 dataclass/对象，这 4 个文件的 `PALETTE['key']`
+         下标访问会立刻 TypeError（characters_page 的 C() 就是为这种不确定性写的兼容层，
+         但它自己因为导入 COLORS 失败而从未生效）。
+
+    F. 替换 FloatSlider / GpuCanvas
+       → 生成管线（app_generation.py:171 附近 _sld）、预设系统（param_snapshot.py:83-90、
+         :103-112）、ui/preset_manager.py:78-84、shell.py:258、7 个 UI 文件里的
+         20+ 处构造点。必须保持 float_value()/value()/setValue()/valueChanged。
+
+    G. 动 _wire 的签名或行为
+       → 5 个文件 import 它、共 55 处调用点（第 5.9 节清单）。
+         若改成抛异常，MiniApp 类测试桩会全部崩掉（tests/test_ui_contract.py:51、
+         :69、:92、:115、:136、:156 都是 MiniApp）。
+
+    H. 动 UI 线程与 Qt 控件的访问方式
+       → utils/app_generation.py:133 `_ui_read` 是唯一合法的跨线程读值通道
+         （30 秒超时）。重构若把控件改成"先取快照存到普通属性"，
+         必须保证仍在 GUI 线程写入，否则会重现它注释里写的"子线程读 Qt 偶发崩溃"。
+         调用点: app_generation.py 15 处、video_panel_mixin.py 3 处。
+
+8.3 与本次重构无关但建议记录的风险
+    - main.py:508-591 的 closeEvent 整段包在 try/except 里，
+      配置保存失败只 warning → "设置不生效"类问题极难定位（见 7.4）。
+    - QtMultimedia 不可用时 host.audio_output 会被设成 None（video_page.py:596-600），
+      而它仍在 PAGE_WIDGETS["video"] 里，因此 check_contract 会报 minor。
+      这在无音频设备的环境里是预期行为，不要误判成重构引入的缺陷。
+
+--------------------------------------------------------------------------------
+9. 验证方式（改完之后按顺序跑）
+--------------------------------------------------------------------------------
+
+    统一使用 venv 里的解释器，全部命令在项目根目录执行。
+
+    (1) venv\Scripts\python.exe tests\test_ui_contract.py
+        作用: UI 契约与外壳骨架的**主回归**。8 个测试函数覆盖
+              contracts 五个列表的内容与条目、假宿主的自检/降级/别名、
+              MiniApp 跑通 setup_ui、10 个核心控件、文生图页/图生图页/
+              动画页的控件与页面切换、共享折叠分组与列表别名。
+        期望: 退出码 0（脚本末尾用 os._exit(0)）。本次实测 stdout 共 7 行 PASS：
+              "PASS test_contract_lists / test_check_and_degrade"（前两个用例合打一行）、
+              test_shell_skeleton、test_core_widgets、test_txt2img_page、
+              test_img2img_page、test_shared_groups、test_video_page。
+        ⚠ 注意: 正常运行 stderr 里会有一组**预期内**的噪音——
+              "❌ 契约自检失败（关键）…" + 7 条"别名跳过（目标缺失）" +
+              50 余条"⚠️ 信号未连接（宿主缺方法）" + "⚠️ 契约自检（非关键缺失）: ['audio_output']"，
+              它们来自 test_check_and_degrade 故意造的最小假宿主，**不代表失败**；
+              判断标准只有退出码。
+        说明: 只要控件改名、页面从注册表掉出、或 _wire 目标方法大面积缺失，这里会红。
+
+    (2) venv\Scripts\python.exe tests\test_real_startup.py
+        作用: 走**真实启动路径** main.AIDesktopApp()（离屏、不等模型加载）。
+              断言: 默认 _UIMixin 必须是 ShellMixin；nav 存在；
+              {"txt2img","img2img","video","gallery"} ⊆ _pages；
+              gallery/filmstrip 存在；btn_generate 状态与预热状态一致；
+              apply_config_to_ui 跑过没炸；4 个页面切换不崩。
+        期望: 打印 "✅ 真实启动路径验证通过 (theme=…, 默认UI=ShellMixin)"，exit 0。
+        说明: 这是唯一验证"配置回填 + 真实 mixin 组合"的测试，重构必跑。
+              它不会加载模型（模型预热在后台 daemon 线程里被跳过）。
+
+    (3) venv\Scripts\python.exe tests\test_nav.py
+        作用: NavRail 单选导航单元验证（set_pages → select → page_selected
+              只发一次、按钮被选中）。
+        期望: "PASS test_nav"，exit 0。
+        说明: 若你重写导航（例如改成顶部 Tab），这个测试需要同步重写，
+              而不是删掉。
+
+    (4) venv\Scripts\python.exe tests\test_collapsible.py
+        作用: CollapsibleSection 的 API 契约: is_collapsed()、
+              content.isHidden()、content_layout.addWidget、
+              set_collapsed(False) 后可见。
+        期望: "PASS test_collapsible"，exit 0。
+        说明: 若把折叠分组换成 QGroupBox 或 QToolBox，必须改这个测试并保证
+              shared_groups 返回的 sections 结构仍被 shell 使用（见 8.2-C）。
+
+    (5) venv\Scripts\python.exe tests\test_theme.py
+        作用: apply_theme 可返回、PALETTE 是 dict 且含 "accent"、
+              APP_QSS 含 "QPushButton"。
+        期望: exit 0。做主题重构时这是最低成本的护栏。
+
+    (6) venv\Scripts\python.exe tests\test_v6_features.py
+        作用: v6 新功能回归（对比画布、对比流程、无快照时切换对比、资源监控、
+              悬停预览、胶片条复用/全量回填、翻译回译对比、模型诊断按钮、
+              胶片条右键、图生图对比快照）。共 11 个用例。
+        期望: 全部 PASS，exit 0。
+
+    (7) venv\Scripts\python.exe tests\test_gallery_unified.py
+        作用: 统一画廊 + 画廊页工具条（含 findChild 找
+              btnMediaAll/btnMediaImage/btnMediaVideo）+ 胶片条联动。
+        期望: exit 0。⚠ 这是目前唯一引用那三个 objectName 的测试，
+              是"画廊页 objectName 不能随手改"的隐式护栏。
+
+    (8) venv\Scripts\python.exe tests\test_settings.py
+        作用: SettingsDialog 与设置保存后立即生效（含快捷键重建）。
+        期望: exit 0。
+
+    (9) venv\Scripts\python.exe tests\test_regional.py
+        作用: 区域提示词链路（open_region_editor / clear_regions / regions /
+              _refresh_regions_summary / _apply_regions_if_enabled + RegionEditorDialog）。
+        期望: exit 0。新版区域功能在"高级选项"折叠分组里，重构分组时必跑。
+
+    (10) venv\Scripts\python.exe tests\test_builder_aux.py
+         作用: 生成上下文与辅助（_gt_* 相关，21 处引用 _gt_*）。
+         期望: exit 0。若重构碰了 core_panel 的控件读值路径，跑这个能兜住
+               "界面设置没进生成上下文"的问题。
+
+    (11) venv\Scripts\python.exe _check_all.py
+         作用: 全仓库静态检查——AST 解析所有 .py（报告语法失败）+ 疑似未定义名
+               （可能漏 import 的名字）。它**不做 UI 校验**，只保证"没写错名字/没漏 import"。
+         期望: 输出 "== 语法 ==" 检查文件数与失败数（应为 0），
+               以及 "== 疑似未定义名 ==" 命中数。
+         说明: 重构中大量复制粘贴样式代码时，这个脚本最容易提前发现
+               "用了未导入的 QCheckBox/QHBoxLayout"之类错误。
+
+    建议顺序: (11) → (1) → (2) → (3)(4)(5) → (6)(7)(8)(9)(10)。
+    另: 本审计期间实测 tests/test_ui_contract.py 在**未改动任何代码**的情况下
+        退出码为 0（本次任务只新增了本文件，未触碰任何 .py）。
+
+--------------------------------------------------------------------------------
+附: 本次审计的实测数据汇总（便于复核）
+--------------------------------------------------------------------------------
+  main.py                     992 行
+  utils/app_generation.py    2564 行      _gt_* 方法 20 个
+  utils/app_events.py        1498 行      hasattr( 56 处
+  main.py hasattr(           44 处        其中 closeEvent 内 14 处
+  apply_config_to_ui         181 行       内含 32 处 hasattr / 31 个控件名
+  ui/shell.py                1121 行      ShellMixin 方法 49 个
+  ui/ui_builder.py           2650 行      UIBuilderMixin 方法 64 个，控件 160 个
+  ui/core_panel.py            358 行      控件 36 个
+  ui/shared_groups.py         433 行      控件 58 个，4 个折叠分组
+  ui/param_snapshot.py        306 行      _CONTROL_LABELS 33 条
+  ui/widgets.py               184 行      3 个自定义控件
+  ui/ 合计                  14740 行      38 个 .py
+  硬编码 #rrggbb: ui/ 449 处 + ui/ 之外 163 处
+  契约条目: GLOBAL_WIDGETS 82 / PAGE_WIDGETS 44(4 键) / METHOD_CONTRACT 4 /
+            ALIASES 8 / LIST_ALIASES 2 / CRITICAL 11
+  重复: 同名控件 73 个（ui_builder vs core_panel/shared_groups）
+        同名方法 46 组；_CONTROL_LABELS 副本差 1 条（缺 chk_freeu）
+  AIDesktopApp 基类: QMainWindow + 7 个 mixin
+  center_stack 实测成员 4 个；params_stack 3 个
+  启动时 _wire 在 MiniApp 桩下报 54 条"宿主缺方法"告警（真实 app 不应出现）
+  check_contract（MiniApp）: critical = []，minor = ['audio_output']
+================================================================================
+  文档结束。本文件为本次审计的唯一新增文件，未修改任何其他文件。
+================================================================================
