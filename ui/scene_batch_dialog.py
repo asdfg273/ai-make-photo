@@ -12,10 +12,13 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QProgressBar, QMessageBox, QLineEdit,
     QPlainTextEdit, QSpinBox, QCheckBox, QGroupBox, QSplitter, QWidget,
-    QDoubleSpinBox,
+    QDoubleSpinBox, QTabWidget,
 )
 
+from ui.batch_result_view import BatchResultView
 from ui.i18n import ui_i18n
+from utils.batch_jobs import BatchJobStore
+
 logger = logging.getLogger(__name__)
 
 # ── 场景字段表：唯一需要维护字段名的地方 ───────────────────────
@@ -72,16 +75,27 @@ class SceneBatchDialog(QDialog):
         self._scenes: list = []
         self._widgets: dict = {}
         self._loading = False
+        self._job_store = getattr(runner, "job_store", None)
+        if self._job_store is None:
+            library_path = getattr(library, "path", None)
+            jobs_path = (os.path.join(os.path.dirname(str(library_path)), "jobs.json")
+                         if library_path else os.path.join("data", "jobs.json"))
+            self._job_store = BatchJobStore(jobs_path)
 
         name = getattr(character, "name", ui_i18n.tr("未命名角色"))
         self.setWindowTitle(ui_i18n.trf("批量出图 — {name}", name=name))
-        self.setMinimumSize(760, 520)
+        self.setMinimumSize(900, 600)
         self._build_ui()
         self._reload(select_uuid=None)
+        self._refresh_results()
+        self._refresh_resume()
 
     # ---------------- UI ----------------
     def _build_ui(self):
-        v = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        settings_page = QWidget()
+        v = QVBoxLayout(settings_page)
 
         self.lbl_head = QLabel()
         self.lbl_head.setTextFormat(Qt.TextFormat.RichText)
@@ -169,16 +183,25 @@ class SceneBatchDialog(QDialog):
 
         row3 = QHBoxLayout()
         self.btn_run = QPushButton("开始批量出图")
+        self.btn_resume = QPushButton("继续未完成场景")
         self.btn_open_out = QPushButton("打开输出目录")
         self.btn_close = QPushButton("关闭")
         self.btn_run.clicked.connect(self._on_run)
+        self.btn_resume.clicked.connect(self._on_resume)
         self.btn_open_out.clicked.connect(self._open_output_dir)
         self.btn_close.clicked.connect(self.close)
         row3.addWidget(self.btn_run)
+        row3.addWidget(self.btn_resume)
         row3.addStretch(1)
         row3.addWidget(self.btn_open_out)
         row3.addWidget(self.btn_close)
         v.addLayout(row3)
+
+        self.result_view = BatchResultView()
+        self.result_view.send_requested.connect(self._send_result_to_img2img)
+        self.tabs.addTab(settings_page, ui_i18n.tr("场景设置"))
+        self.tabs.addTab(self.result_view, ui_i18n.tr("批量结果"))
+        root.addWidget(self.tabs)
 
     def _connect_field(self, w, kind):
         if kind == "bool":
@@ -446,6 +469,55 @@ class SceneBatchDialog(QDialog):
             QMessageBox.critical(
                 self, ui_i18n.tr("错误"), ui_i18n.trf("打开输出目录失败：{error}", error=e))
 
+    def _refresh_results(self):
+        session = self._job_store.get(self._char_uuid())
+        self.result_view.set_manifest(session)
+
+    def _refresh_resume(self):
+        running = self._runner is not None and self._runner.running
+        count = len(self._job_store.unfinished(self._char_uuid()))
+        self.btn_resume.setText(
+            ui_i18n.trf("继续未完成场景 ({count})", count=count) if count
+            else ui_i18n.tr("继续未完成场景"))
+        self.btn_resume.setEnabled(count > 0 and not running)
+
+    def _on_resume(self):
+        if self.shell is None:
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"), ui_i18n.tr("缺少宿主对象（shell），无法启动生成。"))
+            return
+        if self._runner is None:
+            from utils.batch_runner import BatchRunner
+            self._runner = BatchRunner(self.shell, self.library, parent=self)
+            self._job_store = self._runner.job_store
+            self._owns_runner = True
+        if self._runner.running:
+            return
+        self._attach()
+        total = len(self._job_store.get(self._char_uuid()).get("jobs", []))
+        done = total - len(self._job_store.unfinished(self._char_uuid()))
+        self.bar.setRange(0, total)
+        self.bar.setValue(done)
+        self.btn_run.setEnabled(False)
+        self.btn_resume.setEnabled(False)
+        self.btn_close.setEnabled(False)
+        if not self._runner.resume(self.character, self._scenes):
+            self.lbl_status.setText(ui_i18n.tr("没有可续跑的未完成任务"))
+            self.btn_run.setEnabled(True)
+            self.btn_close.setEnabled(True)
+            self._detach()
+        self._refresh_results()
+        self._refresh_resume()
+
+    def _send_result_to_img2img(self, path: str):
+        sender = getattr(self.shell, "send_path_to_img2img", None)
+        if not callable(sender):
+            self.lbl_status.setText(ui_i18n.tr("当前宿主不支持图生图精修"))
+            return
+        sender(path)
+        if self._runner is None or not self._runner.running:
+            self.accept()
+
     def _on_run(self):
         chosen = self._selected()
         if not chosen:
@@ -467,6 +539,7 @@ class SceneBatchDialog(QDialog):
                     ui_i18n.trf("BatchRunner 导入失败：{error}", error=e))
                 return
             self._runner = BatchRunner(self.shell, self.library, parent=self)
+            self._job_store = self._runner.job_store
             self._owns_runner = True
 
         if self._runner.running:
@@ -479,6 +552,7 @@ class SceneBatchDialog(QDialog):
         self.bar.setRange(0, shots)
         self.bar.setValue(0)
         self.btn_run.setEnabled(False)
+        self.btn_resume.setEnabled(False)
         self.btn_close.setEnabled(False)
 
         if not self._runner.start(self.character, chosen):
@@ -486,6 +560,8 @@ class SceneBatchDialog(QDialog):
             self.btn_run.setEnabled(True)
             self.btn_close.setEnabled(True)
             self._detach()
+        self._refresh_results()
+        self._refresh_resume()
 
     def _attach(self):
         self._detach()
@@ -525,6 +601,8 @@ class SceneBatchDialog(QDialog):
             if it.data(Qt.ItemDataRole.UserRole) is sc and sc is not None:
                 it.setText(self._row_text(sc))
                 break
+        self._refresh_results()
+        self._refresh_resume()
 
     def _on_log(self, text: str):
         if text:
@@ -538,6 +616,8 @@ class SceneBatchDialog(QDialog):
         self.btn_close.setEnabled(True)
         self._detach()
         self._reload(select_uuid=None)
+        self._refresh_results()
+        self._refresh_resume()
         logger.info(f"[BatchDialog] 完成 成功={ok} 失败={fail}")
 
     def closeEvent(self, ev):
