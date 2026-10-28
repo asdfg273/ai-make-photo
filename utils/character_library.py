@@ -24,7 +24,14 @@ class Character:
     """角色数据结构"""
     name: str
     ref_image_path: str = ""
-    
+    # 多姿势参考图：[{"path": "...", "pose": "front|side|full|extra"}]
+    reference_images: List[dict] = field(default_factory=list)
+
+    # 脸部一致性校验
+    face_check_enabled: bool = True
+    face_similarity_threshold: float = 0.55
+    face_max_retries: int = 1
+
     # LoRA 配置
     lora_path: str = ""
     lora_weight: float = 0.75
@@ -60,6 +67,11 @@ class Character:
             self.created_at = datetime.now().isoformat()
         if not self.modified_at:
             self.modified_at = self.created_at
+        self.face_similarity_threshold = max(
+            0.0, min(1.0, float(self.face_similarity_threshold)))
+        self.face_max_retries = max(0, min(3, int(self.face_max_retries)))
+        from utils.character_references import normalize_references
+        normalize_references(self)
     
     def to_dict(self) -> dict:
         """转为字典（用于 JSON 序列化）"""
@@ -67,11 +79,11 @@ class Character:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Character':
-        """从字典恢复"""
-        # 处理旧版本兼容（extracted_features 可能是 None）
-        if data.get('extracted_features') is None:
-            data['extracted_features'] = None
-        return cls(**data)
+        """从字典恢复；不修改调用方传入的旧 JSON 数据。"""
+        values = dict(data)
+        if values.get('extracted_features') is None:
+            values['extracted_features'] = None
+        return cls(**values)
 
 
 class CharacterLibrary:
@@ -184,6 +196,11 @@ class CharacterLibrary:
                     dest = export_dir / Path(p).name
                     shutil.copy2(p, dest)
                     setattr(char, attr, dest.name)  # 副本里改，安全
+            for ref in char.reference_images:
+                path = Path(ref.get("path", ""))
+                if path.is_file():
+                    shutil.copy2(path, export_dir / path.name)
+                    ref["path"] = path.name
 
             json_path = export_dir / f"{char.name}.character.json"
             with open(json_path, "w", encoding="utf-8") as f:
@@ -212,20 +229,24 @@ class CharacterLibrary:
             with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
+            imported_refs = list(data.get("reference_images") or [])
+            if not imported_refs and data.get("ref_image_path"):
+                imported_refs = [{"path": data["ref_image_path"], "pose": "front"}]
             char = Character.from_dict(data)
-            
-            # 复制参考图到库目录
-            if char.ref_image_path:
-                import shutil
-                src = import_dir / char.ref_image_path
-                if src.exists():
-                    dest = self.library_dir / f"{char.uuid}_ref{src.suffix}"
+            char.reference_images = imported_refs
+
+            # 复制全部姿势参考图到库目录，再重建首图兼容字段。
+            for index, ref in enumerate(char.reference_images):
+                src = import_dir / str(ref.get("path", ""))
+                if src.is_file():
+                    dest = self.library_dir / f"{char.uuid}_ref_{index}{src.suffix}"
                     shutil.copy2(src, dest)
-                    char.ref_image_path = str(dest)
+                    ref["path"] = str(dest)
+            from utils.character_references import normalize_references
+            normalize_references(char)
             
             # 复制 ControlNet 图
             if char.controlnet_image_path:
-                import shutil
                 src = import_dir / char.controlnet_image_path
                 if src.exists():
                     dest = self.library_dir / f"{char.uuid}_cn{src.suffix}"

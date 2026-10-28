@@ -66,6 +66,7 @@ class _Job:
     scene: object
     index: int          # 该场景内第几张（0-based）
     output_paths: list[str] = field(default_factory=list)
+    retry_count: int = 0
 
 
 class BatchRunner(QObject):
@@ -76,11 +77,13 @@ class BatchRunner(QObject):
     finished   = pyqtSignal(int, int)         # ok, fail
     log        = pyqtSignal(str)
 
-    def __init__(self, host, library, parent=None, jobs_path=None):
+    def __init__(self, host, library, parent=None, jobs_path=None, face_checker=None):
         """host: 拥有 start_generation / txt_prompt / spin_steps 的宿主对象,即 shell。"""
         super().__init__(parent)
         self.host = host
         self.library = library
+        self._face_checker = face_checker
+        self._face_error = ""
         if jobs_path is None:
             library_path = getattr(library, "path", None)
             jobs_path = (Path(library_path).with_name("jobs.json") if library_path
@@ -262,8 +265,13 @@ class BatchRunner(QObject):
         paths = self._harvest(job, self._ts_dispatch)
         if paths:
             self._dead = 0
+            verdict = self._check_face(job, paths)
+            if verdict == "retry":
+                return self._retry_current_job()
             job.output_paths.extend(str(p) for p in paths)
             job.scene.output_paths.extend(str(p) for p in paths)
+            if verdict == "failed":
+                return self._finish_job("failed", self._face_error)
             return self._finish_job("done", "")
 
         if not self._saw_running:
@@ -278,6 +286,62 @@ class BatchRunner(QObject):
             return self._finish_job("failed", "未进入生成状态")
 
         return self._finish_job("failed", "未产出文件")
+
+    def _check_face(self, job: _Job, paths: list[Path]) -> str:
+        """收图后校验身份；返回 done/retry/failed，不在这里推进队列。"""
+        char = self._char
+        self._face_error = ""
+        if not getattr(char, "face_check_enabled", False):
+            return "done"
+        from utils.character_references import normalize_references
+        refs = normalize_references(char)
+        if not refs:
+            return "done"
+        if self._face_checker is None:
+            from utils.face_consistency import FaceConsistencyChecker
+            self._face_checker = FaceConsistencyChecker()
+        threshold = float(getattr(char, "face_similarity_threshold", 0.55))
+        result = self._face_checker.similarity(
+            str(paths[-1]), [ref["path"] for ref in refs], threshold=threshold)
+        if result.ok:
+            self.log.emit(f"脸部相似度通过: {result.score:.3f}")
+            return "done"
+        score = "无分数" if result.score is None else f"{result.score:.3f}"
+        if result.error:
+            self._face_error = f"脸部一致性未校验: {result.error}"
+            self.log.emit(self._face_error)
+            return "failed"
+        if job.retry_count < int(getattr(char, "face_max_retries", 1)):
+            job.retry_count += 1
+            self._face_error = f"脸部相似度 {score} 低于 {threshold:.2f}"
+            self._store_mark(job, "retrying", self._face_error)
+            self.log.emit(f"{self._face_error}，自动重 roll {job.retry_count} 次")
+            return "retry"
+        self._face_error = (
+            f"脸部相似度 {score} 低于 {threshold:.2f}，已达重试上限")
+        self.log.emit(self._face_error)
+        return "failed"
+
+    def _retry_current_job(self):
+        """用新种子重跑当前图片，不增加任务序号或成功计数。"""
+        job = self._cur
+        if job is None:
+            return self._wrap_up()
+        if self._stop:
+            return self._wrap_up()
+        job.scene.status = "running"
+        self._ts_dispatch = time.time()
+        self._out_before = self._snapshot_outputs()
+        self._saw_running = False
+        self._apply_seed(job.scene, job.index + job.retry_count)
+        seed = int(getattr(job.scene, "seed", -1))
+        self.host._seed_override = (
+            None if seed < 0 else seed + job.retry_count)
+        try:
+            self.host.start_generation()
+        except Exception as exc:
+            logger.exception("低相似度重 roll 启动失败")
+            return self._finish_job("failed", f"重 roll 启动失败: {exc}")
 
     def _store_mark(self, job: _Job, status: str, error: str = ""):
         try:
@@ -365,6 +429,21 @@ class BatchRunner(QObject):
     def _push_params(self, char, scene):
         host = self.host
         skipped: list[str] = []
+        host._active_character = char
+
+        # 每张任务按场景姿势选择角色参考图；无明确姿势时轮转。
+        from utils.character_references import select_reference
+        ref = select_reference(
+            char, getattr(scene, "pose_prompt", ""),
+            self._cur.index if self._cur is not None else 0)
+        if ref:
+            host.ipa_image_path = ref["path"]
+            setter = getattr(host, "set_reference_image", None)
+            if callable(setter):
+                setter(ref["path"], None)
+            else:
+                host.ref_image_path = ref["path"]
+            self.log.emit(f"参考图: {Path(ref['path']).name} ({ref['pose']})")
 
         # 提示词
         pos = (scene.merged_positive(getattr(char, "base_prompt", ""))

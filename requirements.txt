@@ -24,6 +24,7 @@ peft>=0.19
 safetensors>=0.4
 bitsandbytes>=0.49 ; sys_platform == "win32"
 onnxruntime-gpu
+insightface          # 角色批量出图的脸部一致性校验（首次使用需准备 buffalo_l 模型）
 
 # --- 模型下载 ---
 huggingface-hub>=1.24

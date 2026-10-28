@@ -13,7 +13,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter,
     QLabel, QPushButton, QLineEdit, QTextEdit, QScrollArea, QFrame,
     QFileDialog, QMessageBox, QSlider, QGroupBox, QComboBox,
-    QSizePolicy,
+    QSizePolicy, QListWidget, QListWidgetItem, QCheckBox,
+    QDoubleSpinBox, QSpinBox,
 )
 from PyQt6.QtCore import QObject
 from utils.character_library import CharacterLibrary, Character
@@ -210,14 +211,28 @@ class CharacterEditor(QWidget):
         self.in_name = QLineEdit(); self.in_name.setPlaceholderText("角色名称")
         r.addWidget(self.in_name, 1); l1.addLayout(r)
 
-        r = QHBoxLayout(); r.addWidget(QLabel("参考图:"))
+        r = QHBoxLayout(); r.addWidget(QLabel("参考图（2–4 张）:"))
         self.lbl_ref = QLabel("未选择")
         self.lbl_ref.setStyleSheet(f"color:{SUB};")
         self.lbl_ref.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         r.addWidget(self.lbl_ref, 1)
-        b = QPushButton("📁"); b.setFixedWidth(36)
-        b.clicked.connect(self.browse_ref); r.addWidget(b)
+        b = QPushButton("添加…"); b.setFixedWidth(58)
+        b.clicked.connect(self.browse_refs); r.addWidget(b)
+        b = QPushButton("移除"); b.setFixedWidth(52)
+        b.clicked.connect(self._remove_ref); r.addWidget(b)
         l1.addLayout(r)
+
+        self.ref_list = QListWidget()
+        self.ref_list.setMaximumHeight(88)
+        self.ref_list.currentRowChanged.connect(self._on_ref_selected)
+        l1.addWidget(self.ref_list)
+        r = QHBoxLayout(); r.addWidget(QLabel("姿势:"))
+        self.combo_ref_pose = QComboBox()
+        for label, pose in (("正面", "front"), ("侧面", "side"),
+                            ("全身", "full"), ("备用", "extra")):
+            self.combo_ref_pose.addItem(label, pose)
+        self.combo_ref_pose.currentIndexChanged.connect(self._set_ref_pose)
+        r.addWidget(self.combo_ref_pose, 1); l1.addLayout(r)
 
         self.lbl_preview = QLabel("无预览")
         self.lbl_preview.setFixedHeight(180)
@@ -237,6 +252,22 @@ class CharacterEditor(QWidget):
         self.btn_batch.setEnabled(False)
         self.btn_batch.clicked.connect(self.batch_request.emit)
         v.addWidget(self.btn_batch)
+
+        face_row = QHBoxLayout()
+        self.chk_face_check = QCheckBox("脸部一致性校验")
+        self.chk_face_check.setToolTip("批量收图后与全部参考图比对，低分自动重 roll")
+        face_row.addWidget(self.chk_face_check)
+        face_row.addWidget(QLabel("阈值:"))
+        self.spin_face_threshold = QDoubleSpinBox()
+        self.spin_face_threshold.setRange(0.0, 1.0)
+        self.spin_face_threshold.setSingleStep(0.05)
+        self.spin_face_threshold.setDecimals(2)
+        face_row.addWidget(self.spin_face_threshold)
+        face_row.addWidget(QLabel("重试:"))
+        self.spin_face_retries = QSpinBox()
+        self.spin_face_retries.setRange(0, 3)
+        face_row.addWidget(self.spin_face_retries)
+        v.addLayout(face_row)
 
         # —— LoRA ——
         g2 = QGroupBox("LoRA（可选）")
@@ -325,14 +356,16 @@ class CharacterEditor(QWidget):
         self.char = char
         self.in_name.setText(char.name)
         self.in_tags.setText(", ".join(char.tags or []))
-        self._set_path_label(self.lbl_ref, char.ref_image_path)
         self._set_path_label(self.lbl_lora, char.lora_path)
         self._set_path_label(self.lbl_cn, char.controlnet_image_path)
-        self._show_preview(char.ref_image_path)
+        self._refresh_ref_list()
         self.sl_lora.setValue(int(round(char.lora_weight * 100)))
         self.sl_ipa.setValue(int(round(char.ip_adapter_scale * 100)))
         self.sl_cn.setValue(int(round(char.controlnet_scale * 100)))
         self.cb_cn.setCurrentText(char.controlnet_type or "")
+        self.chk_face_check.setChecked(char.face_check_enabled)
+        self.spin_face_threshold.setValue(char.face_similarity_threshold)
+        self.spin_face_retries.setValue(char.face_max_retries)
         self.in_prompt.setPlainText(char.base_prompt or "")
         self.in_neg.setPlainText(char.negative_prompt or "")
         self.in_notes.setPlainText(char.notes or "")
@@ -343,6 +376,9 @@ class CharacterEditor(QWidget):
         c = self.char
         c.name = self.in_name.text().strip() or "未命名角色"
         c.tags = [t.strip() for t in self.in_tags.text().split(",") if t.strip()]
+        c.face_check_enabled = self.chk_face_check.isChecked()
+        c.face_similarity_threshold = self.spin_face_threshold.value()
+        c.face_max_retries = self.spin_face_retries.value()
         c.lora_weight      = self.sl_lora.value() / 100
         c.ip_adapter_scale = self.sl_ipa.value() / 100
         c.controlnet_type  = self.cb_cn.currentText().strip()
@@ -377,16 +413,91 @@ class CharacterEditor(QWidget):
             Qt.TransformationMode.SmoothTransformation,
         ))
 
-    def browse_ref(self):
+    def _refresh_ref_list(self):
+        from utils.character_references import normalize_references
+        refs = normalize_references(self.char) if self.char else []
+        self.ref_list.blockSignals(True)
+        self.ref_list.clear()
+        labels = {"front": "正面", "side": "侧面", "full": "全身", "extra": "备用"}
+        for ref in refs:
+            item = QListWidgetItem(f"[{labels[ref['pose']]}] {Path(ref['path']).name}")
+            item.setData(Qt.ItemDataRole.UserRole, ref["path"])
+            item.setToolTip(ref["path"])
+            self.ref_list.addItem(item)
+        self.ref_list.blockSignals(False)
+        self.lbl_ref.setText(f"已选择 {len(refs)} 张" if refs else "未选择")
+        if refs:
+            self.ref_list.setCurrentRow(0)
+        else:
+            self._show_preview("")
+
+    def _sync_refs(self):
+        if self.char is None:
+            return
+        refs = []
+        poses = ("front", "side", "full", "extra")
+        for row in range(self.ref_list.count()):
+            item = self.ref_list.item(row)
+            refs.append({"path": item.data(Qt.ItemDataRole.UserRole),
+                         "pose": item.data(Qt.ItemDataRole.UserRole + 1) or poses[row]})
+        self.char.reference_images = refs
+        self.char.ref_image_path = refs[0]["path"] if refs else ""
+        self.char.thumbnail_path = ""
+
+    def browse_refs(self):
         if self.char is None:
             self.new_character()
-        p, _ = QFileDialog.getOpenFileName(
-            self, "选择参考图", "", "图像 (*.png *.jpg *.jpeg *.webp *.bmp)")
-        if p:
-            self.char.ref_image_path = p
-            self.char.thumbnail_path = ""
-            self._set_path_label(self.lbl_ref, p)
-            self._show_preview(p)
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择 2–4 张参考图", "", "图像 (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if not paths:
+            return
+        existing = {self.ref_list.item(row).data(Qt.ItemDataRole.UserRole)
+                    for row in range(self.ref_list.count())}
+        poses = ("front", "side", "full", "extra")
+        for path in paths:
+            if path in existing or self.ref_list.count() >= 4:
+                continue
+            row = self.ref_list.count()
+            item = QListWidgetItem(Path(path).name)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setData(Qt.ItemDataRole.UserRole + 1, poses[row])
+            item.setToolTip(path)
+            self.ref_list.addItem(item)
+            existing.add(path)
+        self._sync_refs()
+        self._refresh_ref_list()
+
+    def browse_ref(self):
+        """旧单图入口保留，内部使用同一多图列表。"""
+        self.browse_refs()
+
+    def _remove_ref(self):
+        row = self.ref_list.currentRow()
+        if row >= 0:
+            self.ref_list.takeItem(row)
+            self._sync_refs()
+            self._refresh_ref_list()
+
+    def _on_ref_selected(self, row):
+        if row < 0 or self.char is None:
+            return
+        item = self.ref_list.item(row)
+        self.combo_ref_pose.blockSignals(True)
+        index = self.combo_ref_pose.findData(item.data(Qt.ItemDataRole.UserRole + 1))
+        self.combo_ref_pose.setCurrentIndex(max(0, index))
+        self.combo_ref_pose.blockSignals(False)
+        self._show_preview(item.data(Qt.ItemDataRole.UserRole))
+
+    def _set_ref_pose(self):
+        row = self.ref_list.currentRow()
+        if row < 0:
+            return
+        item = self.ref_list.item(row)
+        item.setData(Qt.ItemDataRole.UserRole + 1, self.combo_ref_pose.currentData())
+        self._sync_refs()
+        self._refresh_ref_list()
+        self.ref_list.setCurrentRow(row)
+
 
     def browse_lora(self):
         if self.char is None:
@@ -759,6 +870,10 @@ class CharactersPage(QObject):
         if not char.name.strip():
             QMessageBox.warning(self._ws, "提示", "角色名称不能为空")
             return
+        if self._shell is not None:
+            from utils.character_features import preextract_character_features
+            self._shell._character_library = self.library
+            preextract_character_features(self._shell, char)
         if self.library.save_character(char):
             self._select(char.uuid)
             self.refresh()
@@ -829,6 +944,10 @@ class CharactersPage(QObject):
         char = self.editor.collect()
         if char is None:
             return
+        if self._shell is not None:
+            from utils.character_features import preextract_character_features
+            self._shell._character_library = self.library
+            preextract_character_features(self._shell, char)
         self.library.save_character(char)
         self.refresh()
         self._select(char.uuid)
@@ -888,6 +1007,9 @@ def _apply_character_to_shell(shell, char: Character, parent):
         return
 
     applied, skipped = [], []
+    from utils.character_references import normalize_references
+    normalize_references(char)
+    shell._active_character = char
 
     if hasattr(shell, "nav") and pid:
         try:
@@ -896,6 +1018,7 @@ def _apply_character_to_shell(shell, char: Character, parent):
             pass
 
     if char.ref_image_path and Path(char.ref_image_path).exists():
+        shell.ipa_image_path = char.ref_image_path
         # 参考图状态/缩略图都挂在 shell 上（页面实例只是工作区容器）
         if hasattr(shell, "set_reference_image"):
             shell.set_reference_image(char.ref_image_path, None)
@@ -1003,6 +1126,17 @@ def _apply_character_to_shell(shell, char: Character, parent):
             return True
         box.setPlainText(f"{new_text}, {cur}" if cur else new_text)
         return True
+
+    prompt_box = getattr(shell, "txt_prompt", None)
+    if prompt_box is not None and combos:
+        from utils.lora_triggers import merge_triggers
+        displays = [combo.currentText() for combo in combos]
+        paths = [char.lora_path] + [""] * max(0, len(displays) - 1)
+        old_prompt = prompt_box.toPlainText().strip()
+        new_prompt = merge_triggers(old_prompt, displays, paths)
+        if new_prompt != old_prompt:
+            prompt_box.setPlainText(new_prompt)
+            applied.append("LoRA 触发词")
 
     if char.base_prompt:
         if _merge(lambda: getattr(shell, "txt_prompt", None), char.base_prompt):

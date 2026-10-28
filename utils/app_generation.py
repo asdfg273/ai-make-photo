@@ -351,6 +351,18 @@ class GenerationMixin:
         raw_prompt = self._txt(getattr(self, 'txt_prompt', None))
         raw_neg    = self._txt(getattr(self, 'txt_neg', None))
 
+        # 所选 LoRA 的内联/旁文件触发词自动进入本次生成，不反复改写 UI。
+        try:
+            from utils.lora_triggers import merge_triggers
+            displays = [combo.currentText() for combo in
+                        (getattr(self, "combo_loras", None) or [])]
+            active_char = getattr(self, "_active_character", None)
+            lora_paths = ([getattr(active_char, "lora_path", "")]
+                          if active_char is not None else [])
+            raw_prompt = merge_triggers(raw_prompt, displays, lora_paths)
+        except Exception as exc:
+            logger.warning(f"LoRA 触发词自动注入失败(忽略): {exc}")
+
         # ── 提取 <lora:name:weight> 标签 ──
         # 社区通用写法。以前 parse_dynamic_prompt 只是把标签删掉却不用，
         # 用户以为挂了 LoRA 其实没有。
@@ -462,8 +474,10 @@ class GenerationMixin:
                    or getattr(self, 'ref_image_path', None))
         auto_extract = self._chk(getattr(self, 'chk_auto_features', None))
 
-        if ref_img is not None and auto_extract and _current_page in ("img2img", "txt2img"):
-            extracted_features = self._gt_extract_character_features(ref_img)
+        if ref_img is not None and _current_page in ("img2img", "txt2img"):
+            from utils.character_features import feature_for_generation
+            extracted_features = feature_for_generation(
+                self, ref_img, allow_extract=auto_extract)
 
         # ── 翻译每个 prompt,并把特征拼到最前面 ──
         # 注意顺序：先拼特征再查预算，因为特征串本身也吃 token 预算
