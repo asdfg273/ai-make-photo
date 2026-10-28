@@ -15,11 +15,13 @@ if TYPE_CHECKING:
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+
+from utils.batch_jobs import BatchJobStore
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,7 @@ def resolve_output_dir(config=None) -> Path:
 class _Job:
     scene: object
     index: int          # 该场景内第几张（0-based）
+    output_paths: list[str] = field(default_factory=list)
 
 
 class BatchRunner(QObject):
@@ -73,11 +76,16 @@ class BatchRunner(QObject):
     finished   = pyqtSignal(int, int)         # ok, fail
     log        = pyqtSignal(str)
 
-    def __init__(self, host, library, parent=None):
+    def __init__(self, host, library, parent=None, jobs_path=None):
         """host: 拥有 start_generation / txt_prompt / spin_steps 的宿主对象,即 shell。"""
         super().__init__(parent)
         self.host = host
         self.library = library
+        if jobs_path is None:
+            library_path = getattr(library, "path", None)
+            jobs_path = (Path(library_path).with_name("jobs.json") if library_path
+                         else Path("data/jobs.json"))
+        self.job_store = BatchJobStore(jobs_path)
         self._queue: list[_Job] = []
         self._cur: Optional[_Job] = None
         self._char = None
@@ -117,19 +125,58 @@ class BatchRunner(QObject):
             self.log.emit("没有启用的场景")
             return False
 
+        for scene in scenes:
+            scene.status, scene.error, scene.output_paths = "pending", "", []
+        try:
+            self.job_store.begin(char, scenes)
+        except Exception as exc:
+            logger.warning("批量任务清单创建失败: %s", exc)
         self._queue, self._ok, self._fail = jobs, 0, 0
         self._total = len(jobs)
+        return self._activate(char)
+
+    def resume(self, char, scenes) -> bool:
+        """仅恢复清单中未成功的图片，已成功输出保留在结果页。"""
+        if self._running:
+            return False
+        if not callable(getattr(self.host, "start_generation", None)):
+            self.log.emit("host 上没有 start_generation，无法续跑")
+            return False
+        session = self.job_store.get(getattr(char, "uuid", ""))
+        by_uuid = {getattr(scene, "uuid", ""): scene for scene in scenes}
+        items = [item for item in session.get("jobs", [])
+                 if item.get("scene_uuid") in by_uuid]
+        jobs: list[_Job] = []
+        for scene in by_uuid.values():
+            scene.status, scene.error, scene.output_paths = "pending", "", []
+        for item in items:
+            scene = by_uuid[item["scene_uuid"]]
+            job = _Job(scene, int(item.get("index", 0)),
+                       list(item.get("output_paths", [])))
+            if item.get("status") == "done":
+                scene.output_paths.extend(job.output_paths)
+                scene.status = "done"
+            else:
+                scene.status = "pending"
+                jobs.append(job)
+        if not jobs:
+            self.log.emit("没有可续跑的未完成任务")
+            return False
+        self._queue = jobs
+        self._ok = sum(item.get("status") == "done" for item in items)
+        self._fail = 0
+        self._total = len(items)
+        return self._activate(char)
+
+    def _activate(self, char) -> bool:
         self._char = char
         self._stop = self._wrapped = self._finished = False
         self._dead = 0
         self._running = True
         self._set_batch_mode(True)
-
-        for s in scenes:
-            s.status, s.error, s.output_paths = "pending", "", []
         self._save_library()
-
-        self.progress.emit(0, self._total, f"共 {self._total} 张，开始…")
+        done = self._ok + self._fail
+        self.progress.emit(done, self._total, f"共 {self._total} 张，开始…")
         self._timer.start()
         self._dispatch_next()
         return True
@@ -171,6 +218,7 @@ class BatchRunner(QObject):
             return self._finish_job("failed", f"参数下发失败: {e}")
 
         scene.status = "running"
+        self._store_mark(job, "running")
         done = self._ok + self._fail
         self.progress.emit(
             done, self._total,
@@ -214,6 +262,7 @@ class BatchRunner(QObject):
         paths = self._harvest(job, self._ts_dispatch)
         if paths:
             self._dead = 0
+            job.output_paths.extend(str(p) for p in paths)
             job.scene.output_paths.extend(str(p) for p in paths)
             return self._finish_job("done", "")
 
@@ -230,6 +279,14 @@ class BatchRunner(QObject):
 
         return self._finish_job("failed", "未产出文件")
 
+    def _store_mark(self, job: _Job, status: str, error: str = ""):
+        try:
+            self.job_store.mark(
+                getattr(self._char, "uuid", ""), getattr(job.scene, "uuid", ""),
+                job.index, status, error, job.output_paths)
+        except Exception as exc:
+            logger.warning("批量任务清单更新失败: %s", exc)
+
     def _finish_job(self, status: str, err: str):
         job = self._cur
         self._cur = None
@@ -240,6 +297,7 @@ class BatchRunner(QObject):
                 self._fail += 1
             job.scene.status = status
             job.scene.error = err
+            self._store_mark(job, status, err)
             self._save_library()
             self.scene_done.emit(getattr(job.scene, "uuid", ""), status)
         if self._stop:
@@ -255,6 +313,10 @@ class BatchRunner(QObject):
         """
         if self._wrapped:
             return
+        if self._stop and self._cur is not None:
+            self._cur.scene.status = "pending"
+            self._cur.scene.error = "已停止"
+            self._store_mark(self._cur, "pending", "已停止")
         self._wrapped = True
         self._running = False
         self._cur = None
