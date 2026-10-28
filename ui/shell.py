@@ -1035,8 +1035,9 @@ class ShellMixin:
             return
         try:
             from workflow.preflight import run_preflight
-            res = run_preflight(wf, host=self, ai=getattr(self, "ai", None))
-            text = (f"节点链：\n{_describe_chain(wf)}\n\n" + res.to_text())
+            res = run_preflight(
+                wf, host=self, ai=getattr(self, "ai", None), translate=ui_i18n.tr)
+            text = (f"节点链：\n{_describe_chain(wf)}\n\n" + res.to_text(translate=ui_i18n.tr))
             if res.errors:
                 QMessageBox.warning(self, ui_i18n.tr("预检未通过"), text)
             else:

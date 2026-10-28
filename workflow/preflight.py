@@ -201,12 +201,13 @@ def _detect_arch(path: str) -> str:
         return "unknown"
 
 
-def _check_structure(wf, res: PreflightResult):
+def _check_structure(wf, res: PreflightResult, *, translate=None):
     """工作流结构 + 节点输入完整性（复用 graph.validate）。"""
+    tr = translate or (lambda text: text)
     try:
-        issues = graph_mod.validate(wf)
+        issues = graph_mod.validate(wf, translate=tr)
     except Exception as e:
-        res.add(ERROR, "structure", f"工作流校验异常: {e}")
+        res.add(ERROR, "structure", tr("工作流校验异常: {error}").format(error=e))
         return
     for i in issues:
         if i.level == "error":
@@ -214,17 +215,18 @@ def _check_structure(wf, res: PreflightResult):
         else:
             res.add(WARNING, "structure", i.message, i.node_id)
     if not wf.nodes:
-        res.add(ERROR, "structure", "工作流是空的，没有可执行的节点")
+        res.add(ERROR, "structure", tr("工作流是空的，没有可执行的节点"))
 
 
-def _check_models(wf, res: PreflightResult, ai) -> List[dict]:
+def _check_models(wf, res: PreflightResult, ai, *, translate=None) -> List[dict]:
     """底模：存在性 + 架构 + 与节点能力是否匹配。"""
+    tr = translate or (lambda text: text)
     found: List[dict] = []
     loaders = [n for n in wf.nodes if n.type == "LoadCheckpoint"]
     if not loaders:
         res.add(WARNING, "no_checkpoint",
-                "工作流里没有 LoadCheckpoint 节点",
-                fix="如果你打算用当前已加载的模型，可以忽略这条")
+                tr("工作流里没有 LoadCheckpoint 节点"),
+                fix=tr("如果你打算用当前已加载的模型，可以忽略这条"))
         return found
 
     archs = set()
@@ -235,14 +237,14 @@ def _check_models(wf, res: PreflightResult, ai) -> List[dict]:
         name = name.strip()
         if not name:
             res.add(ERROR, "model_path_empty",
-                    "没有指定模型文件", n.id,
-                    fix="在 LoadCheckpoint 的「模型」里从下拉框选一个本地底模")
+                    tr("没有指定模型文件"), n.id,
+                    fix=tr("在 LoadCheckpoint 的「模型」里从下拉框选一个本地底模"))
             continue
         path = _find_checkpoint(name)
         if not path:
             res.add(ERROR, "model_missing",
-                    f"找不到模型文件「{name}」", n.id,
-                    fix="放到 models/puton/ 让程序自动归位，或从下拉框重新选择")
+                    tr("找不到模型文件「{name}」").format(name=name), n.id,
+                    fix=tr("放到 models/puton/ 让程序自动归位，或从下拉框重新选择"))
             found.append({"type": "checkpoint", "name": name, "present": False})
             continue
         arch = _detect_arch(path)
@@ -250,25 +252,28 @@ def _check_models(wf, res: PreflightResult, ai) -> List[dict]:
                       "present": True, "arch": arch, "path": path})
         if arch == "unknown":
             res.add(WARNING, "model_arch_unknown",
-                    f"无法识别「{os.path.basename(path)}」的架构", n.id,
-                    fix="仍可尝试运行；若失败请确认它是不是完整底模")
+                    tr("无法识别「{name}」的架构").format(
+                        name=os.path.basename(path)), n.id,
+                    fix=tr("仍可尝试运行；若失败请确认它是不是完整底模"))
         else:
             archs.add(arch)
             ad = adapters.get_adapter(arch)
             if not ad.caps.txt2img:
                 res.add(ERROR, "arch_unsupported",
-                        f"架构 {arch} 当前不支持生成", n.id)
+                        tr("架构 {arch} 当前不支持生成").format(arch=arch), n.id)
         # clip_skip 适用性
         cs = int(n.params.get("clip_skip") or 0)
         if cs > 0 and arch in ("sdxl", "pony", "sd3", "flux", "anima"):
             res.add(HINT, "clip_skip_ignored",
-                    f"{arch} 上 CLIP Skip 不生效（管线固定使用倒数第二层）", n.id,
-                    fix="可以忽略，或把 CLIP Skip 设为 0")
+                    tr("{arch} 上 CLIP Skip 不生效（管线固定使用倒数第二层）").format(
+                        arch=arch), n.id,
+                    fix=tr("可以忽略，或把 CLIP Skip 设为 0"))
 
     if len(archs) > 1:
         res.add(WARNING, "mixed_arch",
-                f"工作流里同时用了多种架构的底模: {', '.join(sorted(archs))}",
-                fix="不同架构的节点通常共用同一个 UNet，混用可能互相覆盖")
+                tr("工作流里同时用了多种架构的底模: {archs}").format(
+                    archs=", ".join(sorted(archs))),
+                fix=tr("不同架构的节点通常共用同一个 UNet，混用可能互相覆盖"))
 
     # 节点能力 vs 架构
     if archs:
@@ -283,13 +288,15 @@ def _check_models(wf, res: PreflightResult, ai) -> List[dict]:
             feat = need.get(n.type)
             if feat and not ad.supports(feat):
                 res.add(ERROR, "capability",
-                        f"{arch} 架构不支持 {n.type}（{feat}）", n.id,
-                        fix=f"删掉这个节点，或改用支持该功能的底模")
+                        tr("{arch} 架构不支持 {node}（{feature}）").format(
+                            arch=arch, node=n.type, feature=feat), n.id,
+                        fix=tr("删掉这个节点，或改用支持该功能的底模"))
     return found
 
 
-def _check_loras(wf, res: PreflightResult, model_arch: str):
+def _check_loras(wf, res: PreflightResult, model_arch: str, *, translate=None):
     """LoRA：存在性 + 是否适用于当前底模（最容易踩的坑）。"""
+    tr = translate or (lambda text: text)
     names = []
     for n in wf.nodes:
         if n.type != "LoadLoRA":
@@ -309,8 +316,8 @@ def _check_loras(wf, res: PreflightResult, model_arch: str):
         path = _find_lora(nm)
         if not path:
             res.add(ERROR, "lora_missing",
-                    f"找不到 LoRA「{nm}」", node_id,
-                    fix="放到 loras/ 对应架构子目录，或用下拉框重新选择")
+                    tr("找不到 LoRA「{name}」").format(name=nm), node_id,
+                    fix=tr("放到 loras/ 对应架构子目录，或用下拉框重新选择"))
             continue
         larch = _detect_arch(path)
         # LoRA 的 arch_id 形如 lora_sd15 / lora_sdxl / lora_dit
@@ -318,28 +325,31 @@ def _check_loras(wf, res: PreflightResult, model_arch: str):
                  "lora_sdxl": "sdxl"}.get(larch)
         if l_sub and exp_sub and l_sub != exp_sub:
             res.add(ERROR, "lora_arch_mismatch",
-                    f"LoRA「{nm}」是 {l_sub} 用的，但主模型是 {model_arch}"
-                    f"（{exp_sub}）", node_id,
-                    fix="换一个对应架构的 LoRA，或换底模")
+                    tr("LoRA「{name}」是 {lora_arch} 用的，但主模型是 {model_arch}"
+                       "（{expected_arch}）").format(
+                           name=nm, lora_arch=l_sub, model_arch=model_arch,
+                           expected_arch=exp_sub), node_id,
+                    fix=tr("换一个对应架构的 LoRA，或换底模"))
         elif larch == "lora_dit":
             res.add(WARNING, "lora_dit",
-                    f"LoRA「{nm}」看起来是 DiT 架构的，与 {model_arch} 不匹配",
-                    node_id)
+                    tr("LoRA「{name}」看起来是 DiT 架构的，与 {model_arch} 不匹配").format(
+                        name=nm, model_arch=model_arch), node_id)
         elif larch in ("lora", "unknown"):
             res.add(HINT, "lora_arch_unknown",
-                    f"无法确定 LoRA「{nm}」适用的架构", node_id,
-                    fix="若出图异常请检查它是否与底模同代")
+                    tr("无法确定 LoRA「{name}」适用的架构").format(name=nm), node_id,
+                    fix=tr("若出图异常请检查它是否与底模同代"))
 
 
-def _check_vae(wf, res: PreflightResult, model_arch: str):
+def _check_vae(wf, res: PreflightResult, model_arch: str, *, translate=None):
     """VAE：存在性 + 兼容性（按文件名/体积粗判）。"""
+    tr = translate or (lambda text: text)
     for n in wf.nodes:
         if n.type != "LoadVAE":
             continue
         name = (n.params.get("path") or "").strip()
         if not name:
-            res.add(ERROR, "vae_path_empty", "没有指定 VAE 文件", n.id,
-                    fix="从下拉框选一个本地 VAE，或删掉这个节点")
+            res.add(ERROR, "vae_path_empty", tr("没有指定 VAE 文件"), n.id,
+                    fix=tr("从下拉框选一个本地 VAE，或删掉这个节点"))
             continue
         from utils import paths
         found = None
@@ -354,24 +364,27 @@ def _check_vae(wf, res: PreflightResult, model_arch: str):
             if found:
                 break
         if not found:
-            res.add(ERROR, "vae_missing", f"找不到 VAE「{name}」", n.id)
+            res.add(ERROR, "vae_missing",
+                    tr("找不到 VAE「{name}」").format(name=name), n.id)
             continue
         low = os.path.basename(found).lower()
         size_mb = os.path.getsize(found) / 1024 ** 2
         looks_sdxl = ("xl" in low) or size_mb > 250
         if model_arch in ("sd15", "sd21") and looks_sdxl:
             res.add(ERROR, "vae_mismatch",
-                    f"VAE「{name}」看起来是 SDXL 用的（{size_mb:.0f}MB），"
-                    f"与 SD1.5 底模不兼容", n.id,
-                    fix="换成 SD1.5 的 VAE，或删掉这个节点")
+                    tr("VAE「{name}」看起来是 SDXL 用的（{size}MB），"
+                       "与 SD1.5 底模不兼容").format(
+                           name=name, size=f"{size_mb:.0f}"), n.id,
+                    fix=tr("换成 SD1.5 的 VAE，或删掉这个节点"))
         elif model_arch in ("sdxl", "pony") and not looks_sdxl:
             res.add(WARNING, "vae_maybe_sd15",
-                    f"VAE「{name}」体积只有 {size_mb:.0f}MB，可能不是 SDXL 的",
-                    n.id)
+                    tr("VAE「{name}」体积只有 {size}MB，可能不是 SDXL 的").format(
+                        name=name, size=f"{size_mb:.0f}"), n.id)
 
 
-def _check_controlnet(wf, res: PreflightResult, model_arch: str):
+def _check_controlnet(wf, res: PreflightResult, model_arch: str, *, translate=None):
     """ControlNet：类型是否被支持 + 本地是否已安装。"""
+    tr = translate or (lambda text: text)
     applied = [n for n in wf.nodes if n.type == "ControlNetApply"]
     if not applied:
         return
@@ -388,79 +401,86 @@ def _check_controlnet(wf, res: PreflightResult, model_arch: str):
                     kind = (src.params.get("kind") or "openpose")
         if kind not in supported:
             res.add(ERROR, "cn_kind_unsupported",
-                    f"ControlNet 类型「{kind}」目前无法加载"
-                    f"（只支持 {'/'.join(supported)}）", n.id,
-                    fix="改用 openpose / canny / depth；"
-                        "其它类型目前只能单独做预处理出图")
+                    tr("ControlNet 类型「{kind}」目前无法加载（只支持 {supported}）").format(
+                        kind=kind, supported="/".join(supported)), n.id,
+                    fix=tr("改用 openpose / canny / depth；其它类型目前只能单独做预处理出图"))
             continue
         try:
             from core.model_manager import ModelManager
             src_path, how = ModelManager.describe_local_controlnet(
                 kind, is_sdxl=is_sdxl)
         except Exception as e:
-            src_path, how = None, f"探测失败: {e}"
+            src_path, how = None, tr("探测失败: {error}").format(error=e)
         if not src_path:
             res.add(ERROR, "cn_missing",
-                    f"本地没有可用的 ControlNet 权重（{kind}"
-                    f"{'，SDXL' if is_sdxl else '，SD1.5'}）", n.id,
-                    fix="在「扩展市场 → 控制」里下载，或把权重放进 controlnets/")
+                    tr("本地没有可用的 ControlNet 权重（{kind}，{arch}）").format(
+                        kind=kind, arch="SDXL" if is_sdxl else "SD1.5"), n.id,
+                    fix=tr("在「扩展市场 → 控制」里下载，或把权重放进 controlnets/"))
         else:
-            res.add(HINT, "cn_ok", f"ControlNet {kind} 已就绪（{how}）", n.id)
+            res.add(HINT, "cn_ok", tr("ControlNet {kind} 已就绪（{how}）").format(
+                kind=kind, how=how), n.id)
 
 
-def _check_assets(wf, res: PreflightResult):
+def _check_assets(wf, res: PreflightResult, *, translate=None):
     """节点声明的可下载资产 / 外部工具是否齐备。"""
+    tr = translate or (lambda text: text)
     try:
         from workflow import resource_manager as RM
         reqs = RM.collect(wf)
     except Exception as e:
-        res.add(WARNING, "assets_probe_failed", f"资源探测失败: {e}")
+        res.add(WARNING, "assets_probe_failed",
+                tr("资源探测失败: {error}").format(error=e))
         return
     for r in reqs:
         if r.kind == "asset" and not r.present:
+            size = tr("（约 {size}GB）").format(
+                size=f"{r.size_mb / 1024:.1f}") if r.size_mb else ""
             res.add(ERROR, "asset_missing",
-                    f"缺少组件：{r.label or r.key}"
-                    + (f"（约 {r.size_mb / 1024:.1f}GB）" if r.size_mb else ""),
+                    tr("缺少组件：{label}{size}").format(
+                        label=r.label or r.key, size=size),
                     (r.nodes or [""])[0],
-                    fix="在「工具 → 🛒 扩展市场」里下载（程序不会自动联网下载）")
+                    fix=tr("在「工具 → 🛒 扩展市场」里下载（程序不会自动联网下载）"))
         elif r.kind == "tool" and not r.present:
             res.add(ERROR, "tool_missing",
-                    f"缺少外部工具：{r.key}", (r.nodes or [""])[0],
-                    fix="在扩展市场安装，或自行准备")
+                    tr("缺少外部工具：{name}").format(name=r.key),
+                    (r.nodes or [""])[0], fix=tr("在扩展市场安装，或自行准备"))
 
 
-def _check_vram(wf, res: PreflightResult, policy, cap):
+def _check_vram(wf, res: PreflightResult, policy, cap, *, translate=None):
     """显存：按节点声明估算，并说明会自动采取什么策略。"""
+    tr = translate or (lambda text: text)
     try:
         specs = [(n.id, registry.get(n.type)) for n in wf.nodes
                  if registry.exists(n.type)]
         from workflow.memory_policy import plan_for_nodes
-        plan = plan_for_nodes(policy, specs, cap=cap)
+        plan = plan_for_nodes(policy, specs, cap=cap, translate=tr)
     except Exception as e:
-        res.add(WARNING, "vram_probe_failed", f"显存估算失败: {e}")
+        res.add(WARNING, "vram_probe_failed", tr("显存估算失败: {error}").format(error=e))
         return
     res.plan = plan
     res.estimated_vram_mb = int(plan.get("total_peak_mb", 0))
-    res.policy = policy.describe()
+    res.policy = policy.describe(translate=tr)
 
     for w in plan.get("warnings", []):
         res.add(WARNING, "vram", w)
     if cap.has_cuda and res.estimated_vram_mb > cap.total_gb * 1024 * 0.9:
         res.add(WARNING, "vram_tight",
-                f"节点声明显存合计约 {res.estimated_vram_mb} MB，"
-                f"占设备 {cap.total_gb * 1024:.0f} MB 的比例偏高",
-                fix="程序会自动启用分块/CPU offload，速度会下降")
+                tr("节点声明显存合计约 {estimated} MB，占设备 {total} MB 的比例偏高").format(
+                    estimated=res.estimated_vram_mb,
+                    total=f"{cap.total_gb * 1024:.0f}"),
+                fix=tr("程序会自动启用分块/CPU offload，速度会下降"))
     if policy.cpu_offload:
         res.add(WARNING, "vram_offload",
-                f"当前显存 {cap.total_gb:.1f}GB，已自动启用 CPU Offload",
-                fix="这是正常的省显存模式；显存更大时可切「高性能」预设提速")
+                tr("当前显存 {total}GB，已自动启用 CPU Offload").format(
+                    total=f"{cap.total_gb:.1f}"),
+                fix=tr("这是正常的省显存模式；显存更大时可切「高性能」预设提速"))
     n_cn = len([n for n in wf.nodes if n.type == "ControlNetApply"])
     if n_cn >= 2:
         res.add(WARNING, "vram_many_cn",
-                f"当前工作流包含 {n_cn} 个 ControlNet，预计速度较慢")
+                tr("当前工作流包含 {count} 个 ControlNet，预计速度较慢").format(count=n_cn))
 
 
-def _check_output_dir(wf, res: PreflightResult, host):
+def _check_output_dir(wf, res: PreflightResult, host, *, translate=None):
     """输出目录：能不能写 + **有没有被静默回退**。
 
     ⚠️ 只检查 `host_output_dir()` 是不够的：`resolve_output_dir()` 在配置目录
@@ -468,6 +488,7 @@ def _check_output_dir(wf, res: PreflightResult, host):
     问题 —— 用户以为图存进了自己选的目录，其实全落在 photo/。
     所以这里额外比对「配置值 vs 实际解析值」，把回退暴露出来。
     """
+    tr = translate or (lambda text: text)
     from utils import paths
     cfg = getattr(host, "config", None) if host is not None else None
     raw = (getattr(cfg, "output_dir", "") or "").strip()
@@ -476,8 +497,8 @@ def _check_output_dir(wf, res: PreflightResult, host):
         from utils.paths import resolve_output_dir
         resolved = str(resolve_output_dir(cfg))
     except Exception as e:
-        res.add(ERROR, "output_dir", f"输出目录解析失败: {e}",
-                fix="在「输出设置 → 输出目录」换一个可写目录")
+        res.add(ERROR, "output_dir", tr("输出目录解析失败: {error}").format(error=e),
+                fix=tr("在「输出设置 → 输出目录」换一个可写目录"))
         return
 
     # 历史占位值 "outputs/" 不算"用户自定义目录" —— paths.resolve_output_dir
@@ -491,8 +512,9 @@ def _check_output_dir(wf, res: PreflightResult, host):
                 == os.path.normcase(os.path.abspath(resolved)))
         if not same:
             res.add(WARNING, "output_dir_fallback",
-                    f"配置的输出目录「{raw}」不可用，实际会写到 {resolved}",
-                    fix="换一个可写目录（检查盘符是否存在、权限是否足够）")
+                    tr("配置的输出目录「{configured}」不可用，实际会写到 {resolved}").format(
+                        configured=raw, resolved=resolved),
+                    fix=tr("换一个可写目录（检查盘符是否存在、权限是否足够）"))
 
     # 实际写一个临时文件验证（最可靠的判据）
     try:
@@ -503,11 +525,11 @@ def _check_output_dir(wf, res: PreflightResult, host):
         os.remove(probe)
     except Exception as e:
         res.add(ERROR, "output_dir",
-                f"输出目录不可写（{resolved}）: {e}",
-                fix="在「输出设置 → 输出目录」换一个可写目录")
+                tr("输出目录不可写（{path}）: {error}").format(path=resolved, error=e),
+                fix=tr("在「输出设置 → 输出目录」换一个可写目录"))
 
 
-def _check_resource_refs(wf, res: PreflightResult):
+def _check_resource_refs(wf, res: PreflightResult, *, translate=None):
     """按 `resource_id` 检查工作流依赖的模型资源（跨机器可迁移的那一套）。
 
     这一步和 `_check_models` 的区别：
@@ -517,6 +539,7 @@ def _check_resource_refs(wf, res: PreflightResult):
         并把可下载的辅助组件挑出来给 UI 渲染资源卡片。
     `resource_store` 不可用时静默跳过，不影响其它检查。
     """
+    tr = translate or (lambda text: text)
     try:
         from workflow import resource_store as RS
     except Exception as e:
@@ -525,14 +548,16 @@ def _check_resource_refs(wf, res: PreflightResult):
     try:
         refs = RS.collect_refs(wf)
     except Exception as e:
-        res.add(WARNING, "resources_probe_failed", f"资源依赖检查失败: {e}")
+        res.add(WARNING, "resources_probe_failed",
+                tr("资源依赖检查失败: {error}").format(error=e))
         return
     if not refs:
         return
     try:
         rep = RS.missing_report(refs)
     except Exception as e:
-        res.add(WARNING, "resources_report_failed", f"资源报告生成失败: {e}")
+        res.add(WARNING, "resources_report_failed",
+                tr("资源报告生成失败: {error}").format(error=e))
         return
 
     res.required_models.extend(
@@ -547,11 +572,12 @@ def _check_resource_refs(wf, res: PreflightResult):
         name = ref.get("filename") or ref.get("resource_id") or "?"
         is_aux = rtype in ("controlnet", "adetailer", "ip_adapter",
                            "upscaler", "engine")
-        fix = ("在「🗂 资源依赖」里点下载（扩展市场）" if is_aux
-               else f"自行下载后放到 {TYPE_HINT.get(rtype, 'models/')}，"
-                    "再点「🔄 重新检测」")
+        fix = (tr("在「🗂 资源依赖」里点下载（扩展市场）") if is_aux
+               else tr("自行下载后放到 {path}，再点「🔄 重新检测」").format(
+                   path=tr(TYPE_HINT.get(rtype, "models/"))))
         res.add(ERROR, "resource_missing",
-                f"缺少{_type_cn(rtype)}「{name}」（工作流按资源 ID 依赖它）",
+                tr("缺少{type}「{name}」（工作流按资源 ID 依赖它）").format(
+                    type=_type_cn(rtype, translate=tr), name=name),
                 (r.get("node_id") or ""), fix)
 
     for r in rep.get("mismatched", []):
@@ -559,10 +585,10 @@ def _check_resource_refs(wf, res: PreflightResult):
         name = ref.get("filename") or ref.get("resource_id") or "?"
         want = ref.get("architecture") or "?"
         res.add(ERROR, "resource_mismatch",
-                f"资源「{name}」与工作流记录的架构不符（工作流要求 {want}）"
-                f"：{r.get('detail', '')}",
+                tr("资源「{name}」与工作流记录的架构不符（工作流要求 {arch}）：{detail}").format(
+                    name=name, arch=want, detail=tr(str(r.get("detail", "")))),
                 (r.get("node_id") or ""),
-                fix="换成对应架构的文件，或在工作流里改回正确的资源")
+                fix=tr("换成对应架构的文件，或在工作流里改回正确的资源"))
 
     moved = [r for r in rep.get("present", [])
              if r.get("status") == "found_elsewhere"]
@@ -570,8 +596,9 @@ def _check_resource_refs(wf, res: PreflightResult):
         names = "、".join((r.get("ref") or {}).get("filename", "?")
                           for r in moved[:3])
         res.add(WARNING, "resource_moved",
-                f"有 {len(moved)} 项资源不在原位置，已按文件名找到：{names}",
-                fix="能跑，但建议重新保存工作流以更新资源位置")
+                tr("有 {count} 项资源不在原位置，已按文件名找到：{names}").format(
+                    count=len(moved), names=names),
+                fix=tr("能跑，但建议重新保存工作流以更新资源位置"))
 
 
 TYPE_HINT = {
@@ -584,14 +611,16 @@ TYPE_HINT = {
 }
 
 
-def _type_cn(t: str) -> str:
-    return {"checkpoint": "底模", "lora": "LoRA", "vae": "VAE",
-            "controlnet": "ControlNet", "upscaler": "放大/插帧模型",
-            "engine": "推理引擎", "adetailer": "ADetailer",
-            "ip_adapter": "IP-Adapter"}.get(t, t or "模型")
+def _type_cn(t: str, *, translate=None) -> str:
+    tr = translate or (lambda text: text)
+    return tr({"checkpoint": "底模", "lora": "LoRA", "vae": "VAE",
+               "controlnet": "ControlNet", "upscaler": "放大/插帧模型",
+               "engine": "推理引擎", "adetailer": "ADetailer",
+               "ip_adapter": "IP-Adapter"}.get(t, t or "模型"))
 
 
-def _check_dependencies(wf, res: PreflightResult):
+def _check_dependencies(wf, res: PreflightResult, *, translate=None):
+    tr = translate or (lambda text: text)
     missing = []
     for mod, label in (("torch", "PyTorch"), ("diffusers", "diffusers"),
                        ("PIL", "Pillow")):
@@ -600,8 +629,8 @@ def _check_dependencies(wf, res: PreflightResult):
         except Exception:
             missing.append(label)
     if missing:
-        res.add(ERROR, "deps", f"缺少必需依赖: {', '.join(missing)}",
-                fix="pip install -r requirements.txt")
+        res.add(ERROR, "deps", tr("缺少必需依赖: {dependencies}").format(
+            dependencies=", ".join(missing)), fix="pip install -r requirements.txt")
 
 
 def _estimate_time(wf, policy) -> float:
@@ -639,11 +668,13 @@ def _estimate_time(wf, policy) -> float:
 
 # ======================================================================
 def run_preflight(wf, host=None, ai=None, *, preset: str = "auto",
-                  cap: Optional[DeviceCapabilities] = None) -> PreflightResult:
-    """执行全部预检。任何时候都不抛异常。"""
+                  cap: Optional[DeviceCapabilities] = None,
+                  translate=None) -> PreflightResult:
+    """执行全部预检。任何时候都不抛异常；后台默认保留中文。"""
+    tr = translate or (lambda text: text)
     res = PreflightResult()
     if wf is None:
-        res.add(ERROR, "no_workflow", "没有可检查的工作流（wf 为空）")
+        res.add(ERROR, "no_workflow", tr("没有可检查的工作流（wf 为空）"))
         return res
     ai = ai if ai is not None else getattr(host, "ai", None)
     try:
@@ -658,11 +689,11 @@ def run_preflight(wf, host=None, ai=None, *, preset: str = "auto",
         arch = ""
 
     checks = [
-        ("structure", lambda: _check_structure(wf, res)),
-        ("output", lambda: _check_output_dir(wf, res, host)),
-        ("deps", lambda: _check_dependencies(wf, res)),
-        ("assets", lambda: _check_assets(wf, res)),
-        ("resources", lambda: _check_resource_refs(wf, res)),
+        ("structure", lambda: _check_structure(wf, res, translate=tr)),
+        ("output", lambda: _check_output_dir(wf, res, host, translate=tr)),
+        ("deps", lambda: _check_dependencies(wf, res, translate=tr)),
+        ("assets", lambda: _check_assets(wf, res, translate=tr)),
+        ("resources", lambda: _check_resource_refs(wf, res, translate=tr)),
     ]
     for name, fn in checks:
         try:
@@ -670,17 +701,18 @@ def run_preflight(wf, host=None, ai=None, *, preset: str = "auto",
             res.checks_run += 1
         except Exception as e:
             logger.warning(f"[preflight] {name} 检查异常: {e}")
-            res.add(WARNING, f"{name}_failed", f"{name} 检查未能完成: {e}")
+            res.add(WARNING, f"{name}_failed",
+                    tr("{name} 检查未能完成: {error}").format(name=name, error=e))
 
     # 需要底模信息的两组检查
     try:
-        models = _check_models(wf, res, ai)
+        models = _check_models(wf, res, ai, translate=tr)
         res.required_models.extend(models)
         res.checks_run += 1
     except Exception as e:
         logger.warning(f"[preflight] 模型检查异常: {e}")
         models = []
-        res.add(WARNING, "models_failed", f"模型检查未能完成: {e}")
+        res.add(WARNING, "models_failed", tr("模型检查未能完成: {error}").format(error=e))
 
     model_arch = ""
     for m in models:
@@ -691,35 +723,36 @@ def run_preflight(wf, host=None, ai=None, *, preset: str = "auto",
         model_arch = arch
 
     for name, fn in (
-        ("loras", lambda: _check_loras(wf, res, model_arch)),
-        ("vae", lambda: _check_vae(wf, res, model_arch)),
-        ("controlnet", lambda: _check_controlnet(wf, res, model_arch)),
+        ("loras", lambda: _check_loras(wf, res, model_arch, translate=tr)),
+        ("vae", lambda: _check_vae(wf, res, model_arch, translate=tr)),
+        ("controlnet", lambda: _check_controlnet(wf, res, model_arch, translate=tr)),
     ):
         try:
             fn()
             res.checks_run += 1
         except Exception as e:
             logger.warning(f"[preflight] {name} 检查异常: {e}")
-            res.add(WARNING, f"{name}_failed", f"{name} 检查未能完成: {e}")
+            res.add(WARNING, f"{name}_failed",
+                    tr("{name} 检查未能完成: {error}").format(name=name, error=e))
 
     # 显存策略
     try:
         cap = cap or DeviceCapabilities.detect()
         p = (wf.metadata or {}).get("memory_preset") or preset
         policy = resolve_policy(p, cap, arch_id=model_arch)
-        _check_vram(wf, res, policy, cap)
+        _check_vram(wf, res, policy, cap, translate=tr)
         res.estimated_time = _estimate_time(wf, policy)
         res.checks_run += 1
     except Exception as e:
         logger.warning(f"[preflight] 显存检查异常: {e}")
-        res.add(WARNING, "vram_failed", f"显存检查未能完成: {e}")
+        res.add(WARNING, "vram_failed", tr("显存检查未能完成: {error}").format(error=e))
 
     # 没接 SaveImage 的提示
     try:
         if wf.nodes and not any(n.type == "SaveImage" for n in wf.nodes):
             res.add(HINT, "no_save",
-                    "工作流里没有 SaveImage 节点，结果不会落盘",
-                    fix="加一个 SaveImage 节点")
+                    tr("工作流里没有 SaveImage 节点，结果不会落盘"),
+                    fix=tr("加一个 SaveImage 节点"))
     except Exception:
         pass
 

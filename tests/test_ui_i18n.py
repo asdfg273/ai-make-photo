@@ -744,6 +744,124 @@ def test_workflow_report_language():
         window.deleteLater()
 
 
+def test_preflight_checks_language():
+    from unittest.mock import patch
+    from ui.i18n import ui_i18n
+    from workflow.memory_policy import DeviceCapabilities, MemoryPolicy, plan_for_nodes
+    from workflow.preflight import PreflightResult, _check_models, _check_structure, run_preflight
+    from workflow.schema import Node, NodeSpec, ResourceRequirement, Workflow
+
+    old = ui_i18n.language
+    try:
+        ui_i18n.set_language("en")
+        result = run_preflight(None, translate=ui_i18n.tr)
+        assert result.errors[0].message == "No workflow to check (wf is None)"
+
+        result = PreflightResult()
+        _check_structure(Workflow(), result, translate=ui_i18n.tr)
+        assert result.errors[0].message == "Workflow is empty; there are no executable nodes"
+
+        wf = Workflow(nodes=[Node(id="load", type="LoadCheckpoint", params={"path": ""})])
+        result = PreflightResult()
+        _check_models(wf, result, None, translate=ui_i18n.tr)
+        assert result.errors[0].message == "No model file specified"
+        assert result.errors[0].fix == (
+            "Select a local base model from the Model dropdown in LoadCheckpoint")
+
+        spec = NodeSpec(type="GPU", resources=ResourceRequirement(
+            requires=("cuda",), estimated_vram_mb=9000))
+        plan = plan_for_nodes(
+            MemoryPolicy(cpu_offload=False, allow_tiled=False), [("n1", spec)],
+            cap=DeviceCapabilities(has_cuda=True, total_gb=8.0), translate=ui_i18n.tr)
+        assert "≈ 9000 MB" in plan["warnings"][0]
+        assert "may cause OOM" in plan["warnings"][0]
+
+        ui_i18n.set_language("ja")
+        result = run_preflight(None, translate=ui_i18n.tr)
+        assert result.errors[0].message == "チェックするワークフローがありません（wf が None です）"
+        result = PreflightResult()
+        _check_structure(Workflow(), result, translate=ui_i18n.tr)
+        assert result.errors[0].message == "ワークフローが空で、実行可能なノードがありません"
+        assert run_preflight(None).errors[0].message == "没有可检查的工作流（wf 为空）"
+    finally:
+        ui_i18n.set_language(old)
+
+
+def test_preflight_window_language():
+    from unittest.mock import patch
+    from ui.i18n import ui_i18n
+    from ui.workflow_editor.window import WorkflowEditorWindow
+    from workflow.preflight import PreflightResult
+
+    old = ui_i18n.language
+    window = WorkflowEditorWindow()
+    try:
+        ui_i18n.set_language("en")
+        with patch("workflow.preflight.run_preflight", return_value=PreflightResult()) as run, \
+                patch("ui.workflow_editor.window.QMessageBox.information"):
+            window.on_preflight()
+            assert run.call_args.kwargs["translate"](
+                "没有可检查的工作流（wf 为空）") == "No workflow to check (wf is None)"
+        with patch("workflow.preflight.run_preflight", return_value=PreflightResult()) as run:
+            assert window._preflight(window.scene.to_workflow()) is True
+            assert run.call_args.kwargs["translate"](
+                "没有可检查的工作流（wf 为空）") == "No workflow to check (wf is None)"
+    finally:
+        ui_i18n.set_language(old)
+        window.close()
+        window.deleteLater()
+
+
+def test_core_node_error_language():
+    from unittest.mock import patch
+    from PIL import Image
+    from ui.i18n import ui_i18n
+    from nodes.image_nodes import run_image_resize
+    from nodes.model_nodes import run_load_checkpoint
+    from workflow import registry
+    from workflow.executor import Executor, NodeContext
+    from workflow.memory_policy import MemoryPolicy
+    from workflow.schema import Node, NodeSpec, ParamSpec, PortSpec, DataType, Workflow
+
+    specs = {
+        "LoadCheckpoint": NodeSpec(
+            type="LoadCheckpoint", params={"path": ParamSpec("str", default="")},
+            run=run_load_checkpoint),
+        "ImageResize": NodeSpec(
+            type="ImageResize",
+            inputs={"image": PortSpec(DataType.IMAGE)},
+            params={
+                "width": ParamSpec("int", default=512),
+                "height": ParamSpec("int", default=768),
+                "mode": ParamSpec("choice", default="拉伸", choices=("拉伸",)),
+            }, run=run_image_resize),
+    }
+    old = ui_i18n.language
+    try:
+        with patch.object(registry, "load_builtin_nodes"), \
+                patch.object(registry, "exists", side_effect=lambda kind: kind in specs), \
+                patch.object(registry, "get", side_effect=specs.__getitem__):
+            ctx = NodeContext(
+                policy=MemoryPolicy(cache_intermediates=False), translate=ui_i18n.tr)
+            ui_i18n.set_language("en")
+            result = Executor(ctx).run(Workflow(nodes=[
+                Node(id="load", type="LoadCheckpoint", params={"path": ""})]))
+            assert result["error"] == "ValueError: No model specified (path is empty)"
+
+            result = Executor(ctx).run(Workflow(nodes=[Node(
+                id="resize", type="ImageResize",
+                inputs={"image": Image.new("RGB", (8, 8))},
+                params={"width": 0, "height": 768, "mode": "拉伸"})]))
+            assert result["error"] == "ValueError: Dimensions must be positive: 0x768"
+
+            ui_i18n.set_language("ja")
+            result = Executor(ctx).run(Workflow(nodes=[
+                Node(id="load", type="LoadCheckpoint", params={"path": ""})]))
+            assert result["error"] == "ValueError: モデルが指定されていません（path が空です）"
+    finally:
+        ui_i18n.set_language(old)
+
+
 def test_workflow_validation_language():
     from unittest.mock import patch
     from ui.i18n import ui_i18n
@@ -996,6 +1114,9 @@ if __name__ == "__main__":
     test_param_panel_language()
     test_region_editor_language()
     test_workflow_report_language()
+    test_preflight_checks_language()
+    test_preflight_window_language()
+    test_core_node_error_language()
     test_workflow_validation_language()
     test_workflow_validation_window_language()
     test_workflow_execution_log_language()

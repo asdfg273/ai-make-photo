@@ -206,7 +206,7 @@ def resolve(preset: str = "auto",
     return pol
 
 
-def plan_for_nodes(policy: MemoryPolicy, specs, cap=None) -> dict:
+def plan_for_nodes(policy: MemoryPolicy, specs, cap=None, *, translate=None) -> dict:
     """把图里所有节点的资源声明汇总成一份执行计划摘要。
 
     `cap` 是设备能力（不给则现场探测）。用它判断"图里要 CUDA 但机器没有"，
@@ -218,6 +218,7 @@ def plan_for_nodes(policy: MemoryPolicy, specs, cap=None) -> dict:
     返回: {"total_peak_mb":…, "needs_cuda":…, "tiled_nodes":[…],
            "offload_nodes":[…], "exclusive_nodes":[…], "warnings":[…]}
     """
+    tr = translate or (lambda text: text)
     total = 0
     needs_cuda = False
     tiled, offloadable, exclusive, warnings = [], [], [], []
@@ -241,16 +242,19 @@ def plan_for_nodes(policy: MemoryPolicy, specs, cap=None) -> dict:
         cap = DeviceCapabilities.detect()
 
     if needs_cuda and not cap.has_cuda:
-        warnings.append(
+        warnings.append(tr(
             "该工作流需要 GPU（CUDA），但当前环境未检测到可用 CUDA 设备；"
-            "执行会退回 CPU，速度极慢甚至失败")
+            "执行会退回 CPU，速度极慢甚至失败"))
     if needs_cuda and cap.has_cuda and total > cap.total_gb * 1024:
-        warnings.append(
-            f"节点声明的显存合计约 {total} MB，超过设备总量 "
-            f"{cap.total_gb * 1024:.0f} MB，"
-            f"{'将依赖分块/offload' if policy.allow_tiled or policy.cpu_offload else '可能 OOM'}")
+        fallback = tr("将依赖分块/offload") if (
+            policy.allow_tiled or policy.cpu_offload) else tr("可能 OOM")
+        warnings.append(tr(
+            "节点声明的显存合计约 {total} MB，超过设备总量 {capacity} MB，{fallback}"
+        ).format(total=total, capacity=f"{cap.total_gb * 1024:.0f}",
+                 fallback=fallback))
     if needs_exclusive and policy.cpu_offload:
-        warnings.append("图里有要求独占 GPU 的节点，但当前策略启用了 CPU offload，速度会明显变慢")
+        warnings.append(tr(
+            "图里有要求独占 GPU 的节点，但当前策略启用了 CPU offload，速度会明显变慢"))
 
     return {
         "total_peak_mb": total,
@@ -259,6 +263,6 @@ def plan_for_nodes(policy: MemoryPolicy, specs, cap=None) -> dict:
         "tiled_nodes": tiled,
         "offload_nodes": offloadable,
         "exclusive_nodes": exclusive,
-        "policy": policy.describe(),
+        "policy": policy.describe(translate=tr),
         "warnings": warnings,
     }

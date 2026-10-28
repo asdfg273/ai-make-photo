@@ -47,9 +47,9 @@ logger = logging.getLogger(__name__)
 def run_load_checkpoint(ctx, node, inputs):
     path = (node.params.get("path") or inputs.get("path") or "").strip()
     if not path:
-        raise ValueError("没有指定模型（path 为空）")
+        raise ValueError(ctx.translate("没有指定模型（path 为空）"))
     if ctx.ai is None:
-        raise RuntimeError("没有可用的模型管理器（ctx.ai 为空）")
+        raise RuntimeError(ctx.translate("没有可用的模型管理器（ctx.ai 为空）"))
 
     ai = ctx.ai
     name = path
@@ -134,7 +134,7 @@ def run_load_vae(ctx, node, inputs):
     model = inputs.get("model")
     path = (node.params.get("path") or "").strip()
     if not path:
-        raise ValueError("没有指定 VAE 文件")
+        raise ValueError(ctx.translate("没有指定 VAE 文件"))
     if not os.path.exists(path):
         # 到 models/ 与 weights/ 下找
         from utils import paths
@@ -150,7 +150,7 @@ def run_load_vae(ctx, node, inputs):
             if found:
                 break
         if not found:
-            raise FileNotFoundError(f"找不到 VAE 文件: {path}")
+            raise FileNotFoundError(ctx.translate("找不到 VAE 文件: {path}").format(path=path))
         path = found
 
     dtype = getattr(ctx.ai, "dtype", torch.float16) if ctx.ai else torch.float16
@@ -211,9 +211,9 @@ def run_load_vae(ctx, node, inputs):
 def run_load_lora(ctx, node, inputs):
     model = inputs.get("model")
     if model is None:
-        raise ValueError("缺少输入 model")
+        raise ValueError(ctx.translate("缺少输入 model"))
     if ctx.ai is None:
-        raise RuntimeError("没有可用的模型管理器")
+        raise RuntimeError(ctx.translate("没有可用的模型管理器"))
 
     pairs = []
     for i in (1, 2, 3):

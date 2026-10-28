@@ -93,7 +93,7 @@ def run_sampler(ctx, node, inputs):
 
     model = inputs.get("model")
     if model is None:
-        raise ValueError("缺少输入 model")
+        raise ValueError(ctx.translate("缺少输入 model"))
     pos = inputs.get("positive")
     neg = inputs.get("negative")
     image = as_image(inputs.get("image"))
@@ -105,7 +105,8 @@ def run_sampler(ctx, node, inputs):
         kind = "inpaint" if mask is not None else "img2img"
     pipe = adapter.pipe(model, kind)
     if pipe is None:
-        raise RuntimeError(f"模型没有可用的 {kind} 管线（该架构可能不支持）")
+        raise RuntimeError(ctx.translate(
+            "模型没有可用的 {kind} 管线（该架构可能不支持）").format(kind=kind))
     if kind != "txt2img" and not getattr(adapter.caps, kind, True):
         # 抛专用异常：UI/预检据此区分"能力不支持"与"运行出错"
         raise adapters_mod.UnsupportedFeatureError(
@@ -166,7 +167,7 @@ def run_sampler(ctx, node, inputs):
         res = _call()
         imgs = getattr(res, "images", None)
         if imgs is None:
-            raise RuntimeError("管线没有返回图像")
+            raise RuntimeError(ctx.translate("管线没有返回图像"))
         if isinstance(imgs, torch.Tensor):
             latent = imgs
         else:
@@ -202,11 +203,11 @@ def run_vae_encode(ctx, node, inputs):
     model = inputs.get("model")
     image = as_image(inputs.get("image"))
     if model is None or image is None:
-        raise ValueError("缺少 model 或 image")
+        raise ValueError(ctx.translate("缺少 model 或 image"))
 
     vae = getattr(model, "vae", None) or getattr(model.pipe, "vae", None)
     if vae is None:
-        raise RuntimeError("模型没有 VAE，无法编码")
+        raise RuntimeError(ctx.translate("模型没有 VAE，无法编码"))
 
     import numpy as np
     with torch.inference_mode():
@@ -243,11 +244,11 @@ def run_vae_decode(ctx, node, inputs):
     model = inputs.get("model")
     lat = inputs.get("latent")
     if model is None or lat is None or getattr(lat, "tensor", None) is None:
-        raise ValueError("缺少 latent（也没有可透传的 image）")
+        raise ValueError(ctx.translate("缺少 latent（也没有可透传的 image）"))
 
     vae = getattr(model, "vae", None) or getattr(model.pipe, "vae", None)
     if vae is None:
-        raise RuntimeError("模型没有 VAE，无法解码")
+        raise RuntimeError(ctx.translate("模型没有 VAE，无法解码"))
 
     t = lat.tensor
     if hasattr(vae.config, "scaling_factor"):

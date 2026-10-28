@@ -1242,4 +1242,360 @@ TRANSLATIONS = {
     "全 GPU": ("Full GPU", "フル GPU"),
     "分块≥{threshold}MP": ("Tiling ≥ {threshold} MP", "タイル処理 ≥ {threshold} MP"),
     "缓存{count}": ("Cache {count}", "キャッシュ {count}"),
+
+    # 预检：结构与模型
+    "工作流校验异常: {error}": (
+        "Workflow validation error: {error}",
+        "ワークフロー検証エラー: {error}",
+    ),
+    "工作流是空的，没有可执行的节点": (
+        "Workflow is empty; there are no executable nodes",
+        "ワークフローが空で、実行可能なノードがありません",
+    ),
+    "工作流里没有 LoadCheckpoint 节点": (
+        "The workflow has no LoadCheckpoint node",
+        "ワークフローに LoadCheckpoint ノードがありません",
+    ),
+    "如果你打算用当前已加载的模型，可以忽略这条": (
+        "Ignore this if you intend to use the currently loaded model",
+        "現在読み込み済みのモデルを使用する場合は無視できます",
+    ),
+    "没有指定模型文件": ("No model file specified", "モデルファイルが指定されていません"),
+    "在 LoadCheckpoint 的「模型」里从下拉框选一个本地底模": (
+        "Select a local base model from the Model dropdown in LoadCheckpoint",
+        "LoadCheckpoint の「モデル」ドロップダウンからローカルの基本モデルを選択してください",
+    ),
+    "找不到模型文件「{name}」": (
+        "Model file not found: {name}",
+        "モデルファイル「{name}」が見つかりません",
+    ),
+    "放到 models/puton/ 让程序自动归位，或从下拉框重新选择": (
+        "Place it in models/puton/ for automatic organization, or select it again from the dropdown",
+        "models/puton/ に配置して自動整理するか、ドロップダウンから再選択してください",
+    ),
+    "无法识别「{name}」的架构": (
+        "Cannot identify the architecture of {name}",
+        "「{name}」のアーキテクチャを識別できません",
+    ),
+    "仍可尝试运行；若失败请确认它是不是完整底模": (
+        "You can still try running it; if it fails, verify that this is a complete base model",
+        "実行は試せます。失敗する場合は完全な基本モデルか確認してください",
+    ),
+    "架构 {arch} 当前不支持生成": (
+        "Architecture {arch} does not currently support generation",
+        "アーキテクチャ {arch} は現在生成に対応していません",
+    ),
+    "{arch} 上 CLIP Skip 不生效（管线固定使用倒数第二层）": (
+        "CLIP Skip has no effect on {arch} (the pipeline always uses the penultimate layer)",
+        "{arch} では CLIP Skip は無効です（パイプラインは常に最後から 2 番目の層を使用）",
+    ),
+    "可以忽略，或把 CLIP Skip 设为 0": (
+        "Ignore this, or set CLIP Skip to 0",
+        "無視するか、CLIP Skip を 0 に設定してください",
+    ),
+    "工作流里同时用了多种架构的底模: {archs}": (
+        "The workflow uses base models with multiple architectures: {archs}",
+        "ワークフローで複数アーキテクチャの基本モデルを使用しています: {archs}",
+    ),
+    "不同架构的节点通常共用同一个 UNet，混用可能互相覆盖": (
+        "Nodes with different architectures usually share one UNet and may overwrite each other",
+        "異なるアーキテクチャのノードは通常同じ UNet を共有するため、相互に上書きされる可能性があります",
+    ),
+    "{arch} 架构不支持 {node}（{feature}）": (
+        "Architecture {arch} does not support {node} ({feature})",
+        "{arch} アーキテクチャは {node}（{feature}）に対応していません",
+    ),
+    "删掉这个节点，或改用支持该功能的底模": (
+        "Remove this node, or use a base model that supports this feature",
+        "このノードを削除するか、この機能に対応する基本モデルを使用してください",
+    ),
+
+    # 预检：LoRA 与 VAE
+    "找不到 LoRA「{name}」": ("LoRA not found: {name}", "LoRA「{name}」が見つかりません"),
+    "放到 loras/ 对应架构子目录，或用下拉框重新选择": (
+        "Place it in the appropriate architecture subdirectory under loras/, or select it again from the dropdown",
+        "loras/ 内の対応するアーキテクチャのサブフォルダーに配置するか、ドロップダウンから再選択してください",
+    ),
+    "LoRA「{name}」是 {lora_arch} 用的，但主模型是 {model_arch}（{expected_arch}）": (
+        "LoRA {name} is for {lora_arch}, but the base model is {model_arch} ({expected_arch})",
+        "LoRA「{name}」は {lora_arch} 用ですが、基本モデルは {model_arch}（{expected_arch}）です",
+    ),
+    "换一个对应架构的 LoRA，或换底模": (
+        "Use a LoRA for the matching architecture, or change the base model",
+        "対応するアーキテクチャの LoRA に変更するか、基本モデルを変更してください",
+    ),
+    "LoRA「{name}」看起来是 DiT 架构的，与 {model_arch} 不匹配": (
+        "LoRA {name} appears to use DiT architecture and does not match {model_arch}",
+        "LoRA「{name}」は DiT アーキテクチャのようで、{model_arch} と一致しません",
+    ),
+    "无法确定 LoRA「{name}」适用的架构": (
+        "Cannot determine the compatible architecture for LoRA {name}",
+        "LoRA「{name}」の対応アーキテクチャを特定できません",
+    ),
+    "若出图异常请检查它是否与底模同代": (
+        "If output looks wrong, check whether the LoRA and base model belong to the same generation",
+        "出力に異常がある場合は、LoRA と基本モデルが同世代か確認してください",
+    ),
+    "没有指定 VAE 文件": ("No VAE file specified", "VAE ファイルが指定されていません"),
+    "从下拉框选一个本地 VAE，或删掉这个节点": (
+        "Select a local VAE from the dropdown, or remove this node",
+        "ドロップダウンからローカル VAE を選択するか、このノードを削除してください",
+    ),
+    "找不到 VAE「{name}」": ("VAE not found: {name}", "VAE「{name}」が見つかりません"),
+    "VAE「{name}」看起来是 SDXL 用的（{size}MB），与 SD1.5 底模不兼容": (
+        "VAE {name} appears to be for SDXL ({size} MB) and is incompatible with the SD1.5 base model",
+        "VAE「{name}」は SDXL 用（{size} MB）のようで、SD1.5 基本モデルと互換性がありません",
+    ),
+    "换成 SD1.5 的 VAE，或删掉这个节点": (
+        "Use an SD1.5 VAE, or remove this node",
+        "SD1.5 用 VAE に変更するか、このノードを削除してください",
+    ),
+    "VAE「{name}」体积只有 {size}MB，可能不是 SDXL 的": (
+        "VAE {name} is only {size} MB and may not be for SDXL",
+        "VAE「{name}」は {size} MB しかなく、SDXL 用ではない可能性があります",
+    ),
+
+    # 预检：ControlNet、组件与显存
+    "ControlNet 类型「{kind}」目前无法加载（只支持 {supported}）": (
+        "ControlNet type {kind} cannot currently be loaded (supported: {supported})",
+        "ControlNet タイプ「{kind}」は現在読み込めません（対応: {supported}）",
+    ),
+    "改用 openpose / canny / depth；其它类型目前只能单独做预处理出图": (
+        "Use openpose / canny / depth; other types currently support only standalone preprocessing",
+        "openpose / canny / depth を使用してください。その他のタイプは現在、単独の前処理画像生成のみ可能です",
+    ),
+    "探测失败: {error}": ("Detection failed: {error}", "検出に失敗しました: {error}"),
+    "本地没有可用的 ControlNet 权重（{kind}，{arch}）": (
+        "No usable local ControlNet weights ({kind}, {arch})",
+        "使用可能なローカル ControlNet 重みがありません（{kind}、{arch}）",
+    ),
+    "在「扩展市场 → 控制」里下载，或把权重放进 controlnets/": (
+        "Download it from Extension Market → Control, or place the weights in controlnets/",
+        "「拡張マーケット → コントロール」からダウンロードするか、controlnets/ に重みを配置してください",
+    ),
+    "ControlNet {kind} 已就绪（{how}）": (
+        "ControlNet {kind} is ready ({how})",
+        "ControlNet {kind} の準備ができています（{how}）",
+    ),
+    "资源探测失败: {error}": ("Resource detection failed: {error}", "リソース検出に失敗しました: {error}"),
+    "缺少组件：{label}{size}": ("Missing component: {label}{size}", "不足しているコンポーネント: {label}{size}"),
+    "在「工具 → 🛒 扩展市场」里下载（程序不会自动联网下载）": (
+        "Download it from Tools → 🛒 Extension Market (the app does not download automatically)",
+        "「ツール → 🛒 拡張マーケット」からダウンロードしてください（自動ダウンロードは行いません）",
+    ),
+    "缺少外部工具：{name}": ("Missing external tool: {name}", "外部ツールがありません: {name}"),
+    "在扩展市场安装，或自行准备": (
+        "Install it from Extension Market, or provide it yourself",
+        "拡張マーケットからインストールするか、手動で用意してください",
+    ),
+    "显存估算失败: {error}": ("VRAM estimation failed: {error}", "VRAM 推定に失敗しました: {error}"),
+    "节点声明显存合计约 {estimated} MB，占设备 {total} MB 的比例偏高": (
+        "Declared node VRAM totals ≈ {estimated} MB, a high proportion of the device's {total} MB",
+        "ノード宣言の VRAM 合計は約 {estimated} MB で、デバイスの {total} MB に対して高い割合です",
+    ),
+    "程序会自动启用分块/CPU offload，速度会下降": (
+        "The app will automatically enable tiling/CPU offload, reducing speed",
+        "タイル処理／CPU オフロードが自動で有効になり、速度が低下します",
+    ),
+    "当前显存 {total}GB，已自动启用 CPU Offload": (
+        "Current VRAM is {total} GB; CPU offload has been enabled automatically",
+        "現在の VRAM は {total} GB です。CPU オフロードを自動で有効にしました",
+    ),
+    "这是正常的省显存模式；显存更大时可切「高性能」预设提速": (
+        "This is normal VRAM-saving behavior; with more VRAM, switch to High Performance for faster execution",
+        "これは正常な VRAM 節約モードです。VRAM が大きい場合は「高性能」プリセットで高速化できます",
+    ),
+    "当前工作流包含 {count} 个 ControlNet，预计速度较慢": (
+        "This workflow contains {count} ControlNet nodes and is expected to run slowly",
+        "このワークフローには {count} 個の ControlNet が含まれ、低速になる見込みです",
+    ),
+
+    # 预检：输出目录与资源引用
+    "输出目录解析失败: {error}": (
+        "Failed to resolve output directory: {error}",
+        "出力ディレクトリの解決に失敗しました: {error}",
+    ),
+    "在「输出设置 → 输出目录」换一个可写目录": (
+        "Choose a writable directory in Output Settings → Output Directory",
+        "「出力設定 → 出力ディレクトリ」で書き込み可能なフォルダーを選択してください",
+    ),
+    "配置的输出目录「{configured}」不可用，实际会写到 {resolved}": (
+        "Configured output directory {configured} is unavailable; output will be written to {resolved}",
+        "設定された出力ディレクトリ「{configured}」は使用できません。実際の出力先は {resolved} です",
+    ),
+    "换一个可写目录（检查盘符是否存在、权限是否足够）": (
+        "Choose a writable directory (check that the drive exists and permissions are sufficient)",
+        "書き込み可能なフォルダーを選択してください（ドライブの存在と権限を確認）",
+    ),
+    "输出目录不可写（{path}）: {error}": (
+        "Output directory is not writable ({path}): {error}",
+        "出力ディレクトリに書き込めません（{path}）: {error}",
+    ),
+    "资源依赖检查失败: {error}": (
+        "Resource dependency check failed: {error}",
+        "リソース依存関係チェックに失敗しました: {error}",
+    ),
+    "资源报告生成失败: {error}": (
+        "Failed to generate resource report: {error}",
+        "リソースレポートの生成に失敗しました: {error}",
+    ),
+    "在「🗂 资源依赖」里点下载（扩展市场）": (
+        "Click Download in 🗂 Resource Dependencies (Extension Market)",
+        "「🗂 リソース依存関係」でダウンロードをクリックしてください（拡張マーケット）",
+    ),
+    "自行下载后放到 {path}，再点「🔄 重新检测」": (
+        "Download it yourself, place it in {path}, then click 🔄 Recheck",
+        "手動でダウンロードして {path} に配置し、「🔄 再検出」をクリックしてください",
+    ),
+    "models/（可放 models/puton/ 自动归位）": (
+        "models/ (use models/puton/ for automatic organization)",
+        "models/（models/puton/ に置くと自動整理されます）",
+    ),
+    "loras/（按架构分子目录）": (
+        "loras/ (organized into architecture subdirectories)",
+        "loras/（アーキテクチャ別のサブフォルダー）",
+    ),
+    "缺少{type}「{name}」（工作流按资源 ID 依赖它）": (
+        "Missing {type} {name} (required by resource ID in this workflow)",
+        "{type}「{name}」がありません（ワークフローがリソース ID で必要としています）",
+    ),
+    "放大/插帧模型": ("upscaling/frame interpolation model", "拡大・フレーム補間モデル"),
+    "推理引擎": ("inference engine", "推論エンジン"),
+    "资源「{name}」与工作流记录的架构不符（工作流要求 {arch}）：{detail}": (
+        "Resource {name} does not match the architecture recorded in the workflow (required: {arch}): {detail}",
+        "リソース「{name}」はワークフローに記録されたアーキテクチャと一致しません（要求: {arch}）: {detail}",
+    ),
+    "换成对应架构的文件，或在工作流里改回正确的资源": (
+        "Use a file with the matching architecture, or restore the correct resource in the workflow",
+        "対応するアーキテクチャのファイルに変更するか、ワークフローで正しいリソースに戻してください",
+    ),
+    "有 {count} 项资源不在原位置，已按文件名找到：{names}": (
+        "{count} resources are not in their original locations but were found by filename: {names}",
+        "{count} 件のリソースが元の位置になく、ファイル名で検出されました: {names}",
+    ),
+    "能跑，但建议重新保存工作流以更新资源位置": (
+        "The workflow can run, but save it again to update resource locations",
+        "実行は可能ですが、リソース位置を更新するためワークフローを再保存してください",
+    ),
+    "缺少必需依赖: {dependencies}": (
+        "Missing required dependencies: {dependencies}",
+        "必須依存関係がありません: {dependencies}",
+    ),
+
+    # 预检入口与显存计划警告
+    "{name} 检查未能完成: {error}": (
+        "{name} check could not be completed: {error}",
+        "{name} チェックを完了できませんでした: {error}",
+    ),
+    "模型检查未能完成: {error}": (
+        "Model check could not be completed: {error}",
+        "モデルチェックを完了できませんでした: {error}",
+    ),
+    "显存检查未能完成: {error}": (
+        "VRAM check could not be completed: {error}",
+        "VRAM チェックを完了できませんでした: {error}",
+    ),
+    "没有可检查的工作流（wf 为空）": (
+        "No workflow to check (wf is None)",
+        "チェックするワークフローがありません（wf が None です）",
+    ),
+    "工作流里没有 SaveImage 节点，结果不会落盘": (
+        "The workflow has no SaveImage node; results will not be saved to disk",
+        "ワークフローに SaveImage ノードがないため、結果は保存されません",
+    ),
+    "加一个 SaveImage 节点": ("Add a SaveImage node", "SaveImage ノードを追加してください"),
+    "该工作流需要 GPU（CUDA），但当前环境未检测到可用 CUDA 设备；执行会退回 CPU，速度极慢甚至失败": (
+        "This workflow requires a GPU (CUDA), but no usable CUDA device was detected; execution will fall back to CPU and may be extremely slow or fail",
+        "このワークフローには GPU（CUDA）が必要ですが、使用可能な CUDA デバイスが検出されませんでした。CPU にフォールバックするため、非常に低速になるか失敗する可能性があります",
+    ),
+    "将依赖分块/offload": ("will rely on tiling/offload", "タイル処理／オフロードに依存します"),
+    "可能 OOM": ("may cause OOM", "OOM が発生する可能性があります"),
+    "节点声明的显存合计约 {total} MB，超过设备总量 {capacity} MB，{fallback}": (
+        "Declared node VRAM totals ≈ {total} MB, exceeding device capacity of {capacity} MB; {fallback}",
+        "ノード宣言の VRAM 合計は約 {total} MB で、デバイス容量 {capacity} MB を超えています。{fallback}",
+    ),
+    "图里有要求独占 GPU 的节点，但当前策略启用了 CPU offload，速度会明显变慢": (
+        "The graph contains nodes requiring exclusive GPU access, but CPU offload is enabled; speed will decrease significantly",
+        "GPU 独占を必要とするノードがありますが、CPU オフロードが有効なため、速度が大幅に低下します",
+    ),
+
+    # 核心节点动态错误
+    "没有指定模型（path 为空）": (
+        "No model specified (path is empty)",
+        "モデルが指定されていません（path が空です）",
+    ),
+    "没有可用的模型管理器（ctx.ai 为空）": (
+        "No model manager available (ctx.ai is None)",
+        "使用可能なモデルマネージャーがありません（ctx.ai が None です）",
+    ),
+    "找不到 VAE 文件: {path}": ("VAE file not found: {path}", "VAE ファイルが見つかりません: {path}"),
+    "缺少输入 model": ("Missing input model", "入力 model がありません"),
+    "没有可用的模型管理器": ("No model manager available", "使用可能なモデルマネージャーがありません"),
+    "模型没有可用的 {kind} 管线（该架构可能不支持）": (
+        "The model has no usable {kind} pipeline (the architecture may not support it)",
+        "モデルに使用可能な {kind} パイプラインがありません（アーキテクチャが未対応の可能性があります）",
+    ),
+    "管线没有返回图像": ("The pipeline returned no image", "パイプラインが画像を返しませんでした"),
+    "缺少 model 或 image": ("Missing model or image", "model または image がありません"),
+    "模型没有 VAE，无法编码": ("The model has no VAE; cannot encode", "モデルに VAE がないためエンコードできません"),
+    "缺少 latent（也没有可透传的 image）": (
+        "Missing latent (and no image available for passthrough)",
+        "latent がありません（そのまま渡せる image もありません）",
+    ),
+    "模型没有 VAE，无法解码": ("The model has no VAE; cannot decode", "モデルに VAE がないためデコードできません"),
+    "同名文件过多，无法为 {path} 找到可用文件名": (
+        "Too many files with the same name; no available filename for {path}",
+        "同名ファイルが多すぎるため、{path} に使用可能なファイル名がありません",
+    ),
+    "区域无效：({x1}, {y1}) - ({x2}, {y2}) 在 {w}x{h} 的图像上夹取后为 ({l}, {t}) - ({r}, {b})，宽高必须为正": (
+        "Invalid region: ({x1}, {y1}) - ({x2}, {y2}) clamps to ({l}, {t}) - ({r}, {b}) on a {w}x{h} image; width and height must be positive",
+        "領域が無効です: ({x1}, {y1}) - ({x2}, {y2}) は {w}x{h} 画像上で ({l}, {t}) - ({r}, {b}) に補正され、幅と高さが正である必要があります",
+    ),
+    "管线返回潜张量，但模型没有可用的 VAE 解码": (
+        "The pipeline returned a latent tensor, but the model has no VAE available for decoding",
+        "パイプラインが潜在テンソルを返しましたが、デコードに使用できる VAE がありません",
+    ),
+    "缺少输入 image": ("Missing input image", "入力 image がありません"),
+    "尺寸必须为正：{width}x{height}": (
+        "Dimensions must be positive: {width}x{height}",
+        "サイズは正の値である必要があります: {width}x{height}",
+    ),
+    "未知的缩放方式: {mode}": ("Unknown resize mode: {mode}", "不明なリサイズ方法: {mode}"),
+    "没有参考图，也没有可用的尺寸（请接入 image）": (
+        "No reference image or usable dimensions (connect an image input)",
+        "参照画像も使用可能なサイズもありません（image を接続してください）",
+    ),
+    "未知的遮罩形状: {mode}": ("Unknown mask shape: {mode}", "不明なマスク形状: {mode}"),
+    "缺少输入 mask（重绘区域，白=重绘）": (
+        "Missing input mask (inpaint region, white = repaint)",
+        "入力 mask がありません（インペイント領域、白 = 再描画）",
+    ),
+    "mask 必须是 PIL 图像（mode \"L\"），实际 {type}": (
+        "mask must be a PIL image (mode \"L\"), received {type}",
+        "mask は PIL 画像（mode \"L\"）である必要があります（実際: {type}）",
+    ),
+    "模型 {model} 没有适配器，无法局部重绘": (
+        "Model {model} has no adapter; cannot inpaint",
+        "モデル {model} にアダプターがないためインペイントできません",
+    ),
+    "模型 {model} 没有可用的 inpaint 管线": (
+        "Model {model} has no usable inpaint pipeline",
+        "モデル {model} に使用可能な inpaint パイプラインがありません",
+    ),
+    "重绘管线没有返回图像": ("The inpaint pipeline returned no image", "インペイントパイプラインが画像を返しませんでした"),
+    "重绘管线返回了空的图像列表": (
+        "The inpaint pipeline returned an empty image list",
+        "インペイントパイプラインが空の画像リストを返しました",
+    ),
+    "无法把管线返回值转成图像（{type}）": (
+        "Cannot convert the pipeline return value to an image ({type})",
+        "パイプラインの戻り値を画像に変換できません（{type}）",
+    ),
+    "不支持的保存格式: {format}": ("Unsupported save format: {format}", "未対応の保存形式: {format}"),
+    "图像保存失败（文件不存在）: {path}": (
+        "Image save failed (file does not exist): {path}",
+        "画像の保存に失敗しました（ファイルが存在しません）: {path}",
+    ),
+    "没有指定图片路径": ("No image path specified", "画像パスが指定されていません"),
+    "找不到图片: {path}": ("Image not found: {path}", "画像が見つかりません: {path}"),
 }

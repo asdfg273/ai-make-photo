@@ -375,7 +375,8 @@ class WorkflowEditorWindow(QMainWindow):
         try:
             from workflow.preflight import run_preflight
             res = run_preflight(wf, host=self.host,
-                                ai=getattr(self.host, "ai", None))
+                                ai=getattr(self.host, "ai", None),
+                                translate=ui_i18n.tr)
         except Exception as e:
             QMessageBox.critical(self, ui_i18n.tr("预检失败"), f"{type(e).__name__}: {e}")
             return
@@ -441,7 +442,8 @@ class WorkflowEditorWindow(QMainWindow):
         try:
             from workflow.preflight import run_preflight
             res = run_preflight(wf, host=self.host,
-                                ai=getattr(self.host, "ai", None))
+                                ai=getattr(self.host, "ai", None),
+                                translate=ui_i18n.tr)
         except Exception as e:
             self._log(ui_i18n.trf("预检失败（继续运行）: {error}", error=e))
             return True

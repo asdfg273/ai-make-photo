@@ -42,12 +42,13 @@ _FMT_EXT = {"PNG": ".png", "JPEG": ".jpeg", "WEBP": ".webp"}
 # ----------------------------------------------------------------------
 #  小工具
 # ----------------------------------------------------------------------
-def _unique_path(path: str) -> str:
+def _unique_path(path: str, *, translate=None) -> str:
     """目标文件已存在时追加 _1 / _2 ... 直到不冲突。
 
     同一秒内连出多张图（批量 / XY）会撞名，撞名后后一张会**静默覆盖**前一张，
     所以保存前一律走这里。
     """
+    tr = translate or (lambda text: text)
     if not os.path.exists(path):
         return path
     root, ext = os.path.splitext(path)
@@ -55,7 +56,7 @@ def _unique_path(path: str) -> str:
         cand = f"{root}_{i}{ext}"
         if not os.path.exists(cand):
             return cand
-    raise RuntimeError(f"同名文件过多，无法为 {path} 找到可用文件名")
+    raise RuntimeError(tr("同名文件过多，无法为 {path} 找到可用文件名").format(path=path))
 
 
 def _pad_edge_extend(image, w: int, h: int):
@@ -95,13 +96,14 @@ def _cover_crop(image, w: int, h: int):
     return big.crop((left, top, left + w, top + h))
 
 
-def _clamp_region(x1, y1, x2, y2, w: int, h: int):
+def _clamp_region(x1, y1, x2, y2, w: int, h: int, *, translate=None):
     """把 (x1,y1,x2,y2) 夹进图像范围；0 表示"到边缘"。
 
     越界不再直接丢给 PIL —— PIL 会抛
     `Coordinate 'right' is less than 'left'`，那个报错完全看不出是坐标问题。
     这里夹取后再校验，报错信息带上原始坐标与图像尺寸。
     """
+    tr = translate or (lambda text: text)
     x2 = w if x2 <= 0 else x2
     y2 = h if y2 <= 0 else y2
     l = max(0, min(int(x1), w))
@@ -109,14 +111,17 @@ def _clamp_region(x1, y1, x2, y2, w: int, h: int):
     r = max(0, min(int(x2), w))
     b = max(0, min(int(y2), h))
     if l >= r or t >= b:
-        raise ValueError(
-            f"区域无效：({x1}, {y1}) - ({x2}, {y2}) 在 {w}x{h} 的图像上"
-            f"夹取后为 ({l}, {t}) - ({r}, {b})，宽高必须为正")
+        raise ValueError(tr(
+            "区域无效：({x1}, {y1}) - ({x2}, {y2}) 在 {w}x{h} 的图像上"
+            "夹取后为 ({l}, {t}) - ({r}, {b})，宽高必须为正"
+        ).format(x1=x1, y1=y1, x2=x2, y2=y2, w=w, h=h,
+                 l=l, t=t, r=r, b=b))
     return l, t, r, b
 
 
-def _tensor_to_pil(model, tensor):
+def _tensor_to_pil(model, tensor, *, translate=None):
     """兜底：管线返回潜张量/图像张量时自己解码成 PIL。取不到返回 None。"""
+    tr = translate or (lambda text: text)
     try:
         import torch
     except Exception:
@@ -129,7 +134,7 @@ def _tensor_to_pil(model, tensor):
         vae = (getattr(model, "vae", None)
                or getattr(getattr(model, "pipe", None), "vae", None))
         if vae is None:
-            raise RuntimeError("管线返回潜张量，但模型没有可用的 VAE 解码")
+            raise RuntimeError(tr("管线返回潜张量，但模型没有可用的 VAE 解码"))
         with torch.inference_mode():
             if hasattr(vae.config, "scaling_factor"):
                 t = t / vae.config.scaling_factor
@@ -183,16 +188,17 @@ def run_image_resize(ctx, node, inputs):
 
     image = as_image(inputs.get("image"))
     if image is None:
-        raise ValueError("缺少输入 image")
+        raise ValueError(ctx.translate("缺少输入 image"))
     image = image.convert("RGB")
 
     width = int(node.params.get("width", 512))
     height = int(node.params.get("height", 768))
     if width < 1 or height < 1:
-        raise ValueError(f"尺寸必须为正：{width}x{height}")
+        raise ValueError(ctx.translate("尺寸必须为正：{width}x{height}").format(
+            width=width, height=height))
     mode = (node.params.get("mode") or "拉伸").strip()
     if mode not in _RESIZE_MODES:
-        raise ValueError(f"未知的缩放方式: {mode}")
+        raise ValueError(ctx.translate("未知的缩放方式: {mode}").format(mode=mode))
 
     iw, ih = image.size
     if (iw, ih) == (width, height):
@@ -238,7 +244,7 @@ def run_image_resize(ctx, node, inputs):
 def run_image_crop(ctx, node, inputs):
     image = as_image(inputs.get("image"))
     if image is None:
-        raise ValueError("缺少输入 image")
+        raise ValueError(ctx.translate("缺少输入 image"))
     image = image.convert("RGB")
     w, h = image.size
 
@@ -248,7 +254,8 @@ def run_image_crop(ctx, node, inputs):
     bottom = int(node.params.get("bottom", 0) or 0)
 
     # 先夹取再校验：绝不把越界坐标丢给 PIL（它的报错完全指不到坐标）
-    l, t, r, b = _clamp_region(left, top, right, bottom, w, h)
+    l, t, r, b = _clamp_region(
+        left, top, right, bottom, w, h, translate=ctx.translate)
 
     ctx.status(f"✂️ 裁剪 {w}x{h} → {r - l}x{b - t}")
     out = image.crop((l, t, r, b))
@@ -295,11 +302,11 @@ def run_mask_create(ctx, node, inputs):
         w = int(ctx.metadata.get("width") or 0)
         h = int(ctx.metadata.get("height") or 0)
         if w <= 0 or h <= 0:
-            raise ValueError("没有参考图，也没有可用的尺寸（请接入 image）")
+            raise ValueError(ctx.translate("没有参考图，也没有可用的尺寸（请接入 image）"))
 
     mode = (node.params.get("mode") or "全图").strip()
     if mode not in _MASK_MODES:
-        raise ValueError(f"未知的遮罩形状: {mode}")
+        raise ValueError(ctx.translate("未知的遮罩形状: {mode}").format(mode=mode))
 
     if mode == "全图":
         # 整张都要重绘：全白遮罩；羽化对纯色无影响，一并走到下面的统一流程
@@ -308,7 +315,7 @@ def run_mask_create(ctx, node, inputs):
         x1, y1, x2, y2 = _clamp_region(
             int(node.params.get("x1", 0) or 0), int(node.params.get("y1", 0) or 0),
             int(node.params.get("x2", 0) or 0), int(node.params.get("y2", 0) or 0),
-            w, h)
+            w, h, translate=ctx.translate)
 
     ctx.status(f"🎭 生成遮罩 {mode} {w}x{h}")
     ctx.check_cancel()
@@ -373,23 +380,27 @@ def run_inpaint(ctx, node, inputs):
     neg = inputs.get("negative")
 
     if model is None:
-        raise ValueError("缺少输入 model")
+        raise ValueError(ctx.translate("缺少输入 model"))
     if image is None:
-        raise ValueError("缺少输入 image")
+        raise ValueError(ctx.translate("缺少输入 image"))
     if mask is None:
-        raise ValueError("缺少输入 mask（重绘区域，白=重绘）")
+        raise ValueError(ctx.translate("缺少输入 mask（重绘区域，白=重绘）"))
     image = image.convert("RGB")
     if not hasattr(mask, "convert"):
-        raise ValueError(f"mask 必须是 PIL 图像（mode \"L\"），实际 {type(mask).__name__}")
+        raise ValueError(ctx.translate(
+            "mask 必须是 PIL 图像（mode \"L\"），实际 {type}").format(
+                type=type(mask).__name__))
 
     adapter = getattr(model, "adapter", None)
     if adapter is None:
-        raise RuntimeError(f"模型 {model.describe()} 没有适配器，无法局部重绘")
+        raise RuntimeError(ctx.translate("模型 {model} 没有适配器，无法局部重绘").format(
+            model=model.describe()))
     if not getattr(adapter.caps, "inpaint", False):
         raise adapters_mod.UnsupportedFeatureError("局部重绘", model.arch_id)
     pipe = adapter.pipe(model, "inpaint")
     if pipe is None:
-        raise RuntimeError(f"模型 {model.describe()} 没有可用的 inpaint 管线")
+        raise RuntimeError(ctx.translate("模型 {model} 没有可用的 inpaint 管线").format(
+            model=model.describe()))
 
     # 遮罩尺寸必须与图像一致，否则 diffusers 会按错的尺寸处理
     mask = mask.convert("L")
@@ -426,16 +437,17 @@ def run_inpaint(ctx, node, inputs):
 
     imgs = getattr(res, "images", None)
     if imgs is None:
-        raise RuntimeError("重绘管线没有返回图像")
+        raise RuntimeError(ctx.translate("重绘管线没有返回图像"))
     out = imgs[0] if isinstance(imgs, (list, tuple)) else imgs
     if out is None:
-        raise RuntimeError("重绘管线返回了空的图像列表")
+        raise RuntimeError(ctx.translate("重绘管线返回了空的图像列表"))
 
     pil = as_image(out)
     if pil is None:
-        pil = _tensor_to_pil(model, out)
+        pil = _tensor_to_pil(model, out, translate=ctx.translate)
     if pil is None:
-        raise RuntimeError(f"无法把管线返回值转成图像（{type(out).__name__}）")
+        raise RuntimeError(ctx.translate("无法把管线返回值转成图像（{type}）").format(
+            type=type(out).__name__))
 
     meta = {"steps": steps, "cfg": cfg, "seed": seed, "strength": strength,
             "workflow_kind": "inpaint", "width": image.width,
@@ -473,7 +485,7 @@ def run_save_image(ctx, node, inputs):
 
     image = as_image(inputs.get("image"))
     if image is None:
-        raise ValueError("缺少输入 image")
+        raise ValueError(ctx.translate("缺少输入 image"))
     image = image.convert("RGB")
 
     prefix = (node.params.get("filename_prefix") or "").strip() or "wf_"
@@ -481,7 +493,7 @@ def run_save_image(ctx, node, inputs):
     fmt = (node.params.get("format") or "PNG").strip().upper()
     ext = _FMT_EXT.get(fmt)
     if ext is None:
-        raise ValueError(f"不支持的保存格式: {fmt}")
+        raise ValueError(ctx.translate("不支持的保存格式: {format}").format(format=fmt))
     want_wm = bool(node.params.get("watermark", True))
     save_wf = bool(node.params.get("save_workflow", False))
 
@@ -495,7 +507,8 @@ def run_save_image(ctx, node, inputs):
     os.makedirs(out_dir, exist_ok=True)
 
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = _unique_path(os.path.join(out_dir, f"{prefix}{ts}_0{ext}"))
+    path = _unique_path(
+        os.path.join(out_dir, f"{prefix}{ts}_0{ext}"), translate=ctx.translate)
 
     # ---- 元数据：上游 dict + 本次运行贡献（下划线开头的是运行期内部量）----
     meta: dict = {}
@@ -556,7 +569,8 @@ def run_save_image(ctx, node, inputs):
 
     saved = saved or path
     if not os.path.exists(saved):
-        raise RuntimeError(f"图像保存失败（文件不存在）: {saved}")
+        raise RuntimeError(ctx.translate("图像保存失败（文件不存在）: {path}").format(
+            path=saved))
 
     ctx.metadata["output_path"] = saved
     return {"path": saved, "metadata": meta}
@@ -594,9 +608,9 @@ def run_load_image(ctx, node, inputs):
 
     path = (node.params.get("path") or "").strip()
     if not path:
-        raise ValueError("没有指定图片路径")
+        raise ValueError(ctx.translate("没有指定图片路径"))
     if not os.path.exists(path):
-        raise FileNotFoundError(f"找不到图片: {path}")
+        raise FileNotFoundError(ctx.translate("找不到图片: {path}").format(path=path))
 
     as_mask = bool(node.params.get("as_mask", False))
     try:
