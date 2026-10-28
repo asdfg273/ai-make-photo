@@ -9,7 +9,7 @@ import os
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QLabel, QPushButton, QComboBox, QCheckBox,
                              QTextEdit, QSpinBox, QDoubleSpinBox, QGroupBox,
-                             QListWidget, QStackedWidget)
+                             QListWidget, QStackedWidget, QLineEdit)
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -452,6 +452,25 @@ class VideoPage(PageBase):
         host.wrap_sovits.setVisible(False)
         vo_lay.addWidget(host.wrap_sovits)
 
+        host.chk_bg_music = QCheckBox("添加背景配乐")
+        host.chk_bg_music.setToolTip("配音完成后，将背景音乐按 30% 音量混入视频")
+        vo_lay.addWidget(host.chk_bg_music)
+        bgm_row = QHBoxLayout()
+        bgm_row.setSpacing(8)
+        bgm_row.addWidget(_field("配乐文件:", 72))
+        host.txt_bg_music_path = QLineEdit()
+        host.txt_bg_music_path.setReadOnly(True)
+        host.txt_bg_music_path.setPlaceholderText("未选择配乐")
+        host.txt_bg_music_path.setMinimumHeight(30)
+        bgm_row.addWidget(host.txt_bg_music_path, 1)
+        host.btn_pick_bg_music = _pill("选择", 72)
+        _wire(host, host.btn_pick_bg_music.clicked, "_pick_bg_music")
+        bgm_row.addWidget(host.btn_pick_bg_music)
+        host.btn_clear_bg_music = _pill("清除", 64)
+        _wire(host, host.btn_clear_bg_music.clicked, "_clear_bg_music")
+        bgm_row.addWidget(host.btn_clear_bg_music)
+        vo_lay.addLayout(bgm_row)
+
         host.lbl_voice_hint = _hint("首次使用会自动下载 ChatTTS 模型（约 1.1 GB）。")
         vo_lay.addWidget(host.lbl_voice_hint)
         root.addWidget(grp_voice)
@@ -562,7 +581,9 @@ class VideoPage(PageBase):
         _wire(host, host.spin_video_fps.valueChanged, "_update_video_duration_hint")
         _wire(host, host.combo_tts_engine.currentIndexChanged, "_on_tts_engine_changed")
         for wdg in (host.txt_video_voice, host.combo_tts_engine,
-                    host.wrap_chattts, host.wrap_sovits):
+                    host.wrap_chattts, host.wrap_sovits, host.chk_bg_music,
+                    host.txt_bg_music_path, host.btn_pick_bg_music,
+                    host.btn_clear_bg_music):
             host.chk_video_voice.toggled.connect(wdg.setEnabled)
             wdg.setEnabled(False)
 

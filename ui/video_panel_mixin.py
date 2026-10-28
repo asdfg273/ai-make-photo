@@ -16,7 +16,7 @@ import tempfile
 
 from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QSpinBox, QPushButton, QLineEdit,
-    QListWidgetItem, QWidget, QSlider,
+    QListWidgetItem, QWidget, QSlider, QFileDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSlot, QMetaObject, Q_ARG
 from PyQt6.QtGui import QIcon, QPixmap, QImage
@@ -49,6 +49,35 @@ class VideoPanelMixin:
     - self.set_status(text, color)
     - self.play_video(path)
     """
+
+    def _pick_bg_music(self):
+        """选择配乐并自动启用，已有配音/混音链路直接消费该路径。"""
+        path, _filter = QFileDialog.getOpenFileName(
+            self, ui_i18n.tr("选择背景配乐"), "",
+            ui_i18n.tr("音频文件 (*.mp3 *.wav *.flac *.m4a *.aac *.ogg)"))
+        if not path:
+            return
+        self.txt_bg_music_path.setText(path)
+        self.txt_bg_music_path.setToolTip(path)
+        self.chk_bg_music.setChecked(True)
+
+    def _clear_bg_music(self):
+        editor = getattr(self, "txt_bg_music_path", None)
+        if editor is not None:
+            editor.clear()
+            editor.setToolTip("")
+
+    def _collect_bg_music(self, voice_params):
+        """仅在启用配音、勾选配乐且文件存在时透传 bg_music。"""
+        params = dict(voice_params) if voice_params else None
+        checkbox = getattr(self, "chk_bg_music", None)
+        editor = getattr(self, "txt_bg_music_path", None)
+        if not params or checkbox is None or editor is None or not checkbox.isChecked():
+            return params
+        path = editor.text().strip()
+        if path and os.path.isfile(path):
+            params["bg_music"] = path
+        return params
 
     # ==========================================================
     #  视频生成主流程
@@ -206,13 +235,8 @@ class VideoPanelMixin:
                     }
                 else:
                     voice_params = {"engine": "chattts"}
-            # 背景配乐（可选）
-            # TODO: lbl_bg_music_path 控件从未创建,此分支永远为空 ——
-            # 待补文件选择控件后再启用,先保留参数透传逻辑
-            if voice_params and hasattr(self, "chk_bg_music") and self.chk_bg_music.isChecked():
-                bg_path = getattr(self, "lbl_bg_music_path", None)
-                if bg_path and os.path.exists(str(bg_path)):
-                    voice_params["bg_music"] = str(bg_path)
+            # 背景配乐（可选）：沿用后续 FFmpeg 混音分支。
+            voice_params = self._collect_bg_music(voice_params)
 
             if voice_params:
                 # 优先使用配音文本框内容，为空时回退到提示词

@@ -588,6 +588,14 @@ TRANSLATIONS = {
     "没有正在播放的视频": ("No video is currently playing", "再生中の動画がありません"),
     "视频已保存: {path}": ("Video saved: {path}", "動画を保存しました: {path}"),
     "保存失败: {error}": ("Save failed: {error}", "保存に失敗しました: {error}"),
+    "添加背景配乐": ("Add Background Music", "BGM を追加"),
+    "配乐文件:": ("Music file:", "BGM ファイル:"),
+    "未选择配乐": ("No music selected", "BGM が選択されていません"),
+    "选择背景配乐": ("Choose Background Music", "BGM を選択"),
+    "音频文件 (*.mp3 *.wav *.flac *.m4a *.aac *.ogg)": (
+        "Audio files (*.mp3 *.wav *.flac *.m4a *.aac *.ogg)",
+        "音声ファイル (*.mp3 *.wav *.flac *.m4a *.aac *.ogg)",
+    ),
 
     # 场景批量出图
     "批量出图 — {name}": ("Batch Generation — {name}", "一括生成 — {name}"),
