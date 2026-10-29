@@ -14,6 +14,7 @@ class LoadContext:
     info: Any = None          # ArchInfo
     detection: Any = None     # arch_mod.detect() 的结果
     manager: Any = None       # ModelManager 自身，供复用既有 helper
+    optimization: dict = field(default_factory=dict)  # DiT 量化 / group offload
 
 
 @dataclass
@@ -60,6 +61,12 @@ class BaseLoader:
         """
         comps = result.txt2img.components
         for attr, cls in (("img2img", i2i_cls), ("inpaint", inp_cls)):
+            if cls is None:
+                # 该架构没有对应的管线类（如 SD3 无 inpaint：diffusers 未提供）。
+                # 如实留空，让 result.inpaint 保持 None，上层按"不支持"处理；
+                # 以前这里会用 txt2img 的同名类顶替，结果支持声明是假的。
+                logger.info(f"ℹ️ [{ctx.arch_id}] 无 {attr} 管线类，跳过派生")
+                continue
             try:
                 p = cls(**comps)
                 ctx.manager._apply_light_optimizations(p, name=attr)

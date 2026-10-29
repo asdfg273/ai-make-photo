@@ -49,7 +49,7 @@ REGISTRY: dict[str, ArchInfo] = {
     ),
     ),
     "flux": ArchInfo(
-        "flux", "FLUX.1", "diffusers", False, _TXT2IMG_ONLY,
+        "flux", "FLUX.1", "diffusers", True, _TXT2IMG_ONLY,
         model_subdir="flux", lora_subdir="flux",
         unsupported_reason=(
             "Flux 引擎尚未接通：需要先在「扩展市场」安装 Flux 引擎组件"
@@ -63,9 +63,9 @@ REGISTRY: dict[str, ArchInfo] = {
         extra_download_size="约 10GB（扩展市场）",
     ),
     "sd3": ArchInfo(
-        "sd3", "Stable Diffusion 3", "sd3", False, _TXT2IMG_ONLY,
+        "sd3", "Stable Diffusion 3", "sd3", True, _TXT2IMG_ONLY,
         model_subdir="sd3", lora_subdir="sd3",
-        unsupported_reason="SD3 引擎尚未实现。",
+        unsupported_reason="SD3 单文件加载依赖本地 diffusers 配置与完整检查点。",
         extra_components=("T5-XXL 文本编码器", "双 CLIP 编码器"),
     ),
     "controlnet": ArchInfo(

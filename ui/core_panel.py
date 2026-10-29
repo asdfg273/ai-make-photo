@@ -81,6 +81,12 @@ def build_core(host, layout: QVBoxLayout) -> None:
     host.lbl_model_info.setWordWrap(True)
     host.lbl_model_info.setProperty("role", "hint")
     gm.addRow(host.lbl_model_info)
+    host.lbl_model_preview = QLabel("无示例图")
+    host.lbl_model_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    host.lbl_model_preview.setMinimumHeight(40)
+    host.lbl_model_preview.setProperty("role", "hint")
+    host.lbl_model_preview.setVisible(False)
+    gm.addRow(host.lbl_model_preview)
 
     # ---------- 场景预设行 ----------
     preset_row = QHBoxLayout()
@@ -340,6 +346,12 @@ def build_gen_area(host, layout: QVBoxLayout) -> None:
     host.btn_generate.setProperty("kind", "primary")
     _wire(host, host.btn_generate.clicked, "start_generation")
     layout.addWidget(host.btn_generate)
+
+    host.btn_generation_queue = QPushButton("生成队列")
+    host.btn_generation_queue.setFixedHeight(30)
+    host.btn_generation_queue.setToolTip("查看、编辑、插队和暂停等待中的生成任务")
+    _wire(host, host.btn_generation_queue.clicked, "show_generation_queue")
+    layout.addWidget(host.btn_generation_queue)
 
     host.btn_interrupt = QPushButton("⏹  中断生成")
     host.btn_interrupt.setFixedHeight(32)

@@ -53,6 +53,7 @@ else:
 from ui.splash          import create_splash
 from utils.app_events     import EventMixin
 from utils.app_generation import GenerationMixin
+from utils.generation_queue_controller import GenerationQueueMixin
 from ui.preset_manager import PresetManagerMixin, TooltipMixin
 from ui.param_snapshot import ParamSnapshotMixin
 from ui.video_panel_mixin import VideoPanelMixin
@@ -76,7 +77,7 @@ class _AppBridge(QObject):
 #  主窗口
 # ============================================================
 class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
-                   GenerationMixin, PresetManagerMixin, TooltipMixin,
+                   GenerationQueueMixin, GenerationMixin, PresetManagerMixin, TooltipMixin,
                    VideoPanelMixin):
 
     def __init__(self):
@@ -918,6 +919,8 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         subdir = info.model_subdir or arch_id
         models = scan_models(subdir)
 
+        from PyQt6.QtCore import QSize
+        self.combo_model.setIconSize(QSize(40, 40))
         self.combo_model.blockSignals(True)
         self.combo_model.clear()
 
@@ -928,7 +931,8 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             self.combo_model.setEnabled(True)
             for m in models:
                 label = f"{m['name']}  [{m['size_gb']}GB]"
-                self.combo_model.addItem(label, m)
+                icon = QIcon(m["preview"]) if m.get("preview") else QIcon()
+                self.combo_model.addItem(icon, label, m)
 
         self.combo_model.blockSignals(False)
 
@@ -945,8 +949,18 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
     def _on_model_changed(self, idx=None):
         data = self.combo_model.currentData()
         note = ""
+        preview = ""
         if isinstance(data, dict):
             note = data.get("note", "")
+            preview = data.get("preview", "")
+        preview_label = getattr(self, "lbl_model_preview", None)
+        if preview_label is not None:
+            pixmap = QPixmap(preview) if preview else QPixmap()
+            preview_label.setVisible(not pixmap.isNull())
+            if not pixmap.isNull():
+                preview_label.setPixmap(pixmap.scaled(
+                    112, 112, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
 
         label = getattr(self, 'lbl_model_note', None) or getattr(self, 'lbl_model_info', None)
         if label is not None:

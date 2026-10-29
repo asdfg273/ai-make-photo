@@ -276,10 +276,13 @@ class ModelManager(metaclass=SingletonMeta):
         import warnings
         warnings.filterwarnings("ignore", message=".*kept in float32.*")
 
-        # 同模型跳过
+        # 同模型且推理配置未变化时才跳过；切换量化/offload 必须重建管线。
+        from core.dit_optimization import optimization_signature
+        opt_signature = optimization_signature(getattr(self, "inference_options", None))
         if (self.current_model_name == model_name
-                and self.txt2img_pipe is not None):
-            logger.info("⚡ 模型未改变，跳过加载。")
+                and self.txt2img_pipe is not None
+                and getattr(self, "_loaded_optimization_signature", None) == opt_signature):
+            logger.info("⚡ 模型与推理配置未改变，跳过加载。")
             return
 
         # === 智能查找: 支持 models/ 根目录 + 所有架构子目录 ===
@@ -384,6 +387,7 @@ class ModelManager(metaclass=SingletonMeta):
                 dtype=self.dtype, model_name=model_name,
                 arch_id=det.arch_id, info=det.info,
                 detection=det, manager=self,
+                optimization=dict(getattr(self, "inference_options", {}) or {}),
             )
 
             # 换模型前先释放旧管线：否则新旧两套权重同时驻留，
@@ -441,6 +445,7 @@ class ModelManager(metaclass=SingletonMeta):
             self.controlnet_pipe = None
             self.current_cn_type  = None
             self.current_model_name = model_name
+            self._loaded_optimization_signature = opt_signature
             # 出图元数据要记录底模的**真实磁盘路径 + 哈希**，以前只存了
             # 文件名，事后无法确认到底用的哪个文件（同名不同版很常见）。
             self.current_model_path = model_path

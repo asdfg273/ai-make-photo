@@ -74,10 +74,12 @@ def scan_models(model_type: str) -> list[dict]:
             except Exception:
                 pass
 
+        from utils.model_previews import find_model_preview
         size_gb = os.path.getsize(fpath) / (1024 ** 3)
         results.append({
             "name": fname,
             "path": fpath,
+            "preview": find_model_preview(fpath) or "",
             "note": note,
             "size_gb": round(size_gb, 2),
             "type": model_type,

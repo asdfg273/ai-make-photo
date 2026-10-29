@@ -79,6 +79,15 @@ class AppConfig:
 
     freeu_enabled: bool = False
 
+    # DiT 推理优化：仅作用于 Flux / SD3；步间缓存另支持 SDXL。
+    dit_quantization: str = "off"       # off / fp8 / nvfp4
+    dit_group_offload: bool = True
+    dit_offload_blocks: int = 1
+    step_cache_enabled: bool = False
+    step_cache_threshold: float = 0.18
+    step_cache_max_skips: int = 2
+    clip_model_path: str = ""          # 画廊语义检索的本地 CLIP 目录
+
     # ── 区域提示词 / 局部重绘 ──────────────────────────────
     # 每个区域是一个 dict（与 core.regional.Region 字段一致）：
     #   {"name","prompt","negative","weight","shape","rect","mask_path",

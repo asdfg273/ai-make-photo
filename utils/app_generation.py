@@ -201,7 +201,7 @@ class GenerationMixin:
     # ==================================================================
     #  启动生成
     # ==================================================================
-    def start_generation(self):
+    def _start_generation_immediate(self):
         if not getattr(self, 'combo_model', None) or \
                 self._cbo(self.combo_model) in ("未找到模型", ""):
             from PyQt6.QtWidgets import QMessageBox
@@ -653,7 +653,20 @@ class GenerationMixin:
                 0, int(getattr(self.config, "clip_skip", 0) or 0))
         except Exception:
             pass
+        self.ai.inference_options = {
+            "dit_quantization": getattr(self.config, "dit_quantization", "off"),
+            "dit_group_offload": getattr(self.config, "dit_group_offload", True),
+            "dit_offload_blocks": getattr(self.config, "dit_offload_blocks", 1),
+        }
         self.ai.load_model(ctx['model_name'])
+        from utils.step_cache import configure_step_cache
+        configure_step_cache(
+            self.ai.txt2img_pipe,
+            getattr(self.ai, "current_arch_id", ""),
+            bool(getattr(self.config, "step_cache_enabled", False)),
+            float(getattr(self.config, "step_cache_threshold", 0.18)),
+            int(getattr(self.config, "step_cache_max_skips", 2)),
+        )
 
     def _gt_setup_ipa(self, ctx):
         use_ipa = self._ui_read(
@@ -1261,6 +1274,8 @@ class GenerationMixin:
         self._bridge.progress_signal.emit(ctx['total_count'], ctx['total_count'])
 
     def _gt_generate_one(self, ctx, i, current_seed):
+        from utils.step_cache import reset_step_cache
+        reset_step_cache()
         generator = torch.Generator(self.ai.device).manual_seed(current_seed)
         en_prompt = ctx['en_prompts'][i]
         en_neg    = ctx['en_neg']
@@ -1295,6 +1310,9 @@ class GenerationMixin:
         def step_cb(pipe, step_index, timestep, callback_kwargs,
                     _steps=ctx['steps'], _t0=t0, _preview=prompt_preview):
             if getattr(self, 'cancel_flag', False):
+                raise InterruptedError()
+            wait_for_queue = getattr(self, "_generation_queue_wait", None)
+            if callable(wait_for_queue) and not wait_for_queue():
                 raise InterruptedError()
             done = step_index + 1
             self._bridge.sub_prog_signal.emit(done, _steps)

@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
     QLabel, QTextEdit, QDialog, QScrollArea, QFileDialog, QApplication
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPoint, QTimer
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPoint, QTimer, QObject
 from PyQt6.QtGui import QPixmap, QIcon, QWheelEvent
 
 from ui.i18n import ui_i18n
@@ -17,6 +17,11 @@ from utils.paths import DATA_DIR
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class _GallerySearchBridge(QObject):
+    done = pyqtSignal(object, object)
+    error = pyqtSignal(object, object)
 
 NSFW_KEYWORDS = {
     # 英文
@@ -271,6 +276,13 @@ class GalleryPanel(QWidget):
         super().__init__(parent)
         self._all_items = []
         self._media_filter = "all"          # all / image / video
+        self._semantic_scores = {}
+        self._semantic_active = False
+        self._semantic_request_id = 0
+        self._semantic_thread = None
+        self._search_bridge = _GallerySearchBridge(self)
+        self._search_bridge.done.connect(self._semantic_done)
+        self._search_bridge.error.connect(self._semantic_error)
 
         # 批量添加防洪：200ms 防抖合并刷新（X-Y 矩阵一次几十张不疯狂重排）
         self._refresh_timer = QTimer(self)
@@ -296,11 +308,14 @@ class GalleryPanel(QWidget):
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(300)   # 防抖 300ms
         self._search_timer.timeout.connect(self._apply_filter)
-        self.search_box.textChanged.connect(self._search_timer.start)
+        self.search_box.textChanged.connect(self._search_text_changed)
 
         self.btn_clear_search = QPushButton("✖")
         self.btn_clear_search.setToolTip("清空搜索")
         self.btn_clear_search.clicked.connect(lambda: self.search_box.clear())
+        self.btn_semantic = QPushButton("语义")
+        self.btn_semantic.setToolTip("使用本地 CLIP 按文本语义搜索，或从图片菜单查找相似图")
+        self.btn_semantic.clicked.connect(self.start_semantic_search)
 
         self.btn_only_fav = QPushButton("⭐")
         self.btn_only_fav.setCheckable(True)
@@ -336,6 +351,7 @@ class GalleryPanel(QWidget):
 
         search_row.addWidget(self.search_box, 1)
         search_row.addWidget(self.btn_clear_search)
+        search_row.addWidget(self.btn_semantic)
         search_row.addWidget(self.combo_time)
         search_row.addWidget(self.combo_sort)
         search_row.addWidget(self.btn_only_fav)
@@ -501,9 +517,71 @@ class GalleryPanel(QWidget):
             return ""
 
     # ========== 搜索过滤 ==========
+    def _search_text_changed(self, *_):
+        self._semantic_request_id += 1
+        self._semantic_scores = {}
+        self._semantic_active = False
+        self.btn_semantic.setEnabled(True)
+        self.btn_semantic.setText(ui_i18n.tr("语义"))
+        self._search_timer.start()
+
+    def start_semantic_search(self, _checked=False, image_path=""):
+        """显式启动本地 CLIP 检索；普通关键字过滤始终可用。"""
+        import threading
+        from utils.gallery_search import ClipSearchEngine
+
+        query = self.search_box.text().strip()
+        if not image_path and not query:
+            QMessageBox.information(self, ui_i18n.tr("提示"), ui_i18n.tr("请先输入语义搜索内容"))
+            return
+        paths = [path for path, _, _ in self._all_items if self.media_kind(path) == "image"]
+        if not paths:
+            return
+        self._semantic_request_id += 1
+        request_id = self._semantic_request_id
+        self._semantic_active = False
+        self._semantic_scores = {}
+        self.btn_semantic.setEnabled(False)
+        self.btn_semantic.setText(ui_i18n.tr("索引中…"))
+        try:
+            config = getattr(self.window(), "config", None)
+            model_path = getattr(config, "clip_model_path", "") if config else ""
+        except Exception:
+            model_path = ""
+
+        def work():
+            try:
+                engine = ClipSearchEngine(model_path=model_path or None)
+                scores = (engine.search_image(image_path, paths) if image_path
+                          else engine.search_text(query, paths))
+                self._search_bridge.done.emit(scores, request_id)
+            except Exception as exc:
+                self._search_bridge.error.emit(str(exc), request_id)
+
+        self._semantic_thread = threading.Thread(target=work, daemon=True)
+        self._semantic_thread.start()
+
+    def _semantic_done(self, scores, request_id):
+        if request_id != self._semantic_request_id:
+            return
+        self._semantic_scores = dict(scores)
+        self._semantic_active = True
+        self.btn_semantic.setEnabled(True)
+        self.btn_semantic.setText(ui_i18n.tr("语义"))
+        self._apply_filter()
+
+    def _semantic_error(self, message, request_id):
+        if request_id != self._semantic_request_id:
+            return
+        self._semantic_active = False
+        self.btn_semantic.setEnabled(True)
+        self.btn_semantic.setText(ui_i18n.tr("语义"))
+        QMessageBox.warning(self, ui_i18n.tr("语义搜索不可用"), str(message))
+
     def _apply_filter(self):
         import time as _time
-        keyword = self.search_box.text().strip().lower()
+        from utils.gallery_search import match_all_terms
+        keyword = self.search_box.text().strip()
         only_fav = self.btn_only_fav.isChecked()
         show_nsfw = self.btn_show_nsfw.isChecked()
         media = self._media_filter
@@ -527,6 +605,8 @@ class GalleryPanel(QWidget):
             items.sort(key=lambda it: self._mtime(it[0]))
         elif sort_idx == 2:
             items.sort(key=lambda it: os.path.basename(it[0]).lower())
+        if self._semantic_active:
+            items.sort(key=lambda it: -self._semantic_scores.get(it[0], -1.0))
 
         self.list_widget.clear()
         shown = 0
@@ -541,10 +621,9 @@ class GalleryPanel(QWidget):
                 continue
             if only_fav and os.path.abspath(path) not in self._favs:
                 continue
-            if keyword:
-                name = os.path.basename(path).lower()
-                if keyword not in name and keyword not in prompt_text.lower():
-                    continue
+            if keyword and not self._semantic_active and not match_all_terms(
+                    keyword, os.path.basename(path), prompt_text):
+                continue
             self._add_to_list(path)
             shown += 1
 
@@ -839,6 +918,7 @@ class GalleryPanel(QWidget):
 
         act_open   = menu.addAction("🖼️ 大图查看")
         act_edit   = menu.addAction("✏️ 载入预览/发送到编辑")
+        act_similar = menu.addAction("查找相似图")
         menu.addSeparator()
         act_reuse  = menu.addAction("🔁 复用参数")
         act_i2i    = menu.addAction("🛠 发送到 img2img")
@@ -858,6 +938,8 @@ class GalleryPanel(QWidget):
             self._on_double_clicked(selected[0])
         elif chosen == act_edit:
             self.send_to_editor_signal.emit(path)
+        elif chosen == act_similar:
+            self.start_semantic_search(image_path=path)
         elif chosen == act_reuse:
             self.reuse_params_signal.emit(path)
         elif chosen == act_i2i:

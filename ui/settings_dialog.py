@@ -6,7 +6,7 @@
 import logging
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QTabWidget, QWidget, QLabel, QPushButton,
                              QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox,
-                             QKeySequenceEdit, QDialogButtonBox, QGroupBox)
+                             QKeySequenceEdit, QDialogButtonBox, QGroupBox, QLineEdit)
 from PyQt6.QtGui import QKeySequence
 
 from core.config_manager import DEFAULT_SHORTCUTS, SHORTCUT_LABELS
@@ -40,6 +40,7 @@ class SettingsDialog(QDialog):
         self._build_general_tab()
         self._build_shortcut_tab()
         self._build_defaults_tab()
+        self._build_performance_tab()
 
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                               | QDialogButtonBox.StandardButton.Cancel)
@@ -209,6 +210,72 @@ class SettingsDialog(QDialog):
 
         self.tabs.addTab(w, "默认参数")
 
+    # ============ Tab 3: 推理性能 ============
+    def _build_performance_tab(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        cfg = self.cfg
+
+        grp_dit = QGroupBox("Flux / SD3 低显存推理")
+        f = QFormLayout(grp_dit)
+        self.combo_dit_quant = QComboBox()
+        self.combo_dit_quant.setProperty("i18nItems", True)
+        self.combo_dit_quant.addItem("关闭", "off")
+        self.combo_dit_quant.addItem("FP8 权重量化（torchao）", "fp8")
+        self.combo_dit_quant.addItem("NVFP4（NVIDIA ModelOpt）", "nvfp4")
+        idx = self.combo_dit_quant.findData(
+            getattr(cfg, "dit_quantization", "off"))
+        self.combo_dit_quant.setCurrentIndex(max(0, idx))
+        f.addRow("DiT 量化:", self.combo_dit_quant)
+
+        self.chk_dit_group_offload = QCheckBox("启用 DiT 分块 CPU offload")
+        self.chk_dit_group_offload.setChecked(
+            bool(getattr(cfg, "dit_group_offload", True)))
+        f.addRow(self.chk_dit_group_offload)
+        self.spin_dit_offload_blocks = QSpinBox()
+        self.spin_dit_offload_blocks.setRange(1, 32)
+        self.spin_dit_offload_blocks.setValue(
+            int(getattr(cfg, "dit_offload_blocks", 1)))
+        f.addRow("每组 block 数:", self.spin_dit_offload_blocks)
+        v.addWidget(grp_dit)
+
+        grp_cache = QGroupBox("TeaCache 风格步间缓存")
+        fc = QFormLayout(grp_cache)
+        self.chk_step_cache = QCheckBox("启用步间缓存（Flux / SDXL）")
+        self.chk_step_cache.setChecked(bool(getattr(cfg, "step_cache_enabled", False)))
+        fc.addRow(self.chk_step_cache)
+        self.spin_step_cache_threshold = QDoubleSpinBox()
+        self.spin_step_cache_threshold.setRange(0.01, 1.0)
+        self.spin_step_cache_threshold.setSingleStep(0.01)
+        self.spin_step_cache_threshold.setDecimals(2)
+        self.spin_step_cache_threshold.setValue(
+            float(getattr(cfg, "step_cache_threshold", 0.18)))
+        fc.addRow("复用阈值:", self.spin_step_cache_threshold)
+        self.spin_step_cache_max_skips = QSpinBox()
+        self.spin_step_cache_max_skips.setRange(1, 4)
+        self.spin_step_cache_max_skips.setValue(
+            int(getattr(cfg, "step_cache_max_skips", 2)))
+        fc.addRow("最多连续复用:", self.spin_step_cache_max_skips)
+        v.addWidget(grp_cache)
+
+        grp_clip = QGroupBox("画廊语义搜索")
+        fclip = QFormLayout(grp_clip)
+        self.txt_clip_model_path = QLineEdit(
+            str(getattr(cfg, "clip_model_path", "") or ""))
+        self.txt_clip_model_path.setPlaceholderText(
+            "留空使用 Hugging Face 缓存，或填写本地 CLIP 目录")
+        fclip.addRow("本地 CLIP 目录:", self.txt_clip_model_path)
+        v.addWidget(grp_clip)
+
+        hint = QLabel("量化与缓存会改变推理结果或性能，建议先用固定种子对比。"
+                      "NVFP4 需要兼容 GPU 和 ModelOpt；修改量化后下次生成会重载模型。"
+                      "语义搜索只读取本地目录或已有缓存，不会自动下载模型。")
+        hint.setProperty("role", "hint")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+        v.addStretch()
+        self.tabs.addTab(w, "推理性能")
+
     # ============ 收集结果 ============
     def accept(self):
         cfg = self.cfg
@@ -234,6 +301,13 @@ class SettingsDialog(QDialog):
             cfg.qwen_model_key = self.combo_qwen.currentData()
         cfg.device_preference = self.combo_device.currentText().lower()
         cfg.ui_language = self.combo_ui_language.currentData()
+        cfg.dit_quantization = self.combo_dit_quant.currentData()
+        cfg.dit_group_offload = self.chk_dit_group_offload.isChecked()
+        cfg.dit_offload_blocks = self.spin_dit_offload_blocks.value()
+        cfg.step_cache_enabled = self.chk_step_cache.isChecked()
+        cfg.step_cache_threshold = float(self.spin_step_cache_threshold.value())
+        cfg.step_cache_max_skips = self.spin_step_cache_max_skips.value()
+        cfg.clip_model_path = self.txt_clip_model_path.text().strip()
 
         cfg.save()
         ui_i18n.set_language(cfg.ui_language)
