@@ -9,6 +9,6 @@ from __future__ import annotations
 
 __all__ = [
     "model_nodes", "text_nodes", "sampling_nodes", "image_nodes",
-    "control_nodes", "adapter_nodes", "detailer_nodes", "upscale_nodes",
-    "video_nodes",
+    "control_nodes", "adapter_nodes", "ipa_nodes", "detailer_nodes",
+    "upscale_nodes", "video_nodes",
 ]

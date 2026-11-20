@@ -40,6 +40,8 @@ class AppConfig:
     default_steps: int = 30
     default_strength: float = 0.6
     default_lora_weight: float = 0.7
+    # LoRA 训练对话框上次用的数据集目录（只是记忆，不参与生成）
+    lora_dataset_dir: str = ""
     adetailer_enabled: bool = False
     theme: str = "darkly"
     ui_language: str = "zh"           # 界面语言: zh / ja / en
@@ -49,6 +51,12 @@ class AppConfig:
     default_batch: int = 1
     default_cfg: float = 7.0
     default_sampler: str = "DPM++ 2M Karras"
+    # sigma 风格（默认/Karras/Exponential/Beta），见 core/samplers.py；
+    # 采样器名字里带 "Karras" 的旧配置仍然能解析
+    sampler_scheduler: str = "默认"
+    # 允许工作流里的「任意 Python 节点」执行用户代码（默认关闭，见
+    # nodes/python_nodes.py 顶部的说明）。打开后工作流文件不再可移植。
+    allow_python_nodes: bool = False
     qwen_model_key: str = "qwen2vl_2b"
     last_prompt: str = ""
     last_neg: str = ""
@@ -76,13 +84,31 @@ class AppConfig:
     # 分块参数（hires_mode="tiled" 时生效）
     hires_tile_size: int = 640
     hires_tile_overlap: int = 48
+    # 分块专用重绘强度（与整图 hires_denoise 分开，因为分块强度大就会
+    # 各块各画各的；上限由 utils.tiled_hires.TILED_MAX_DENOISE 把着）
+    hires_tile_denoise: float = 0.25
 
     freeu_enabled: bool = False
 
     # DiT 推理优化：仅作用于 Flux / SD3；步间缓存另支持 SDXL。
-    dit_quantization: str = "off"       # off / fp8 / nvfp4
+    dit_quantization: str = "off"       # off / bnb8 / fp8 / nvfp4
     dit_group_offload: bool = True
     dit_offload_blocks: int = 1
+    # MOSS-Image 专用：8bit 常驻显存。
+    # 打开后 DiT 压到 4.7GB 住在显存里，**不再常驻 9.5GB 内存**
+    # （bf16 + 分块 offload 必须把权重留在内存里，开 IDE 就爆）。
+    # 代价：每步约慢 18%；显存峰值顶到 7.8/7.9GB。
+    # 只对 MOSS-Image 生效 —— 它需要一份本地生成的补丁
+    # （core/moss_accel.py，不下载任何东西，也不改模型目录里的文件）。
+    moss_accel: bool = False
+    moss_accel_asked: bool = False      # 是否已经弹过"要不要开 8bit"的问询
+    # MOSS-Image 专用：纯 torch 的 int8 权重量化（不依赖 bitsandbytes）。
+    #   "off"     —— 原样 bf16：DiT 9.5GB 只能在内存里，靠分块 offload 每步搬；
+    #   "int8"    —— 只压 DiT（9.5 → 4.7GB），常驻显存，内存里不再留副本；
+    #   "int8te"  —— DiT + 文本编码器都压（16 → 6.9GB），内存峰值最低。
+    # 实测（1024²/20 步，同种子）：bf16+offload 130.0s / 内存峰值 23.8GB；
+    # int8 109.6s / 17.4GB；int8te 154.1s / 11.0GB（换提示词时文本编码变慢）。
+    moss_quant: str = "off"
     step_cache_enabled: bool = False
     step_cache_threshold: float = 0.18
     step_cache_max_skips: int = 2
@@ -97,6 +123,19 @@ class AppConfig:
     use_regions: bool = False
     regions: List[dict] = field(default_factory=list)
 
+    # ── 多参考图 (IP-Adapter) ─────────────────────────────
+    # 与区域功能同一套思路：编辑器把条目直接写进配置，主界面只放
+    # "启用 + 编辑 + 清空 + 摘要"。每个条目是一个 dict（与
+    # core.ipa_multi.IpaReference 字段一致）：
+    #   {"role","weight","path","mask_path","enabled"}
+    # role 取 identity(身份=plus-face) / style(风格=plus) /
+    # composition(构图=base)，也认中文；weight 是该参考图的独立强度
+    # （0~2，最终就是每个适配器一个 scale）。
+    # 与旧的单参考图 chk_use_ipa 不是同一件事：use_ipa_refs=True 时
+    # **多参考图优先**，单图那条路不会被同时安装（否则会互相覆盖）。
+    use_ipa_refs: bool = False
+    ipa_refs: List[dict] = field(default_factory=list)
+
     # CLIP Skip：0=关闭（用最后一层）, 1=倒数第二层（社区常说 CLIP skip 2）
     # 动漫向底模（Pony/Illustrious/NoobAI/多数 SD1.5 二次元）多在倒数第二层
     # 上训练，用默认层会明显掉质量。
@@ -110,6 +149,10 @@ class AppConfig:
     enhance_init_image: bool = True
 
     default_trans_mode: int = 2          # 翻译模式默认档位（0 词典/1 AI/2 混合）
+    # 是否把提示词翻成英文再投递给模型。
+    # True（默认）= 兼容 CLIP 编码器（SD1.5/SDXL 只认英文）；
+    # False = 直接投递原文，给 MOSS-Image 这类文本编码器本身懂中文的模型用。
+    translate_prompt: bool = True
     shortcuts: dict = field(default_factory=lambda: dict(DEFAULT_SHORTCUTS))
 
     output_format: str = "PNG"

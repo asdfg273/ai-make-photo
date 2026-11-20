@@ -1,11 +1,51 @@
-"""Flux / SD3 DiT 量化与分块卸载的可选后端适配。"""
+"""Flux / SD3 / MOSS-Image 等 DiT 的量化与分块卸载后端适配。
+
+三种量化后端，按"本机装了什么"降级选择：
+
+* ``bnb8`` —— bitsandbytes 8bit（本项目环境里已装）。权重压到约 55%，
+  **能整块放进 8GB 显存**，因此不需要每步把 9.5GB 权重过一遍 PCIe。
+  这是 8GB 卡跑 MOSS-Image 最实际的一档。
+* ``fp8`` —— torchao Float8 权重（需要 torchao）。
+* ``nvfp4`` —— NVIDIA ModelOpt FP4（需要 modelopt + 兼容内核）。
+"""
 from __future__ import annotations
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-QUANTIZATION_MODES = ("off", "fp8", "nvfp4")
+QUANTIZATION_MODES = ("off", "bnb8", "fp8", "nvfp4")
+
+MODE_LABELS = {
+    "off": "关闭（原样 bf16）",
+    "bnb8": "8bit（bitsandbytes，8GB 显卡推荐）",
+    "fp8": "FP8（torchao）",
+    "nvfp4": "NVFP4（NVIDIA ModelOpt）",
+}
+
+
+def _bnb8_config():
+    """bitsandbytes 8bit：只量化 transformer。
+
+    8bit 是"权重压一半多、几乎不掉精度"的折中，且在 8GB 卡上刚好
+    能把 DiT（9.7GB bf16）塞进显存，省掉每步的权重搬运。
+    """
+    try:
+        from diffusers import PipelineQuantizationConfig
+    except ImportError as exc:
+        raise RuntimeError("当前 diffusers 不支持管线量化，请升级后再使用。") from exc
+    try:
+        import bitsandbytes  # noqa: F401
+    except Exception as exc:
+        raise RuntimeError(
+            "8bit 量化需要 bitsandbytes；请在项目环境执行 "
+            "`venv\\Scripts\\pip install bitsandbytes`。"
+            f"原始错误: {exc}") from exc
+    return PipelineQuantizationConfig(
+        quant_backend="bitsandbytes_8bit",
+        quant_kwargs={"load_in_8bit": True},
+        components_to_quantize=["transformer"],
+    )
 
 
 def _fp8_config():
@@ -38,6 +78,8 @@ def quantization_config(mode: str):
         return None
     if mode not in QUANTIZATION_MODES:
         raise ValueError(f"未知 DiT 量化模式: {mode}")
+    if mode == "bnb8":
+        return _bnb8_config()
     try:
         from diffusers import PipelineQuantizationConfig
     except ImportError as exc:
@@ -89,5 +131,10 @@ def optimization_signature(options: dict | None) -> tuple:
 
 
 def quantized_weight_ratio(mode: str) -> float:
-    """仅供显存策略估算；不代表实测模型文件大小。"""
-    return {"fp8": 0.5, "nvfp4": 0.25}.get((mode or "off").lower(), 1.0)
+    """仅供显存策略估算；不代表实测模型文件大小。
+
+    实测参考：MOSS-Image 的 DiT bf16 是 9.47GB，bitsandbytes 8bit 后
+    约 5.2GB（0.55 倍），刚好落进 8GB 卡的可用范围。
+    """
+    return {"bnb8": 0.55, "fp8": 0.5, "nvfp4": 0.25}.get(
+        (mode or "off").lower(), 1.0)

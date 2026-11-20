@@ -41,6 +41,7 @@ class AdapterCaps:
     uses_transformer: bool = False    # True => pipe.transformer 而非 pipe.unet
     heavy_vram: bool = False
     precision: str = "fp16"           # 推荐精度（Flux/SD3 用 bf16 更稳）
+    zh_prompt: bool = False           # 文本编码器原生理解中文（如 MOSS-Image）
     notes: str = ""
 
 
@@ -95,7 +96,8 @@ FEATURE_LABELS = {
 # 换 dtype 策略时只改这一处。
 _ARCH_PRECISION = {
     "flux": "bf16", "sd3": "bf16", "sd35": "bf16",
-    "anima": "bf16", "video": "fp16", "unknown": "fp16",
+    "anima": "bf16", "mossimage": "bf16",
+    "video": "fp16", "unknown": "fp16",
 }
 
 
@@ -125,6 +127,8 @@ class ModelCapabilities:
     heavy_vram: bool = False
     guidance_kwarg: str = "guidance_scale"
     default_guidance: float = 7.0
+    # 文本编码器是否原生理解中文（MOSS-Image 这类用多语种 LLM 做编码器的）
+    zh_prompt: bool = False
     notes: str = ""
 
     # ---- 查询 ----
@@ -201,6 +205,7 @@ def _caps_from_adapter(adapter: "ModelAdapter") -> ModelCapabilities:
         heavy_vram=bool(c.heavy_vram),
         guidance_kwarg=c.guidance_kwarg,
         default_guidance=c.default_guidance,
+        zh_prompt=bool(getattr(c, "zh_prompt", False)),
         notes=c.notes,
     )
 
@@ -332,10 +337,17 @@ class AnimaAdapter(ModelAdapter):
         super().__init__(arch_id="anima", caps=AdapterCaps(
             compel=False, negative=False, pooled=False, clip_skip=False,
             vpred=False, controlnet=False, ip_adapter=False, lora=False,
-            hires=False, adetailer=False, heavy_vram=True, precision="bf16",
+            hires=False, adetailer=True, heavy_vram=True, precision="bf16",
             guidance_kwarg="guidance", default_guidance=4.0,
             uses_transformer=True,
-            notes="Anima：ModularPipeline，无 Compel/负面提示词，走原始提示词"))
+            # AnimaAutoBlocks 的 block 输入只有 latents/尺寸/strength，
+            # 没有 mask/mask_image —— 跟 SD3 是同一类问题：以前默认
+            # inpaint=True，UI 放行了局部重绘，跑到调用才 TypeError。
+            # 要做局部重绘请用「区域提示词」蒙版贴回那条路。
+            inpaint=False,
+            notes="Anima：ModularPipeline，无 Compel/负面提示词，走原始提示词；"
+                  "支持 img2img（需显式 height/width），无 inpaint；"
+                  "修脸/修手走「裁切图生图」（不是蒙版 inpaint）"))
 
     def sample_kwargs(self, conditioning, **kw) -> dict:
         # 非 compel 架构：直接用原始文本，由管线内部编码
@@ -353,7 +365,14 @@ class SD3Adapter(ModelAdapter):
             controlnet=False, ip_adapter=False, heavy_vram=True, precision="bf16",
             guidance_kwarg="guidance_scale", default_guidance=4.5,
             uses_transformer=True,
-            notes="SD3：MMDiT + T5，引擎尚未接通"))
+            # diffusers 没有 StableDiffusion3InpaintPipeline。
+            # 以前 single_file.py 拿 StableDiffusion3Pipeline 顶替 inpaint 槽位：
+            # 管线能建起来、能力表也说支持，但真调用传 image/mask_image/strength
+            # 就 TypeError（SD3 的 __call__ 没有这几个参数）。
+            # 这里如实声明不支持，让 UI/预检提前拦住，而不是跑到一半报错。
+            inpaint=False,
+            notes="SD3：MMDiT + T5，引擎尚未接通；无 inpaint 管线，"
+                  "局部重绘请用「区域提示词 / 局部重绘」或蒙版贴回"))
 
 
 class FluxAdapter(ModelAdapter):
@@ -366,6 +385,32 @@ class FluxAdapter(ModelAdapter):
             guidance_kwarg="guidance_scale", default_guidance=3.5,
             uses_transformer=True,
             notes="Flux：无负面提示词，需引擎组件；当前未接通"))
+
+
+class MossAdapter(ModelAdapter):
+    """MOSS-Image（OpenMOSS 5B DiT）—— 唯一的「原生吃中文」架构。"""
+
+    def __init__(self):
+        super().__init__(arch_id="mossimage", caps=AdapterCaps(
+            compel=False, negative=True, pooled=False, clip_skip=False,
+            vpred=False, controlnet=False, ip_adapter=False, lora=False,
+            # 官方只有文生图 + layout 控制：没有 img2img/inpaint/hires/adetailer
+            txt2img=True, img2img=False, inpaint=False, hires=False,
+            adetailer=False, heavy_vram=True, precision="bf16",
+            guidance_kwarg="guidance_scale", default_guidance=3.0,
+            uses_transformer=True,
+            zh_prompt=True,
+            notes="MOSS-Image：Qwen 系文本编码器，原生理解中文（可不翻译）；"
+                  "官方 50 步 / CFG 3.0 / shift 5 / uncond_skip_layers=[22]；"
+                  "仅文生图"))
+
+    def sample_kwargs(self, conditioning, **kw) -> dict:
+        # 非 compel 架构：直接给原始文本，管线内部编码
+        out = {"num_inference_steps": int(kw.pop("steps", 50)),
+               "guidance_scale": float(kw.pop("cfg", 3.0)),
+               "prompt": getattr(conditioning, "text", "") or "",
+               **kw}
+        return out
 
 
 class VideoAdapter(ModelAdapter):
@@ -381,6 +426,7 @@ _ADAPTERS = {
     "sd15": SD15Adapter, "sd21": SD15Adapter,
     "sdxl": SDXLAdapter, "pony": SDXLAdapter,
     "anima": AnimaAdapter, "sd3": SD3Adapter, "flux": FluxAdapter,
+    "mossimage": MossAdapter,
     "video": VideoAdapter,
 }
 

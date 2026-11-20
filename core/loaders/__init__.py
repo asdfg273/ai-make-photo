@@ -16,7 +16,9 @@ from .single_file import SingleFileLoader   # noqa: E402
 from .sd15 import SD15Loader                # noqa: E402
 from .sdxl import SDXLLoader                # noqa: E402
 from .anima import AnimaLoader              # noqa: E402
+from .moss import MossImageLoader           # noqa: E402
 register(SD15Loader)
 register(SDXLLoader)
 register(SingleFileLoader)
 register(AnimaLoader)
+register(MossImageLoader)

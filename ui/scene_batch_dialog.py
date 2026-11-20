@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit, QSpinBox, QCheckBox, QGroupBox, QSplitter, QWidget,
     QDoubleSpinBox, QTabWidget,
 )
-
 from ui.batch_result_view import BatchResultView
 from ui.i18n import ui_i18n
 from utils.batch_jobs import BatchJobStore

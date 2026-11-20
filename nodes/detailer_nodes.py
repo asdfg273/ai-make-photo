@@ -101,10 +101,11 @@ def run_adetailer(ctx, node, inputs):
             "ADetailer(修脸/修手)", model.arch_id)
 
     inpaint_pipe = adapter.pipe(model, "inpaint")
-    if inpaint_pipe is None:
+    i2i_pipe = adapter.pipe(model, "img2img")
+    if inpaint_pipe is None and i2i_pipe is None:
         raise adapters_mod.UnsupportedFeatureError(
             "ADetailer(修脸/修手)", model.arch_id,
-            "该架构没有可用的 inpaint 管线")
+            "该架构既没有 inpaint 也没有 img2img 管线")
 
     target = str(node.params.get("target", "二次元脸部") or "二次元脸部").strip()
     strength = float(node.params.get("strength", 0.35))
@@ -149,7 +150,8 @@ def run_adetailer(ctx, node, inputs):
             out, inpaint_pipe, prompt, neg_prompt,
             strength=strength, target=cur_target,
             padding_ratio=padding, mask_blur=mask_blur,
-            detail_size=detail_size)
+            detail_size=detail_size,
+            img2img_pipe=i2i_pipe)
         if repaired is None:
             raise RuntimeError(f"ADetailer 返回空结果（目标 {cur_target}）")
         out = as_image(repaired)

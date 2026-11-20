@@ -25,6 +25,10 @@ class Capabilities:
     hires_fix: bool = False
     adetailer: bool = False
     vpred_toggle: bool = False
+    # 原生理解中文提示词（文本编码器是多语种 LLM，不是 CLIP）。
+    # MOSS-Image 这类模型可以直接吃中文，不需要先翻成英文；
+    # UI 据此提示用户「当前模型可以关掉翻译」，生成流程也据此给出建议。
+    supports_zh_prompt: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,19 @@ def build_arch_profile(arch_id: str) -> "ArchProfile":
             supports_ip_adapter=False,
             supports_image_encoder=False,
             default_guidance=7.0,
+        )
+    if arch_id == "mossimage":
+        # MOSS-Image：Qwen 系文本编码器 + FLUX 系 VAE 的 5B DiT。
+        # 官方示例就是中文提示词（甚至直接在画面里写中文），所以这里
+        # 不做 Compel、也不强制英译；CFG 官方给 3.0。
+        return ArchProfile(
+            prompt_mode="raw",
+            supports_negative=True,
+            guidance_kwarg="guidance_scale",
+            uses_transformer=True,
+            supports_ip_adapter=False,
+            supports_image_encoder=False,
+            default_guidance=3.0,
         )
     if arch_id == "flux":
         return ArchProfile(

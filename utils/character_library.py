@@ -50,6 +50,10 @@ class Character:
     
     # 特征缓存（可选，用于加速）
     extracted_features: Optional[dict] = None
+
+    # 建卡时记录的完整生成参数（底模/步数/CFG/采样器/分辨率/种子/重绘强度）
+    # 「存为角色」按钮写入；应用角色时据此还原基础参数。
+    gen_params: dict = field(default_factory=dict)
     
     # 元数据
     uuid: str = ""  # 唯一标识

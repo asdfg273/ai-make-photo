@@ -1,5 +1,8 @@
 # tests/test_ui_contract.py — UI 契约测试（无头，纯脚本）
 import os
+import _bootstrap  # noqa: F401,E402  (统一放宽 stdout 编码 + 配置隔离)
+
+_bootstrap.isolate_config_globally()  # 隔离配置：不读写用户真实 app_config.json
 import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

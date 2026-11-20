@@ -5,9 +5,18 @@
 `nodes/` 下所有模块来触发注册。这样新增节点只需要新增文件，
 不用改执行器、不用改界面。
 
-刻意**不**提供"任意 Python 节点"入口：那会让调试、显存管理和错误定位
-迅速失控（用户自己的代码炸了，报错会指向节点内部而不是工作流）。
-将来的插件机制也要走这个注册表，而不是 eval。
+关于"任意 Python 节点"（`nodes/python_nodes.py` 的 `PythonScript`）
+-------------------------------------------------------------------
+早期这里写的是"刻意不提供"：那会让调试、显存管理和错误定位迅速失控。
+现在按需求开放了，但**默认关闭**（`AppConfig.allow_python_nodes=False`），
+并且有三道闸：
+
+· 配置没打开时 `run()` 直接抛中文错误，一个字节的用户代码都不执行；
+· 单次执行有超时（默认 30s），超时只放弃等待，线程不强杀（错误信息写明）；
+· `allow_imports=False` 时只放行 math/random/json 等纯计算模块。
+
+它同样走这个注册表 —— 不是 `eval`，所以界面、预检、资源声明、缓存策略
+都照常生效（该节点声明 `cacheable=False`，避免"同样的输入却该跑两次"）。
 """
 from __future__ import annotations
 
@@ -29,11 +38,13 @@ BUILTIN_NODE_MODULES = (
     "nodes.image_nodes",
     "nodes.control_nodes",
     "nodes.adapter_nodes",
+    "nodes.ipa_nodes",
     "nodes.detailer_nodes",
     "nodes.regional_nodes",
     "nodes.upscale_nodes",
     "nodes.tile_nodes",
     "nodes.postprocess_nodes",
+    "nodes.python_nodes",
     "nodes.video_nodes",
 )
 

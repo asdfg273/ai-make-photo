@@ -40,7 +40,7 @@ def _safe_name(s: str, fallback: str = "role") -> str:
 def resolve_output_dir(config=None) -> Path:
     """统一走 utils.paths.resolve_output_dir（全项目唯一实现）。
 
-    ⚠️ 以前这里调用 `_rod()` **不传 config**，于是永远返回默认的 photo/，
+     以前这里调用 `_rod()` **不传 config**，于是永远返回默认的 photo/，
     用户在「设置」里改的输出目录对批量生成完全无效：
     `_out_dir` 指向错误目录 → `rglob("*.png")` 快照/新文件检测全部落空，
     批量出图的成功判定与归档都会错，还会白扫一遍整个 photo/ 树。
@@ -117,7 +117,7 @@ class BatchRunner(QObject):
         if self._running:
             return False
         if not callable(getattr(self.host, "start_generation", None)):
-            self.log.emit("❌ host 上没有 start_generation，批量中止（是不是传了 page 而不是 shell？）")
+            self.log.emit("host 上没有 start_generation，批量中止（是不是传了 page 而不是 shell？）")
             return False
 
         jobs = [_Job(s, i)
@@ -189,7 +189,7 @@ class BatchRunner(QObject):
             return
         self._stop = True
         self._queue.clear()
-        self.log.emit("⏹ 正在中断当前生成…")
+        self.log.emit("正在中断当前生成…")
         fn = getattr(self.host, "stop_generation", None)
         if callable(fn):
             try:
@@ -277,7 +277,7 @@ class BatchRunner(QObject):
         if not self._saw_running:
             self._dead += 1
             logger.warning(
-                f"⚠️ 场景「{getattr(job.scene, 'name', '?')}」未进入生成状态"
+                f"场景「{getattr(job.scene, 'name', '?')}」未进入生成状态"
                 f"（连续 {self._dead}/{MAX_DEAD}）")
             if self._dead >= MAX_DEAD:
                 self.log.emit("连续多次无法启动生成，批量中止（看日志里 start_generation 的早退原因）")
@@ -390,7 +390,7 @@ class BatchRunner(QObject):
     def _finalize(self):
         """生成线程确认退出后才做最终清理并发出 finished。
 
-        ⚠️ 关键：不能无条件把 host.cancel_flag 复位成 False。
+         关键：不能无条件把 host.cancel_flag 复位成 False。
         stop() 靠 cancel_flag=True 让采样循环抛 InterruptedError；
         若立刻清掉，当前那张图的生成线程会**继续采样到结束**，
         用户以为停了其实还在出图/写盘。
@@ -456,7 +456,7 @@ class BatchRunner(QObject):
         else:
             skipped.append("prompt(无 txt_prompt)")
 
-        # ⚠️ 实际别名是 txt_neg（见 _gt_prepare_context），不是 txt_neg_prompt
+        #  实际别名是 txt_neg（见 _gt_prepare_context），不是 txt_neg_prompt
         neg_box = (getattr(host, "txt_neg", None)
                    or getattr(host, "txt_neg_prompt", None)
                    or getattr(host, "txt_negative", None))
@@ -506,7 +506,7 @@ class BatchRunner(QObject):
                 skipped.append("cfg(无 scale_cfg)")
 
         if skipped:
-            self.log.emit("参数跳过: " + "、".join(skipped))
+            self.log.emit("参数跳过: "+ "、".join(skipped))
 
     @staticmethod
     def _write_text(box, text: str) -> bool:
@@ -554,7 +554,7 @@ class BatchRunner(QObject):
         out = []
         for k, src in enumerate(cand):
             dst = src.with_name(f"{char_name}_{scene_name}_{job.index + 1}"
-                                f"{'_' + str(k + 1) if len(cand) > 1 else ''}_{stamp}{src.suffix}")
+                                f"{'_'+ str(k + 1) if len(cand) > 1 else ''}_{stamp}{src.suffix}")
             try:
                 if dst != src:
                     src.rename(dst)
@@ -578,7 +578,7 @@ class BatchRunner(QObject):
             # 传错库（例如 CharacterLibrary）过去会被静默吞掉，
             # 导致场景 status/output_paths 永不落盘、重启即丢
             logger.error(
-                "❌ 场景库保存失败：library 是 %s，没有 save() 方法"
+                "场景库保存失败：library 是 %s，没有 save() 方法"
                 "（应传 SceneLibrary）", type(self.library).__name__)
             return
         try:

@@ -10,6 +10,8 @@ from PyQt6.QtWidgets import QSizePolicy
 from PyQt6.QtCore    import Qt, QPoint, QRect, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui     import QPainter, QPixmap, QColor, QPen, QCursor
 
+from ui.theme import PALETTE
+
 
 class ImageCanvas(QOpenGLWidget):
     """
@@ -123,7 +125,7 @@ class ImageCanvas(QOpenGLWidget):
     def paintGL(self):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.fillRect(self.rect(), QColor("#1e1e2e"))
+        painter.fillRect(self.rect(), QColor(PALETTE["bg"]))
 
         rect = self._target_rect()
         if rect is not None:

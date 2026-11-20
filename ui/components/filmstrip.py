@@ -15,6 +15,7 @@ class FilmStrip(QListWidget):
 
     def __init__(self, parent=None, gallery=None):
         super().__init__(parent)
+        self.setObjectName("filmStrip")      # theme.py 的 QSS 钩子
         self._gallery = gallery          # 右键菜单动作委托给统一画廊
         self.setViewMode(QListWidget.ViewMode.IconMode)
         self.setFlow(QListWidget.Flow.LeftToRight)
@@ -71,15 +72,15 @@ class FilmStrip(QListWidget):
         is_video = GalleryPanel.media_kind(path) == "video"
         act_reuse = None
         if not is_video:
-            act_reuse = menu.addAction("🔁 套用参数到生成区")
+            act_reuse = menu.addAction("套用参数到生成区")
             menu.addSeparator()
-        act_meta = menu.addAction("📋 查看元数据")
+        act_meta = menu.addAction("查看元数据")
         is_fav = os.path.abspath(path) in g._favs
-        act_fav = menu.addAction("💔 取消收藏" if is_fav else "⭐ 加入收藏")
-        act_folder = menu.addAction("📁 打开所在文件夹")
+        act_fav = menu.addAction("取消收藏" if is_fav else "加入收藏")
+        act_folder = menu.addAction("打开所在文件夹")
         menu.addSeparator()
-        act_remove = menu.addAction("🗑 从画廊移除")
-        act_del = menu.addAction("❌ 删除文件")
+        act_remove = menu.addAction("从画廊移除")
+        act_del = menu.addAction("删除文件")
 
         chosen = menu.exec(self.viewport().mapToGlobal(pos))
         if act_reuse is not None and chosen == act_reuse:

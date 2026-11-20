@@ -1,18 +1,45 @@
 # nodes/adapter_nodes.py
-"""适配器节点：IPAdapterApply（参考图风格/人脸迁移）。
+"""适配器节点：IPAdapterApply（参考图风格/人脸/构图，支持多参考图）。
 
 设计要点
 --------
 · IP-Adapter 的权重选择（SD1.5 vs SDXL、plus / plus-face / base）**全部**由
-  ModelManager 决定，节点只负责"说清楚要哪个变体 + 强度"；
+  ModelManager 决定，节点只负责"说清楚要哪些参考图 + 各自强度"；
   权重安装/共享 UNet 这种脏活在 core/model_manager.py 里只写一次。
 · 节点**不下载任何东西**：缺权重就抛错，让用户去扩展市场装。
 · 只通过 ctx 访问宿主，不碰界面控件（工作流要能脱离界面跑）。
+· **一图一角色**的精细控制请用 `nodes/ipa_nodes.py` 里的
+  IPAdapterIdentity / IPAdapterStyle / IPAdapterComposition（可串联累加）；
+  本节点保留的原因有两个：① 老工作流的兼容入口；② 一次性用
+  `refs_json` 表达"一批参考图"的场景（例如界面把多个角色导出成一段 JSON）。
+
+多参考图：`refs_json`
+--------------------
+形状与区域功能的 `regions_json` 完全一致（同一套 JSON 风格，用户学一次就够）::
+
+    [
+      {"role":"identity",    "path":"E:/refs/face.png",  "weight":0.8},
+      {"role":"style",       "path":"E:/refs/style.jpg", "weight":0.6},
+      {"role":"composition", "path":"E:/refs/sky.png",   "weight":0.45,
+       "mask_path":"E:/masks/sky.png"},
+      {"role":"style", "weight":0.5, "enabled":false}
+    ]
+
+· `role` 取 identity / style / composition（也认中文"身份/风格/构图"）；
+· `path` 是参考图路径；`mask_path` 可选（该参考图只影响这块区域）；
+· `role` 与 `path` 都为空、且连着单张 `image` 输入时 → 用**单图模式**
+  （向后兼容：variant + weight 两个参数说了算）。
+· 非法 JSON 永远按"空列表"处理并给出提示，绝不抛异常。
+
+`refs_json` 里的条目与 `image` 输入**会合并**（json 在前、连线在后），
+这样"连线给一张 + JSON 补几张"也能用。
 """
 from __future__ import annotations
 
 import logging
 
+from core import ipa_multi as ipa_mod
+from workflow import adapters as adapters_mod
 from workflow.registry import node
 from workflow.schema import (DataType, ParamSpec, PortSpec,
                              ResourceRequirement)
@@ -28,23 +55,49 @@ _VARIANT_ALIAS = {
     "standard": "base",
 }
 
+_REFS_JSON_HELP = (
+    "多参考图定义（JSON 数组），形如：\n"
+    '[\n'
+    '  {"role":"identity",    "path":"E:/refs/face.png",  "weight":0.8},\n'
+    '  {"role":"style",       "path":"E:/refs/style.jpg", "weight":0.6},\n'
+    '  {"role":"composition", "path":"E:/refs/sky.png",   "weight":0.45,\n'
+    '   "mask_path":"E:/masks/sky.png"}\n'
+    ']\n'
+    "字段说明：\n"
+    "· role：identity(身份=plus-face) / style(风格=plus) / "
+    "composition(构图=base)，也认中文「身份/风格/构图」；\n"
+    "· path：参考图文件路径；\n"
+    "· weight：该参考图独立强度（0~2），最终是每个适配器一个 scale；\n"
+    "· mask_path：可选。给了就让这张参考图**只影响该蒙版区域**"
+    "（参考图会先按掩码抠图，再由注意力掩码限制）；\n"
+    "· enabled=false 可临时停用一条（保留编号对齐，强度按 0 处理）。\n"
+    "留空 [] 表示用上面连线的单张 image（旧行为）。\n"
+    "JSON 非法时按空列表处理并提示，不会让节点失败。"
+)
+
 
 @node(
     "IPAdapterApply",
     category="适配",
-    description="挂载 IP-Adapter：用参考图（可带遮罩）影响风格 / 人脸 / 构图。",
+    description="挂载 IP-Adapter：用参考图（可带遮罩）影响风格 / 人脸 / 构图。"
+                "支持单张（连线 image）或多张（refs_json，每张独立角色与强度）。",
     inputs={"model": PortSpec(DataType.MODEL, "模型"),
-            "image": PortSpec(DataType.IMAGE, "参考图"),
+            "image": PortSpec(DataType.IMAGE, "参考图", optional=True),
             "mask": PortSpec(DataType.MASK, "遮罩", optional=True)},
     outputs={"model": PortSpec(DataType.MODEL, "模型"),
              "metadata": PortSpec(DataType.METADATA, "信息")},
     params={
         "variant": ParamSpec("choice", default="plus", label="变体",
                              choices=("plus", "plus_face", "light", "standard"),
-                             help="plus=通用风格，plus_face=人脸，"
-                                  "standard=基础版，light=轻量"),
+                             help="单图模式下的权重档位：plus=通用风格，"
+                                  "plus_face=人脸，standard=基础版，"
+                                  "light=轻量（管理器找不到时会安全回退）"),
         "weight": ParamSpec("float", default=0.6, label="强度",
-                            minimum=0.0, maximum=2.0, step=0.05),
+                            minimum=0.0, maximum=2.0, step=0.05,
+                            help="单图模式下的强度；多参考图时每条用自己的 "
+                                 "weight 字段，这个值只作为兜底"),
+        "refs_json": ParamSpec("text", default="[]", label="多参考图定义",
+                               help=_REFS_JSON_HELP),
     },
     resources=ResourceRequirement(requires=("cuda", "model",
                                             "asset:ip_adapter_sd15"),
@@ -58,58 +111,72 @@ def run_ip_adapter_apply(ctx, node, inputs):
     if ctx.ai is None:
         raise RuntimeError("没有可用的模型管理器（ctx.ai 为空），无法加载 IP-Adapter")
 
+    # ── 能力门禁：看能力，不看模型名 ──
+    caps = getattr(ctx, "capabilities", None)
+    if caps is None:
+        caps = adapters_mod.capabilities_of(model)
+    caps.require("ip_adapter")
+
     ref_image = as_image(inputs.get("image"))
-    if ref_image is None:
-        raise ValueError("缺少输入 image（IP-Adapter 需要一张参考图）")
     mask = inputs.get("mask")
 
     variant_raw = (node.params.get("variant") or "plus").strip().lower()
     variant = _VARIANT_ALIAS.get(variant_raw, variant_raw)
     weight = float(node.params.get("weight", 0.6))
 
-    # ── 1) 安装 IP-Adapter（架构感知由 ModelManager 负责；这里不下载）──
-    prepare = getattr(ctx.ai, "prepare_ip_adapter", None)
-    if not callable(prepare):
-        raise RuntimeError(
-            "❌ 当前模型管理器不支持 IP-Adapter（缺少 prepare_ip_adapter 方法）。")
-    ctx.status(f"🎭 挂载 IP-Adapter [{variant_raw}] 强度 {weight} ...")
-    ctx.check_cancel()
-    try:
-        prepare(variant)
-    except Exception as e:
-        raise RuntimeError(
-            f"❌ 挂载 IP-Adapter 失败（variant={variant_raw}）："
-            f"{type(e).__name__}: {e}\n"
-            "   常见原因：IP-Adapter 权重尚未安装 —— 请在**扩展市场**安装"
-            "（asset: ip_adapter_sd15 / ip_adapter_sdxl），"
-            "或手动把 ip-adapter-*.safetensors 放到 models/ip_adapter/ 下；"
-            "也可能是变体与当前底模架构不匹配（SD1.5 ⇄ SDXL）。\n"
-            "   本节点不会自动下载任何权重。"
-        ) from e
-    ctx.check_cancel()
+    raw_json = node.params.get("refs_json")
+    warnings = []
+    refs = []
+    if raw_json is not None and str(raw_json).strip() not in ("", "[]", "{}"):
+        refs = ipa_mod.references_from_json(raw_json)
+        if not refs:
+            warnings.append("多参考图 JSON 解析失败（不是合法的 JSON 数组），"
+                            "已按空列表处理。")
 
-    # ── 2) 强度（scale 会同步到全部管线）──
-    setter = getattr(ctx.ai, "set_ip_adapter_scale", None)
-    if callable(setter):
-        try:
-            setter(weight)
-        except Exception as e:
-            logger.warning(f"⚠️ 设置 IP-Adapter 强度失败（沿用当前值）: {e}")
+    # 连线的单张参考图：作为一条 style 参考图追加在 JSON 条目之后
+    if ref_image is not None:
+        refs.append(ipa_mod.IpaReference(
+            role="style", weight=weight,
+            image=ref_image.convert("RGB").copy(),
+            mask=mask, variant="",
+            variant_requested=ipa_mod.normalize_variant(variant)))
 
-    # ── 3) 把参考图挂到模型上（下游采样节点读取）──
+    if not refs:
+        raise ValueError(
+            "缺少参考图：要么连一张 image，要么用 refs_json 给出参考图列表"
+            "（IP-Adapter 需要至少一张参考图）")
+
+    # ── 落进 model.meta，交给采样层一次性安装（与 ipa_nodes 同一套约定）──
+    from nodes import ipa_nodes
     if getattr(model, "meta", None) is None:
         model.meta = {}
-    model.meta["ipa_image"] = ref_image
-    model.meta["ipa_scale"] = weight
+    existing = ipa_nodes.pending_references(model)
+    pending = existing + refs
+    model.meta[ipa_nodes.META_KEY] = pending
+    model.meta["ipa_image"] = pending[0].image if pending[0].image is not None \
+        else pending[0].path
+    model.meta["ipa_scale"] = max(r.weight for r in pending)
     model.meta["ipa_variant"] = variant_raw
-    if mask is not None:
-        # 遮罩暂由采样层决定是否使用；保留下来便于调试与后续扩展
-        model.meta["ipa_mask"] = mask
 
-    meta = {"ip_adapter_enabled": "true",
-            "ip_adapter_variant": variant_raw,
-            "ip_adapter_weight": weight}
+    summary = ipa_mod.describe_references(pending)
+    meta = {
+        "ip_adapter_enabled": "true",
+        "ip_adapter_variant": variant_raw,
+        "ip_adapter_weight": weight,
+        "ip_adapter_refs": len(pending),
+        "ip_adapter_roles": [r.role for r in pending],
+        "ip_adapter_weights": [float(r.weight) for r in pending],
+        "ip_adapter_summary": summary,
+    }
+    if warnings:
+        meta["ip_adapter_warnings"] = list(warnings)
+        existing_w = list(ctx.metadata.get("warnings") or [])
+        existing_w.extend(warnings)
+        ctx.metadata["warnings"] = existing_w
+
     ctx.metadata.update(dict(meta))
-    logger.info(f"✅ IP-Adapter 已应用: {variant_raw}({variant}) "
-                f"scale={weight}")
+    ctx.status(f"🎭 IP-Adapter 参考图 {len(pending)} 条：{summary}")
+    for w in warnings:
+        logger.warning(f"⚠️ {w}")
+    logger.info(f"✅ IP-Adapter 已登记: {summary}")
     return {"model": model, "metadata": meta}

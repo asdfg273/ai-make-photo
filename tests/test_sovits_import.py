@@ -22,7 +22,15 @@ import os
 from pathlib import Path
 
 # 把 GPT-SoVITS 源码加入 PYTHONPATH
-ROOT = Path(__file__).parent
+# ⚠️ 必须是项目根，不是 tests/ —— GPT-SoVITS 装在 <项目根>/third_party/ 下。
+# 原先写 Path(__file__).parent 会指向 tests/，于是报
+# FileNotFoundError: ...\tests\third_party\GPT-SoVITS
+# 放宽 stdout 编码：中文 Windows 上重定向输出时是 GBK，
+# 脚本里的 emoji 会抛 UnicodeEncodeError，看起来像「功能坏了」，
+# 其实只是打印编码问题。
+import _bootstrap  # noqa: F401,E402
+
+ROOT = Path(__file__).resolve().parent.parent
 SOVITS_ROOT = ROOT / "third_party" / "GPT-SoVITS"
 sys.path.insert(0, str(SOVITS_ROOT))
 sys.path.insert(0, str(SOVITS_ROOT / "GPT_SoVITS"))

@@ -1,5 +1,6 @@
 # image_processor.py
 import datetime
+import inspect
 from pathlib import Path
 import cv2
 import numpy as np
@@ -7,6 +8,30 @@ from PIL import Image, ImageDraw, ImageFilter
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _ipa_adapter_count(pipe) -> int:
+    """这条管线的共享 UNet 上装了**几个** IP-Adapter（拿不到按 1 算）。
+
+    为什么 ADetailer 也要关心数量：装了 N(>1) 个适配器时，
+    · `set_ip_adapter_scale(0.0)` 会抛
+      `ValueError: Cannot assign 1 scale_configs to N IP-Adapter.`；
+    · `ip_adapter_image` 只给一张占位图会抛
+      `ValueError: ip_adapter_image must have same length as the number of IP Adapters.`
+    两者都会让"修脸"整个静默失效（以前只捕获异常打一行 warning）。
+    """
+    try:
+        proj = getattr(getattr(pipe, "unet", None), "encoder_hid_proj", None)
+        n = getattr(proj, "num_ip_adapters", None)
+        if n:
+            return int(n)
+        layers = getattr(proj, "image_projection_layers", None)
+        if layers is not None:
+            return max(1, len(layers))
+    except Exception:
+        pass
+    return 1
+
 
 def make_comic_strip(image_list):
     """纯净的漫画排版函数，只负责计算和绘图，返回 PIL Image"""
@@ -106,12 +131,13 @@ ADETAILER_PROMPTS = {
 
 
 def _get_adetailer_model_path(cfg):
-    """
-    只计算 ADetailer 模型应该存放的位置，不执行下载。
+    """只计算 ADetailer 模型应该存放的位置，不执行下载。
+
+    路径解析统一交给 `utils.paths.adetailer_path()` —— 那里同时兼容
+    `face_yolov8n.pt`、`models/adetailer/xxx.pt`、`models_cache/adetailer/xxx.pt`
+    这几种历史写法，避免"市场显示未安装、文件其实在另一个目录"。
     """
     from utils import paths
-
-    model_dir = Path(paths.MODEL_DIR) / "adetailer"
 
     configured_path = (
         cfg.get("local_path")
@@ -123,26 +149,18 @@ def _get_adetailer_model_path(cfg):
             "ADetailer 模型缺少 local_path 或 name 配置"
         )
 
-    configured_path = Path(str(configured_path)).expanduser()
-
-    if configured_path.is_absolute():
-        return configured_path
-
-    # 防止配置中写入 models/adetailer/xxx.pt 后重复拼接目录
-    if configured_path.parts[:2] == (
-        "models",
-        "adetailer",
-    ):
-        return Path(*configured_path.parts)
-
-    return model_dir / configured_path
+    return Path(paths.adetailer_path(str(configured_path))).expanduser()
 
 
 def _resolve_local_adetailer_model(cfg):
-    """
-    只查找本地 ADetailer 模型。
+    """只查找本地 ADetailer 模型。
     生图流程只能调用这个函数，不能调用下载器。
     """
+    from utils import paths
+
+    # 旧版本把模型下到了 models_cache/adetailer/，这里顺手搬一次（幂等）
+    paths.migrate_adetailer_models()
+
     model_path = _get_adetailer_model_path(cfg)
 
     if model_path.is_file():
@@ -158,6 +176,13 @@ def _resolve_local_adetailer_model(cfg):
             model_path,
         )
         return str(model_path)
+
+    # 兜底：配置里写的是旧位置（用户手动填过 models_cache/adetailer/）
+    legacy = Path(paths.LEGACY_ADETAILER_DIR) / model_path.name
+    if legacy.is_file():
+        logger.info("✅ 使用旧位置 ADetailer 模型（建议移到 %s）：%s",
+                    paths.ADETAILER_DIR, legacy)
+        return str(legacy)
 
     logger.warning(
         "⚠️ 未找到本地 ADetailer 模型：%s",
@@ -202,6 +227,26 @@ def _yolo_detect(model_path, cv_image, conf=0.3):
         return []
 
 
+def _accepts_kw(pipe, *names):
+    """管线 `__call__` 是否**显式声明**了这些形参。
+
+    注意：diffusers 的管线全都带 `**kwargs`，所以"接受"不等于"会用"——
+    SD1.5/SDXL 的 img2img 没有 width/height 形参，传进去会被静默忽略；
+    Anima 的 ModularPipeline 必须传 width/height，否则按默认 1024 出图。
+    """
+    try:
+        params = inspect.signature(pipe.__call__).parameters
+    except Exception:
+        return True
+    return all(name in params for name in names)
+
+
+def _looks_modular(pipe):
+    """是不是 diffusers 的 ModularPipeline（块式，按 state 传参）。"""
+    blocks = getattr(pipe, "blocks", None)
+    return blocks is not None and hasattr(blocks, "sub_blocks")
+
+
 def process_adetailer(
     base_image,
     inpaint_pipe,
@@ -214,6 +259,8 @@ def process_adetailer(
     detail_size=512,
     ipa_loaded=None,
     ipa_scale=None,
+    img2img_pipe=None,
+    call=None,
 ):
     """
     使用本地检测模型进行 ADetailer 局部重绘。
@@ -238,6 +285,17 @@ def process_adetailer(
             IPA 原来的 scale。
             如果传 None，则从 inpaint_pipe._ai_ipa_scale 读取，
             默认使用 0.6。
+
+        img2img_pipe:
+            没有 inpaint 管线时（如 Anima 的 ModularPipeline）用的备用管线。
+            ADetailer 会退化成「裁切 → 图生图 → 羽化贴回」：整块裁切区域都会
+            被重绘，只把检测框那部分贴回原图，所以不必有 mask 输入。
+            两条都传 None 时直接返回原图（并明确说清为什么跳过）。
+
+        call:
+            统一调用入口（`call(pipe, kwargs) -> output`）。主界面会把
+            `_gt_safe_pipe_call` 传进来，从而复用 Compel / modular 适配 /
+            IPA 占位那一整套逻辑；不传就直连 `pipe(**kwargs)`。
     """
     original_image = base_image
 
@@ -250,9 +308,23 @@ def process_adetailer(
             )
             return original_image
 
-        if inpaint_pipe is None:
-            logger.warning("⚠️ inpaint_pipe 不存在，跳过 ADetailer")
-            return original_image
+        pipe = inpaint_pipe
+        no_mask = False
+        if pipe is None:
+            if img2img_pipe is None:
+                logger.warning(
+                    "⚠️ 当前架构既没有 inpaint 也没有 img2img 管线，"
+                    "跳过 ADetailer（%s）",
+                    target,
+                )
+                return original_image
+            pipe = img2img_pipe
+            no_mask = True
+            logger.info(
+                "🩹 [ADetailer] %s：当前架构没有 inpaint 管线，"
+                "改用「裁切 + 图生图」局部精修",
+                target,
+            )
 
         cfg = ADETAILER_MODELS[target]
         prompts_cfg = ADETAILER_PROMPTS.get(
@@ -352,12 +424,12 @@ def process_adetailer(
         # IPA 状态必须由明确状态控制
         if ipa_loaded is None:
             ipa_loaded = bool(
-                getattr(inpaint_pipe, "_ai_ipa_loaded", False)
+                getattr(pipe, "_ai_ipa_loaded", False)
             )
 
         if ipa_scale is None:
             ipa_scale = getattr(
-                inpaint_pipe,
+                pipe,
                 "_ai_ipa_scale",
                 0.6,
             )
@@ -398,8 +470,8 @@ def process_adetailer(
 
             return False
 
-        def round_to_8(value):
-            value = int(round(float(value) / 8.0) * 8)
+        def round_to_n(value, n):
+            value = int(round(float(value) / float(n)) * n)
             return max(64, value)
 
         # 检测框按面积从大到小处理
@@ -509,8 +581,14 @@ def process_adetailer(
                     longest_edge
                 )
 
-                render_w = round_to_8(crop_w * render_scale)
-                render_h = round_to_8(crop_h * render_scale)
+                # Anima 这类块式管线要显式尺寸，而且必须是 16 的倍数
+                # （VAE /8 × transformer patch /2）：给 472 这种 8 的倍数
+                # 会让 patch_embed 的 reshape 直接崩（实测
+                # "shape '[1, 17, 1, 1, 32, 2, 29, 2]' is invalid"）。
+                _align = 16 if (_accepts_kw(pipe, "width", "height")
+                                or _looks_modular(pipe)) else 8
+                render_w = round_to_n(crop_w * render_scale, _align)
+                render_h = round_to_n(crop_h * render_scale, _align)
 
                 local_image_render = local_image.resize(
                     (render_w, render_h),
@@ -528,23 +606,28 @@ def process_adetailer(
                 ip_kwargs = {}
                 old_ipa_scale = ipa_scale
                 ipa_scale_changed = False
+                n_ipa = 1
 
                 try:
                     if ipa_loaded:
+                        n_ipa = _ipa_adapter_count(pipe)
                         placeholder = Image.new(
                             "RGB",
                             (224, 224),
                             (0, 0, 0),
                         )
 
+                        # 多参考图（N>1）时占位图要正好 N 张，否则 diffusers
+                        # 会因为长度不匹配直接抛错，修脸整个失效。
                         ip_kwargs["ip_adapter_image"] = (
-                            placeholder
+                            placeholder if n_ipa <= 1
+                            else [placeholder for _ in range(n_ipa)]
                         )
 
                         try:
                             ipa_scale_changed = set_ipa_scale(
-                                inpaint_pipe,
-                                0.0,
+                                pipe,
+                                0.0 if n_ipa <= 1 else [0.0] * n_ipa,
                             )
                         except Exception as ipa_error:
                             logger.warning(
@@ -553,25 +636,35 @@ def process_adetailer(
                             )
 
                     logger.info(
-                        "🩹 [ADetailer] 局部重绘 %d/%d，尺寸 %dx%d",
+                        "🩹 [ADetailer] 局部%s %d/%d，尺寸 %dx%d",
+                        "图生图精修" if no_mask else "重绘",
                         index,
                         len(boxes),
                         render_w,
                         render_h,
                     )
 
-                    output = inpaint_pipe(
-                        prompt=target_positive,
-                        negative_prompt=target_negative,
-                        image=local_image_render,
-                        mask_image=local_mask_render,
-                        strength=strength,
-                        num_inference_steps=24,
-                        guidance_scale=6.5,
-                        width=render_w,
-                        height=render_h,
-                        **ip_kwargs,
-                    )
+                    call_kwargs = {
+                        "prompt": target_positive,
+                        "negative_prompt": target_negative,
+                        "image": local_image_render,
+                        "strength": strength,
+                        "num_inference_steps": 24,
+                        "guidance_scale": 6.5,
+                    }
+                    if not no_mask:
+                        call_kwargs["mask_image"] = local_mask_render
+                    # Anima 不传尺寸会按默认 1024 出图；SD1.5/SDXL 的
+                    # img2img 又没有 width/height 形参 —— 分别判断
+                    if _accepts_kw(pipe, "width", "height") or _looks_modular(pipe):
+                        call_kwargs["width"] = render_w
+                        call_kwargs["height"] = render_h
+                    call_kwargs.update(ip_kwargs)
+
+                    if call is not None:
+                        output = call(pipe, call_kwargs)
+                    else:
+                        output = pipe(**call_kwargs)
 
                     if not output or not getattr(
                         output,
@@ -614,10 +707,16 @@ def process_adetailer(
                     # 无论生成成功或失败，都恢复 IPA scale
                     if ipa_loaded and ipa_scale_changed:
                         try:
-                            set_ipa_scale(
-                                inpaint_pipe,
-                                old_ipa_scale,
-                            )
+                            # 多参考图：优先恢复**每适配器**的原强度
+                            _saved_list = getattr(
+                                pipe, "_ai_ipa_scales", None)
+                            if n_ipa > 1 and _saved_list:
+                                _restore = [float(s) for s in _saved_list]
+                            elif n_ipa > 1:
+                                _restore = [old_ipa_scale] * n_ipa
+                            else:
+                                _restore = old_ipa_scale
+                            set_ipa_scale(pipe, _restore)
                         except Exception as restore_error:
                             logger.warning(
                                 "⚠️ [ADetailer] 恢复 IPA scale 失败：%s",

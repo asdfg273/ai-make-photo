@@ -7,8 +7,16 @@ from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QSlider
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 
+from ui.theme import PALETTE
+
 
 import math
+
+_FLOAT_LABEL_ON = (f"color:{PALETTE['fg']}; font-family:Consolas; "
+                   "background:transparent;")
+_FLOAT_LABEL_OFF = (f"color:{PALETTE['fg_faint']}; font-family:Consolas; "
+                    "background:transparent;")
+
 
 class FloatSlider(QWidget):
     """浮点滑块控件"""
@@ -39,8 +47,7 @@ class FloatSlider(QWidget):
         self._label.setFixedWidth(40)
         self._label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._label.setStyleSheet(
-            "color:#ffffff; font-family:Consolas; background:transparent;")
+        self._label.setStyleSheet(_FLOAT_LABEL_ON)
 
         self._layout.addWidget(self._slider)
         self._layout.addWidget(self._label)
@@ -64,9 +71,8 @@ class FloatSlider(QWidget):
     def setEnabled(self, enabled: bool):
         super().setEnabled(enabled)
         self._slider.setEnabled(enabled)
-        color = "#ffffff" if enabled else "#7d8187"
         self._label.setStyleSheet(
-            f"color:{color}; font-family:Consolas; background:transparent;")
+            _FLOAT_LABEL_ON if enabled else _FLOAT_LABEL_OFF)
 
 
 class GpuCanvas(QLabel):
@@ -129,9 +135,9 @@ class CompareCanvas(QWidget):
     def paintEvent(self, event):
         from PyQt6.QtGui import QPainter, QColor, QPen
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(10, 14, 20))
+        p.fillRect(self.rect(), QColor(PALETTE["bg"]))
         if not self.has_images():
-            p.setPen(QColor("#8fa1b3"))
+            p.setPen(QColor(PALETTE["fg_mute"]))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                        "无对比图（需开启 Hires.fix / ADetailer 生成一次）")
             p.end()
@@ -152,15 +158,15 @@ class CompareCanvas(QWidget):
         p.drawPixmap(rect.x(), rect.y(), after_scaled)
         p.setClipping(False)
         # 分割线 + 手柄
-        p.setPen(QPen(QColor("#4a9eff"), 2))
+        p.setPen(QPen(QColor(PALETTE["accent"]), 2))
         p.drawLine(split_x, rect.y(), split_x, rect.bottom())
-        p.setBrush(QColor("#4a9eff"))
+        p.setBrush(QColor(PALETTE["accent"]))
         p.drawEllipse(split_x - 8, rect.center().y() - 8, 16, 16)
-        p.setPen(QColor("#ffffff"))
+        p.setPen(QColor(PALETTE["on_accent"]))
         f = p.font(); f.setPointSize(8); f.setBold(True); p.setFont(f)
         p.drawText(split_x - 6, rect.center().y() + 3, "◀▶")
         # 角落标签
-        p.setPen(QColor("#ffffff"))
+        p.setPen(QColor(PALETTE["on_accent"]))
         f.setPointSize(10); p.setFont(f)
         p.drawText(rect.x() + 8, rect.y() + 20, "修前")
         p.drawText(rect.right() - 40, rect.y() + 20, "修后")

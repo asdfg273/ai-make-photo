@@ -3,6 +3,7 @@
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import numpy as np
 from PyQt6.QtCore import QTimer
+from ui.theme import PALETTE
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,11 +16,11 @@ class FiltersMixin:
 
         base_img 的语义是"调色之前的基线"。画笔/橡皮/文字只在 current_img
         上作画，若不更新 base_img，下一次 apply_adjustments() 会从 base_img
-        重算 → 笔迹被整片抹掉（且不可撤销）。
+        重算，导致笔迹被整片抹掉且不可撤销。
         所以任何会改变像素的编辑提交后都要调用本方法。
 
         同时清理失效的滤镜预览缓存：预览缓存若基于旧画面，
-        后续 ▶应用 会把笔迹回滚。
+        后续应用滤镜会把笔迹回滚。
         """
         try:
             if self.current_img is not None:
@@ -29,7 +30,7 @@ class FiltersMixin:
         self._filter_preview = None
 
     def on_adjust_change(self, key=None, value=None):
-        """调色滑块防抖 — ✅ 不触发滤镜"""
+        """调色滑块防抖，不触发滤镜。"""
         # 一次调色交互只入一次历史，撤销时能整体回到调色前
         if not getattr(self, "_adjust_dirty", False):
             self._adjust_dirty = True
@@ -44,6 +45,11 @@ class FiltersMixin:
         self._adjust_timer.start(150)   # 已在跑就重置计时
 
     def apply_adjustments(self):
+        # 手动应用（测试或滤镜提交）后，旧计时器不能再次重放同一组参数；
+        # 否则笔迹提交会更新 base_img，延迟触发就会在当前结果上重复调色。
+        timer = getattr(self, "_adjust_timer", None)
+        if timer is not None:
+            timer.stop()
         try:
             self._adjust_dirty = False
             if getattr(self, "_filter_preview", None) is not None:
@@ -115,7 +121,7 @@ class FiltersMixin:
         """重置调色 = 只清滑块回到"调色前"，**不丢弃**画笔/文字/滤镜成果。
 
         旧实现 `current_img = original_img.copy()` 会把笔迹、文字、已应用滤镜
-        全部还原成刚打开时的原图（且不入历史 → 不可撤销）。
+        全部还原成刚打开时的原图，而且不写入历史，无法撤销。
         """
         had_adj = any(w.value() != 0 for w in self.adjust_vars.values())
         if had_adj:
@@ -132,8 +138,8 @@ class FiltersMixin:
         self._adjust_dirty   = False
         self.current_img = self.base_img.copy()
         self.update_canvas(self.current_img, force=True)
-        self.lbl_status.setText("🔄 调色已重置" + ("（保留笔迹与滤镜）" if had_adj else ""))
-        self.lbl_status.setStyleSheet("color:#cdd6f4; font-size:13px;")
+        self.lbl_status.setText("色彩调整已重置" + ("，保留笔迹与滤镜" if had_adj else ""))
+        self.lbl_status.setStyleSheet(f"color:{PALETTE['fg']}; font-size:12px;")
         if had_adj:
             self._dirty = True
 
@@ -141,16 +147,18 @@ class FiltersMixin:
         """选择「无」时:还原到滤镜叠加前的基图"""
         anchor = getattr(self, "_filter_anchor", None)
         if anchor is None:
-            self.lbl_status.setText("✨ 当前没有叠加中的滤镜")
-            self.lbl_status.setStyleSheet("color:#f9e2af; font-size:13px;")
+            self.lbl_status.setText("当前没有已应用的滤镜")
+            self.lbl_status.setStyleSheet(
+                f"color:{PALETTE['warning']}; font-size:12px;")
             return
         self.push_history()
         self.current_img     = anchor.copy()
         self.base_img        = anchor.copy()
         self._filter_anchor  = None
         self.update_canvas(self.current_img, force=True)
-        self.lbl_status.setText("✅ 已还原到滤镜叠加前的状态")
-        self.lbl_status.setStyleSheet("color:#a6e3a1; font-size:13px;")
+        self.lbl_status.setText("已还原到应用滤镜前的状态")
+        self.lbl_status.setStyleSheet(
+            f"color:{PALETTE['success']}; font-size:12px;")
 
     # ----------------------------------------------------------
     #  滤镜实现(全部 numpy/PIL,输入 RGB 图)
@@ -323,15 +331,15 @@ class FiltersMixin:
             return
         self._filter_preview = (name, img)
         self.update_canvas(img, force=True)
-        self.lbl_status.setText(f"👁 预览中: {name}（▶应用生效 / Esc 取消）")
-        self.lbl_status.setStyleSheet("color:#89dceb; font-size:13px;")
+        self.lbl_status.setText(f"正在预览：{name}（应用后生效，Esc 取消）")
+        self.lbl_status.setStyleSheet(f"color:{PALETTE['info']}; font-size:12px;")
 
     def _cancel_filter_preview(self):
         if getattr(self, "_filter_preview", None) is not None:
             self._filter_preview = None
             self.update_canvas(self.current_img, force=True)
-            self.lbl_status.setText("✨ 已取消滤镜预览")
-            self.lbl_status.setStyleSheet("color:#cdd6f4; font-size:13px;")
+            self.lbl_status.setText("已取消滤镜预览")
+            self.lbl_status.setStyleSheet(f"color:{PALETTE['fg']}; font-size:12px;")
 
     def apply_selected_filter(self):
         filter_name = self.filter_combo.currentText()
@@ -379,5 +387,6 @@ class FiltersMixin:
                 lbl.setText("0")
 
         self.update_canvas(self.current_img, force=True)
-        self.lbl_status.setText(f"✅ 已应用滤镜: {filter_name}")
-        self.lbl_status.setStyleSheet("color:#a6e3a1; font-size:13px;")
+        self.lbl_status.setText(f"已应用滤镜：{filter_name}")
+        self.lbl_status.setStyleSheet(
+            f"color:{PALETTE['success']}; font-size:12px;")

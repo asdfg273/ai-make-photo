@@ -43,7 +43,7 @@ class ParamPanel(QScrollArea):
     def _clear(self):
         """清空面板。
 
-        ⚠️ 必须 `setParent(None)` 再 `deleteLater()`。
+         必须 `setParent(None)` 再 `deleteLater()`。
         只调 `deleteLater()` 的话：它只是**排队**等事件循环删除，而这期间
         控件仍然是 `_host` 的**可见子控件**，会停在原来的坐标继续绘制。
         于是快速切换节点（或 show_node 连续调用）时，上一个节点的控件会
@@ -84,7 +84,6 @@ class ParamPanel(QScrollArea):
             self.show_node(self._wf, self._node_id)
         else:
             self._show_placeholder()
-
 
     # ------------------------------------------------------------------
     def show_node(self, wf, node_id: str, node_item=None):

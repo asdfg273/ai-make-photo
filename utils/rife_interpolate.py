@@ -79,16 +79,15 @@ def _imwrite(path, img) -> bool:
 
 
 def _probe_video_info(path):
-    """用 cv2 探测 (fps, frame_count, width, height)，失败项为 0。"""
-    cap = cv2.VideoCapture(path)
-    if not cap.isOpened():
-        cap.release()
+    """探测 (fps, frame_count, width, height)，失败项为 0。
+
+    走 utils.video_io.SafeVideoCapture：Windows 下 cv2 直接打开含中文的路径
+    会静默失败（isOpened() 为 False）。
+    """
+    from utils.video_io import probe_video
+    ok, fps, cnt, w, h = probe_video(path)
+    if not ok:
         return 0.0, 0, 0, 0
-    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-    cnt = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    cap.release()
     return fps, cnt, w, h
 
 
@@ -142,17 +141,58 @@ def _mux_audio(video_in: str, audio_src: str, video_out: str) -> bool:
         return False
 
 
+#: rife-ncnn-vulkan 的候选安装位置（按顺序找，先命中先用）。
+#: tools/rife 是历史位置；models/rife 与 models/puton/rife 允许用户把解压好的
+#: 目录直接丢进模型目录（投递箱也会把它归位到 models/rife）。
+RIFE_SEARCH_DIRS = ("tools/rife", "models/rife", "models/puton/rife")
+
+#: 模型子目录的常见叫法（不同发布版本不一致）
+RIFE_MODEL_DIRS = ("rife-v4.6", "rife-v4.26", "rife-v4", "rife-v2.4")
+
+
+def find_rife_dirs():
+    """返回所有存在 rife-ncnn-vulkan.exe 的目录（绝对路径）。"""
+    from utils.paths import PROJECT_ROOT
+    found = []
+    for rel in RIFE_SEARCH_DIRS:
+        d = os.path.join(PROJECT_ROOT, *rel.split("/"))
+        if os.path.exists(os.path.join(d, "rife-ncnn-vulkan.exe")):
+            found.append(os.path.abspath(d))
+    return found
+
+
 class RIFEInterpolator:
     def __init__(self, rife_dir=None):
         if rife_dir is None:
-            from utils.paths import PROJECT_ROOT
-            rife_dir = os.path.join(PROJECT_ROOT, "tools", "rife")
+            hits = find_rife_dirs()
+            if hits:
+                rife_dir = hits[0]
+            else:
+                from utils.paths import PROJECT_ROOT
+                rife_dir = os.path.join(PROJECT_ROOT, "tools", "rife")
         self.rife_dir = os.path.abspath(rife_dir)
         self.exe = os.path.join(self.rife_dir, "rife-ncnn-vulkan.exe")
         self.model = os.path.join(self.rife_dir, "rife-v4.6")
+        for name in RIFE_MODEL_DIRS:
+            cand = os.path.join(self.rife_dir, name)
+            if os.path.isdir(cand):
+                self.model = cand
+                break
 
     def is_available(self) -> bool:
         return os.path.exists(self.exe) and os.path.exists(self.model)
+
+    def status_text(self) -> str:
+        """给人看的一句话状态（界面/日志共用）。"""
+        if self.is_available():
+            return "✅ RIFE 可用：%s" % self.rife_dir
+        if not os.path.exists(self.exe):
+            return ("⚠️ 未找到 rife-ncnn-vulkan.exe（找过 %s）。"
+                    "解压后把整个目录放到 models/rife/ 下即可，插帧会跳过"
+                    % self.rife_dir)
+        return ("⚠️ 找到 %s 但缺少模型目录（找过 %s）。"
+                "一起解压到 models/rife/ 下即可"
+                % (self.exe, ", ".join(RIFE_MODEL_DIRS)))
 
     def plan_multiplier(self, target_fps: int, source_fps: float) -> int:
         """计算插值倍数。
@@ -228,7 +268,8 @@ class RIFEInterpolator:
 
             # === Step 1: 提取帧 ===
             logger.info("🎞️ [RIFE] 提取原始帧...")
-            cap = cv2.VideoCapture(input_video)
+            from utils.video_io import SafeVideoCapture
+            cap = SafeVideoCapture(input_video)
             if not cap.isOpened():
                 cap.release()
                 raise RuntimeError(f"❌ 无法打开视频: {input_video}")

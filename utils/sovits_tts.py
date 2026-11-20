@@ -69,6 +69,16 @@ def _inject_paths():
             sys.path.insert(0, p)
 
 
+def _ensure_hf_folder():
+    """兼容垫片：实现在 utils/hf_compat.py。
+
+    放在这里的意义是让 utils.sovits_tts 被导入时就自动打好补丁，
+    调用方不用关心 gradio / huggingface_hub 的版本矛盾。
+    """
+    from utils.hf_compat import ensure_hf_folder
+    return ensure_hf_folder()
+
+
 def _patch_torchaudio():
     import torchaudio
     # 全局 monkeypatch：多线程同时进入会导致重复包裹，故加锁
@@ -119,6 +129,7 @@ class SovitsTTS:
         _inject_paths()
         _patch_torchaudio()
         _ensure_nltk()
+        _ensure_hf_folder()
         # GPT-SoVITS 内部依赖 CWD 相对路径；用受锁保护的可重入区间切换，
         # 绝不把进程级 CWD 留在 SOVITS_ROOT。
         with _sovits_cwd():

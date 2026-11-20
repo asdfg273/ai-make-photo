@@ -16,7 +16,13 @@ from PIL import Image
 
 from photo_turn.pro_editor_qt import ProImageEditor
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_smoke_out.png")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# 产物写进 tests/artifacts/tmp/（.gitignore 里已忽略 tests/artifacts/）。
+# 以前写的是 tests/_smoke_out.png —— 那文件被 git 跟踪，每跑一次测试
+# 工作树就脏一次，而且把一张生成的图长期放在版本库里。
+_OUT_DIR = os.path.join(_HERE, "artifacts", "tmp")
+os.makedirs(_OUT_DIR, exist_ok=True)
+OUT = os.path.join(_OUT_DIR, "_smoke_out.png")
 
 
 def main():
@@ -27,7 +33,7 @@ def main():
     if pics:
         src = pics[0]
     else:
-        src = os.path.join("tests", "_smoke_src.png")
+        src = os.path.join(_OUT_DIR, "_smoke_src.png")
         Image.new("RGB", (800, 600), (120, 130, 140)).save(src)
 
     ed = ProImageEditor(None, src, callback_on_save=lambda img, mask: None)

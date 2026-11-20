@@ -11,11 +11,11 @@
 # 所以这些断言是回归保险，不只是"能跑就行"。
 #
 # 用法：venv\Scripts\python.exe tests\test_regional.py
-import contextlib
 import os
 import sys
 
 import _bootstrap  # noqa: F401  （放宽 stdout 编码，放最前）
+from _bootstrap import isolated_config as _isolated_config  # noqa: E402
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,30 +23,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 _APP = QApplication.instance() or QApplication([])
-
-
-@contextlib.contextmanager
-def _isolated_config():
-    """把 AppConfig.config_file 指到测试自己的文件。
-
-    ⚠️ 必须这么做：`AIDesktopApp.closeEvent()` 会把配置写回磁盘，用的是
-    `AppConfig.config_file`。测试一旦 new 出主窗口再关掉，就会**覆盖用户真实的
-    app_config.json** —— 我第一版就踩了这个坑，把测试用的区域写进了用户配置。
-    """
-    from core.config_manager import AppConfig
-    orig = AppConfig.config_file
-    tmp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "_tmp_test_config.json")
-    AppConfig.config_file = tmp
-    try:
-        yield tmp
-    finally:
-        AppConfig.config_file = orig
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
 
 
 def _reg(name="左", rect=(0.0, 0.0, 0.5, 1.0), prompt="a red apple",

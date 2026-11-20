@@ -1,3 +1,6 @@
+from ui.theme import PALETTE
+
+
 class HistoryMixin:
 
     def _slider_snapshot(self) -> dict:
@@ -41,12 +44,13 @@ class HistoryMixin:
         if len(self.history) > 15:
             self.history.pop(0)
 
-    def _hist_status(self, action: str, ok_color: str = "#a6e3a1"):
-        depth  = len(self.history) - 1
+    def _hist_status(self, action: str, ok_color: str | None = None):
+        depth = len(self.history) - 1
         redoes = len(self.future)
         self.lbl_status.setText(
-            f"✅ {action}（可撤销 {depth} 步 / 可重做 {redoes} 步）")
-        self.lbl_status.setStyleSheet(f"color: {ok_color}; font-size:13px;")
+            f"{action}（可撤销 {depth} 步，可重做 {redoes} 步）")
+        self.lbl_status.setStyleSheet(
+            f"color:{ok_color or PALETTE['success']}; font-size:12px;")
 
     def undo(self):
         if len(self.history) > 1:
@@ -70,8 +74,9 @@ class HistoryMixin:
             self.update_canvas(self.current_img)
             self._hist_status("已撤销")
         else:
-            self.lbl_status.setText("⚠️ 已经是最早的状态了")
-            self.lbl_status.setStyleSheet("color: #f9e2af; font-size:13px;")
+            self.lbl_status.setText("已经是最早的状态")
+            self.lbl_status.setStyleSheet(
+                f"color:{PALETTE['warning']}; font-size:12px;")
 
     def redo(self):
         if self.future:
@@ -92,5 +97,6 @@ class HistoryMixin:
             self.update_canvas(self.current_img)
             self._hist_status("已重做")
         else:
-            self.lbl_status.setText("⚠️ 没有可重做的操作了")
-            self.lbl_status.setStyleSheet("color: #f9e2af; font-size:13px;")
+            self.lbl_status.setText("没有可重做的操作")
+            self.lbl_status.setStyleSheet(
+                f"color:{PALETTE['warning']}; font-size:12px;")

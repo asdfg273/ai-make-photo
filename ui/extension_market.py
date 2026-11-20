@@ -53,12 +53,12 @@ def shutdown_workers(timeout_ms: int = 8000) -> int:
     alive = [w for w in list(_ACTIVE_WORKERS) if w.isRunning()]
     if not alive:
         return 0
-    logger.info("⏳ 等待 %d 个后台下载任务收尾（最多 %ds）…",
+    logger.info("等待 %d 个后台下载任务收尾（最多 %ds）…",
                 len(alive), timeout_ms // 1000)
     deadline = _t.time() + timeout_ms / 1000.0
     while _t.time() < deadline:
         if not any(w.isRunning() for w in alive):
-            logger.info("✅ 后台下载已自然结束")
+            logger.info("后台下载已自然结束")
             return 0
         _t.sleep(0.1)
 
@@ -70,8 +70,8 @@ def shutdown_workers(timeout_ms: int = 8000) -> int:
                 w.wait(2000)
                 stopped += 1
             except Exception as e:
-                logger.warning(f"⚠️ 终止下载线程失败: {e}")
-    logger.warning("⚠️ 已强制停止 %d 个未完任务（已下载部分保留，下次可续传）", stopped)
+                logger.warning(f"终止下载线程失败: {e}")
+    logger.warning("已强制停止 %d 个未完任务（已下载部分保留，下次可续传）", stopped)
     return stopped
 
 
@@ -275,7 +275,7 @@ class ExtensionMarketDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("🧩 扩展市场")
+        self.setWindowTitle("扩展市场")
         self.resize(880, 720)
 
         self.cards = {}       # ext_id -> ExtensionCard
@@ -286,7 +286,7 @@ class ExtensionMarketDialog(QDialog):
         root.setSpacing(10)
 
         # 顶部标题
-        title = QLabel("🧩 扩展市场")
+        title = QLabel("扩展市场")
         title.setStyleSheet("font-size:20px; font-weight:bold;")
         root.addWidget(title)
 
@@ -317,7 +317,7 @@ class ExtensionMarketDialog(QDialog):
         # 底部按钮
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        btn_refresh = QPushButton("🔄 刷新状态")
+        btn_refresh = QPushButton("刷新状态")
         btn_refresh.clicked.connect(self.refresh_all)
         btn_refresh.setStyleSheet("padding:8px 16px;")
         btn_row.addWidget(btn_refresh)
@@ -349,14 +349,14 @@ class ExtensionMarketDialog(QDialog):
 
         for cat in ordered_cats:
             # 分类标题
-            cat_lbl = QLabel(f"📂 {cat}")
+            cat_lbl = QLabel(str(cat))
             cat_lbl.setStyleSheet(
                 f"font-size:15px; font-weight:bold; color:{PALETTE['accent']}; padding:6px 0 2px 0;"
             )
             self.content_lay.addWidget(cat_lbl)
 
             for ext_id, ext in by_cat[cat]:
-                installed = is_installed(ext_id)  # 🔧 改这里
+                installed = is_installed(ext_id)
                 card = ExtensionCard(ext_id, ext, installed)
                 card.action_requested.connect(self._on_action)
                 self.cards[ext_id] = card
@@ -439,7 +439,7 @@ class ExtensionMarketDialog(QDialog):
         """
         running = [wid for wid, w in self.workers.items() if w.isRunning()]
         if running:
-            logger.info("⏳ 关闭扩展市场：%d 个任务转入后台继续", len(running))
+            logger.info("关闭扩展市场：%d 个任务转入后台继续", len(running))
             try:
                 from ui.i18n import ui_i18n
                 self._set_status(

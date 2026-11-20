@@ -10,12 +10,14 @@ logger = logging.getLogger(__name__)
 # ── 全局单例控件（shell/core_panel 创建一次，页面禁止重建）──
 GLOBAL_WIDGETS = [
     # 生成核心
-    "combo_model", "combo_model_type", "combo_sampler", "combo_res",
+    "combo_model", "combo_model_type", "combo_sampler", "combo_scheduler",
+    "combo_res",
     "txt_prompt", "txt_neg", "spin_steps", "spin_width", "spin_height",
     "spin_seed", "spin_count", "combo_img_format", "combo_device",
     "chk_auto_enhance", "chk_auto_features", "btn_enhance_prompt",
     "btn_vision_prompt", "lbl_model_info",
     "combo_ai_model", "combo_trans_mode", "scale_cfg", "spin_batch",
+    "chk_translate_prompt", "lbl_prompt_lang_hint",
     "lbl_dynamic_hint", "chk_make_comic",
     # 生成控制
     "btn_generate", "btn_interrupt", "progress_gen", "lbl_status",
@@ -26,20 +28,25 @@ GLOBAL_WIDGETS = [
     "btn_send_img2img", "btn_send_inpaint", "txt_log_image",
     # 画廊
     "gallery",
-    # 共享折叠分组（LoRA/ControlNet/高级/X-Y）
+    # 共享折叠分组（LoRA/ControlNet/多参考图/高级/X-Y）
     "combo_lora_0", "combo_lora_1", "combo_lora_2",
     "scale_lora_0", "scale_lora_1", "scale_lora_2",
     "btn_refresh_lora", "btn_insert_lora_all", "text_lora_info",
     "combo_cn_type", "btn_load_cn_img", "lbl_cn_thumb",
     "chk_reference_only", "chk_use_pose", "chk_pose_transfer",
     "chk_enable_hires", "chk_hires", "combo_hires_scale",
-    "combo_hires_upscaler", "chk_use_adetailer", "chk_use_ad_hand",
+    "combo_hires_upscaler", "scale_hires_tile_denoise",
+    "combo_hires_mode", "combo_hires_order",
+    "chk_use_adetailer", "chk_use_ad_hand",
     "combo_adetailer_model", "combo_ad_target", "combo_ad_hand",
     "chk_enable_xy", "combo_x_type", "combo_y_type",
     "entry_x_vals", "entry_y_vals",
     "chk_freeu", "chk_use_tiled", "spin_tiled_w", "spin_tiled_h",
     "spin_tile_overlap", "combo_tile_size", "btn_run_tiled",
     "chk_use_ipa", "combo_ipa_variant", "spin_ipa_scale", "lbl_ipa_image",
+    # 多参考图（主界面入口：开关 + 编辑 + 清空 + 摘要）
+    "chk_use_ipa_refs", "btn_edit_ipa_refs", "btn_clear_ipa_refs",
+    "lbl_ipa_refs_summary",
     "chk_use_preview", "spin_preview_interval",
 ]
 
@@ -107,12 +114,30 @@ def install_aliases(host) -> None:
         setattr(host, alias, [getattr(host, n, None) for n in names])
 
 
+# 这些控件在特定运行模式下**本来就会是 None**，不算契约缺失。
+# `audio_output`：`ui/pages/video_page.py:626-628` 在 offscreen（测试/无显示
+# 环境）下故意不建 QAudioOutput（否则音频后端会挂住进程），于是每次离屏
+# 自检都会多报一条 "非关键缺失: ['audio_output']" —— 那是假警报，不是缺陷。
+OFFSCREEN_OPTIONAL = {"audio_output"}
+
+
+def _is_expected_none(name: str, host) -> bool:
+    if name not in OFFSCREEN_OPTIONAL:
+        return False
+    import os
+    if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+        return False
+    return getattr(host, "_audio_output_skipped", False) is True
+
+
 def check_contract(host) -> tuple[list[str], list[str]]:
     """返回 (critical_missing, minor_missing)。方法用 callable 检查。"""
     all_widgets = GLOBAL_WIDGETS + [w for ws in PAGE_WIDGETS.values() for w in ws]
     critical, minor = [], []
     for name in all_widgets:
         if hasattr(host, name) and getattr(host, name) is not None:
+            continue
+        if _is_expected_none(name, host):
             continue
         (critical if name in CRITICAL else minor).append(name)
     for name in METHOD_CONTRACT:

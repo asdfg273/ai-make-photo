@@ -54,3 +54,12 @@ data/app_config.json
 # ---- 用户数据与备份 ----
 data/gallery_favs.json
 *.bak
+
+# ---- 运行时产物（不要进版本库）----
+data/jobs.json
+data/jobs_*.json
+tests/_smoke_out.png
+tests/_smoke_src.png
+
+# ---- 用户自建内容（角色卡 / 缩略图，属于个人数据）----
+data/characters/

@@ -69,7 +69,11 @@ photo_turn/  修图编辑器模块(自包含, PyQt6) —— 共 7 个 .py, 约 2
                                     #   • 完成/错误通过 QTimer.singleShot 回 UI 线程提示
 
 外部集成(utils/app_events.py):
-  • open_editor: ProImageEditor(当前生成图, callback_on_save=on_editor_saved)
-    → 保存后归档 photo/pro_edited_HHMMSS.png + 写 inpaint_ref/mask 转局部重绘
-  • open_gallery_to_edit: 选图后同上(全黑遮罩退化为图生图)
+  • open_editor: ProImageEditor(预览区当前图, callback_on_save=on_editor_saved)
+    入口: 主界面「编辑」按钮 / 画廊右键「载入预览·发送到编辑」/「发送到修脸」。
+    路径来自 _preview_image_path()（current_generated_path → last_generated_path），
+    不再弹文件夹选图。
+    → 保存后归档 pro_edited_HHMMSS.png + 写 inpaint_ref/mask 转局部重绘
+  • open_gallery_to_edit: 仅当预览区没有图时(用户确认后)才用的兜底:
+    选图 → show_preview → open_editor（保存/遮罩回调只有 open_editor 一份）
   • 「发送到修脸」: _editor_auto_adetailer 置位, 打开后 400ms 自动 run_adetailer

@@ -19,6 +19,45 @@
       "output_paths": [
         "E:\\pythonprojects\\ai  make photo\\photo\\20260926_221632_abyssorangemix2_Hard.safetensors_01.png"
       ]
+    },
+    {
+      "uuid": "b39de926c93c4aa8afb60e259649bf5e",
+      "character_uuid": "d0a4dc6b-7181-4dc1-be0e-6ea307bdc8f9",
+      "name": "新场景",
+      "pose_prompt": "",
+      "negative_extra": "",
+      "seed": -1,
+      "count": 2,
+      "steps": null,
+      "cfg": null,
+      "width": null,
+      "height": null,
+      "enabled": true,
+      "status": "failed",
+      "error": "未产出文件",
+      "output_paths": []
+    },
+    {
+      "uuid": "c1f3d3d978494aacbcad4b8c1bc64b80",
+      "character_uuid": "bc2bfeb2-ffca-4e92-91ef-fe51a3c38813",
+      "name": "测试",
+      "pose_prompt": "",
+      "negative_extra": "",
+      "seed": -1,
+      "count": 4,
+      "steps": null,
+      "cfg": null,
+      "width": null,
+      "height": null,
+      "enabled": true,
+      "status": "done",
+      "error": "",
+      "output_paths": [
+        "E:\\pythonprojects\\ai  make photo\\photo\\20261030_182111_abyssorangemix2_Hard.safetensors_01.png",
+        "E:\\pythonprojects\\ai  make photo\\photo\\20261030_182119_abyssorangemix2_Hard.safetensors_01.png",
+        "E:\\pythonprojects\\ai  make photo\\photo\\20261030_182128_abyssorangemix2_Hard.safetensors_01.png",
+        "E:\\pythonprojects\\ai  make photo\\photo\\20261030_182136_abyssorangemix2_Hard.safetensors_01.png"
+      ]
     }
   ]
 }

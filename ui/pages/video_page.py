@@ -50,7 +50,7 @@ def _spin(lo, hi, val, step=1, w=96) -> QSpinBox:
     sp.setSingleStep(step)
     sp.setValue(val)
     sp.setMinimumWidth(w)
-    sp.setMinimumHeight(32)
+    sp.setMinimumHeight(30)
     sp.setAlignment(Qt.AlignmentFlag.AlignCenter)
     return sp
 
@@ -62,7 +62,7 @@ def _dspin(lo, hi, val, step=0.5, dec=2, w=104) -> QDoubleSpinBox:
     sp.setDecimals(dec)
     sp.setValue(val)
     sp.setMinimumWidth(w)
-    sp.setMinimumHeight(32)
+    sp.setMinimumHeight(30)
     sp.setAlignment(Qt.AlignmentFlag.AlignCenter)
     return sp
 
@@ -86,7 +86,7 @@ def _grid() -> QGridLayout:
 
 
 class VideoPage(PageBase):
-    page_id, title, icon = "video", "动画", "🎬"
+    page_id, title, icon = "video", "动画", ""
 
     def build(self, host):
         self._host = host
@@ -109,8 +109,8 @@ class VideoPage(PageBase):
         root.setSpacing(4)
         root.setContentsMargins(12, 8, 12, 16)
 
-        # ============ 💡 使用提示 ============
-        grp_tips = _group("💡 使用提示")
+        # ============ 使用提示 ============
+        grp_tips = _group("使用提示")
         tips_lay = QVBoxLayout(grp_tips)
         tips = QLabel(
             "<ul style='margin:0; padding-left:18px; line-height:150%;'>"
@@ -124,24 +124,24 @@ class VideoPage(PageBase):
         tips_lay.addWidget(tips)
         root.addWidget(grp_tips)
 
-        # ============ 🎯 生成模式 ============
-        grp_mode = _group("🎯 生成模式", accent=True)
+        # ============ 生成模式 ============
+        grp_mode = _group("生成模式", accent=True)
         mode_lay = QVBoxLayout(grp_mode)
         host.combo_video_mode = QComboBox()
         host.combo_video_mode.addItems([
-            "📝 文生视频 (txt2video)",
-            "🖼️ 图生视频 (img2video) — 首帧引导",
-            "🎞️ 视频转绘 (vid2vid) — 改画风",
-            "✨ 提示词旅行 (Prompt Travel) — 剧情视频",
+            "文生视频 (txt2video)",
+            "图生视频 (img2video) — 首帧引导",
+            "视频转绘 (vid2vid) — 改画风",
+            "提示词旅行 (Prompt Travel) — 剧情视频",
         ])
-        host.combo_video_mode.setMinimumHeight(36)
+        host.combo_video_mode.setMinimumHeight(32)
         mode_lay.addWidget(host.combo_video_mode)
         host.lbl_video_mode_desc = _hint("无需输入文件，直接填写提示词即可生成。")
         mode_lay.addWidget(host.lbl_video_mode_desc)
         root.addWidget(grp_mode)
 
-        # ============ 📥 输入文件 ============
-        host.grp_video_input = _group("📥 输入文件")
+        # ============ 输入文件 ============
+        host.grp_video_input = _group("输入文件")
         in_lay = QVBoxLayout(host.grp_video_input)
         in_lay.setSpacing(6)
 
@@ -153,7 +153,7 @@ class VideoPage(PageBase):
         host.lbl_video_input.setToolTip("未选择文件")
         row.addWidget(host.lbl_video_input, 1)
 
-        host.btn_pick_video_input = _pill("📂 选择", 84)
+        host.btn_pick_video_input = _pill("选择", 84)
         _wire(host, host.btn_pick_video_input.clicked, "on_pick_video_input")
         row.addWidget(host.btn_pick_video_input)
 
@@ -166,8 +166,8 @@ class VideoPage(PageBase):
         in_lay.addWidget(_hint("图生视频 → 选择首帧图片；视频转绘 → 选择输入视频。"))
         root.addWidget(host.grp_video_input)
 
-        # ============ 💬 提示词 ============
-        grp_prompt = _group("💬 提示词")
+        # ============ 提示词 ============
+        grp_prompt = _group("提示词")
         p_lay = QVBoxLayout(grp_prompt)
         p_lay.setSpacing(6)
 
@@ -188,27 +188,27 @@ class VideoPage(PageBase):
         prompt_btn_row = QHBoxLayout()
         prompt_btn_row.setSpacing(6)
 
-        host.btn_enhance_video_prompt = _pill("✨ 智能改写", 108)
+        host.btn_enhance_video_prompt = _pill("智能改写", 108)
         host.btn_enhance_video_prompt.setToolTip(
             "将自然语言提示词自动转换为英文 Danbooru 标签\n"
             "同时改写正面和负面提示词\n"
             "首次使用会下载 Qwen2-VL 模型 (~4.5GB)")
         prompt_btn_row.addWidget(host.btn_enhance_video_prompt)
 
-        host.btn_vision_video_prompt = _pill("📷 识图生成", 108)
+        host.btn_vision_video_prompt = _pill("识图生成", 108)
         host.btn_vision_video_prompt.setToolTip(
             "上传一张图片，AI 自动识别内容并生成提示词")
         prompt_btn_row.addWidget(host.btn_vision_video_prompt)
 
-        host.btn_enhance_travel = _pill("✨ 改写旅行段", 120)
+        host.btn_enhance_travel = _pill("改写旅行段", 120)
         host.btn_enhance_travel.setToolTip("用 AI 改写所有旅行分段的提示词")
         prompt_btn_row.addWidget(host.btn_enhance_travel)
         prompt_btn_row.addStretch()
         p_lay.addLayout(prompt_btn_row)
         root.addWidget(grp_prompt)
 
-        # ============ ✨ 提示词旅行 ============
-        host.grp_prompt_travel = _group("✨ 提示词旅行", accent=True)
+        # ============ 提示词旅行 ============
+        host.grp_prompt_travel = _group("提示词旅行", accent=True)
         host.grp_prompt_travel.setCheckable(True)
         host.grp_prompt_travel.setChecked(False)
         host.grp_prompt_travel.setToolTip("在指定帧切换提示词，实现剧情/动作变化")
@@ -222,7 +222,7 @@ class VideoPage(PageBase):
         sw_row.setSpacing(8)
         sw_row.addWidget(_field("编辑方式:", 72))
         host.combo_travel_mode = QComboBox()
-        host.combo_travel_mode.addItems(["🧩 分段编辑（推荐）", "⌨️ 文本格式"])
+        host.combo_travel_mode.addItems(["分段编辑（推荐）", "文本格式"])
         sw_row.addWidget(host.combo_travel_mode, 1)
         tv_lay.addLayout(sw_row)
 
@@ -237,10 +237,10 @@ class VideoPage(PageBase):
 
         seg_btn_row = QHBoxLayout()
         seg_btn_row.setSpacing(6)
-        btn_add_segment = _pill("➕ 添加段", 96)
+        btn_add_segment = _pill("添加段", 96)
         _wire(host, btn_add_segment.clicked, "_add_travel_segment")
         seg_btn_row.addWidget(btn_add_segment)
-        btn_auto_spread = _pill("⇄ 均匀分布帧号", 130)
+        btn_auto_spread = _pill("均匀分布帧号", 130)
         btn_auto_spread.setToolTip("按当前总帧数自动重排各段起始帧")
         _wire(host, btn_auto_spread.clicked, "_spread_travel_frames")
         seg_btn_row.addWidget(btn_auto_spread)
@@ -269,8 +269,8 @@ class VideoPage(PageBase):
         host.travel_segments = getattr(host, "travel_segments", None) or []
         host.grp_travel = host.grp_prompt_travel   # 兼容旧引用
 
-        # ============ 🎞️ 视频参数 ============
-        grp_video = _group("🎞️ 视频参数")
+        # ============ 视频参数 ============
+        grp_video = _group("视频参数")
         v_lay = QVBoxLayout(grp_video)
         v_lay.setSpacing(8)
 
@@ -312,15 +312,15 @@ class VideoPage(PageBase):
         host.combo_video_sched = QComboBox()
         host.combo_video_sched.addItems(
             ["EulerDiscrete (推荐)", "DPM++ 2M", "LCM (快速)", "DDIM"])
-        host.combo_video_sched.setMinimumHeight(32)
+        host.combo_video_sched.setMinimumHeight(30)
         g.addWidget(host.combo_video_sched, 3, 1, 1, 4)
         v_lay.addLayout(g)
 
         dur_row = QHBoxLayout()
-        dur_row.setSpacing(6)
-        dur_row.addWidget(_field("快捷时长:"))
+        dur_row.setSpacing(4)
+        dur_row.addWidget(_field("快捷时长:", 72))
         for sec in (2, 4, 6, 8, 10):
-            b = _pill(f"{sec}秒", 50)
+            b = _pill(f"{sec}秒", 44)
             b.clicked.connect(
                 lambda _=False, s=sec: getattr(host, "_set_video_duration", lambda *_: None)(s))
             dur_row.addWidget(b)
@@ -329,27 +329,81 @@ class VideoPage(PageBase):
 
         v_lay.addWidget(_hint("建议 8–12 FPS：更高更流畅，但显存与耗时线性增加。"))
 
-        host.chk_long_video = QCheckBox("🎬 长视频模式 (>32 帧)")
-        host.chk_long_video.setToolTip("启用 Context Window，帧数上限扩至 150")
+        host.chk_long_video = QCheckBox("长视频模式 (>16 帧，分段生成)")
+        host.chk_long_video.setToolTip(
+            "单次生成最多 16 帧：motion module 的位置编码只按 16 帧训练，"
+            "实测 20 帧单次会直接崩成噪声。\n"
+            "勾选后用「分段生成 + 尾帧续接」做长视频：每段最多 16 帧，"
+            "后一段接前一段最后一帧，帧数上限扩到 150。\n"
+            "帧数超过 16 会自动分段（每段最多 16 帧，尾帧续接）。\n"
+            "不勾选时上限 32 帧；勾选后上限 150 帧（耗时按帧数线性增长）。")
         _wire(host, host.chk_long_video.toggled, "_on_long_video_toggled")
         v_lay.addWidget(host.chk_long_video)
+
+        seg_row = QHBoxLayout()
+        seg_row.setSpacing(8)
+        seg_row.addWidget(QLabel("每段帧数"))
+        host.spin_segment_frames = _spin(8, 16, 16, 8)
+        host.spin_segment_frames.setToolTip(
+            "分段生成时每段多少帧，上限 16 = motion module 的训练长度。"
+            "总帧数会尽量均分到每段（例如 20 帧 + 16 → 10+10）。")
+        seg_row.addWidget(host.spin_segment_frames)
+        seg_row.addWidget(QLabel("续接强度"))
+        host.spin_continuation = _dspin(0.30, 0.80, 0.70, 0.05, 2)
+        host.spin_continuation.setToolTip(
+            "后一段接前一段最后一帧时允许改多少：越大越敢动（动作明显，接缝也更明显），"
+            "越小越贴上一段（几乎静止）。实测 0.35≈静止 / 0.70 动作自然 / 0.80 像切镜头。")
+        seg_row.addWidget(host.spin_continuation)
+        seg_row.addStretch()
+        v_lay.addLayout(seg_row)
         root.addWidget(grp_video)
 
-        # ============ 🎭 Motion LoRA ============
-        grp_lora = _group("🎭 Motion LoRA (可多选)")
+        # ============ 加速（AnimateDiff-Lightning） ============
+        grp_fast = _group("加速 (AnimateDiff-Lightning)")
+        f_lay = QVBoxLayout(grp_fast)
+        f_lay.setSpacing(6)
+
+        host.combo_video_lightning = QComboBox()
+        host.combo_video_lightning.setMinimumHeight(30)
+        host.combo_video_lightning.addItem("不使用（按上面的步数跑）", "")
+        _scan_l = getattr(host, "_scan_lightning", None)
+        for name in (_scan_l() if callable(_scan_l) else []):
+            host.combo_video_lightning.addItem(name, name)
+        host.combo_video_lightning.setMinimumContentsLength(10)
+        host.combo_video_lightning.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        host.combo_video_lightning.setToolTip(
+            "选了蒸馏 LoRA 后会自动把步数/CFG 拉到该档位（4 步档：4 步 / CFG 1.0）。"
+            "文件放 models/lightning/，例如 animatediff_lightning_4step_diffusers.safetensors")
+        f_lay.addWidget(host.combo_video_lightning)
+
+        host.lbl_lightning_hint = _hint(
+            "未检测到加速 LoRA。把 AnimateDiff-Lightning 的 safetensors 放进 "
+            "models/lightning/ 即可（4 步档能让 25 步的耗时降到约 1/6）。"
+            if host.combo_video_lightning.count() <= 1 else
+            "4 步档：动作幅度小、速度快；8 步档：质量更好，约为 25 步的 1/3 耗时。")
+        f_lay.addWidget(host.lbl_lightning_hint)
+        root.addWidget(grp_fast)
+
+        # ============ Motion LoRA ============
+        grp_lora = _group("Motion LoRA (可多选)")
         l_lay = QVBoxLayout(grp_lora)
         l_lay.setSpacing(6)
 
         add_row = QHBoxLayout()
         add_row.setSpacing(8)
         host.cmb_motion_lora_pick = QComboBox()
-        host.cmb_motion_lora_pick.setMinimumHeight(32)
+        host.cmb_motion_lora_pick.setMinimumHeight(30)
         host.cmb_motion_lora_pick.addItem("-- 选择 Motion LoRA --")
+        # 长 LoRA 名不得把整页最小宽度撑爆（否则面板右侧整体被裁）
+        host.cmb_motion_lora_pick.setMinimumContentsLength(10)
+        host.cmb_motion_lora_pick.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         _scan = getattr(host, "_scan_motion_loras", None)
         for name in (_scan() if callable(_scan) else []):
             host.cmb_motion_lora_pick.addItem(name)
 
-        btn_add_lora = _pill("➕ 添加", 78)
+        btn_add_lora = _pill("添加", 78)
         _wire(host, btn_add_lora.clicked, "_add_motion_lora_item")
         add_row.addWidget(host.cmb_motion_lora_pick, 1)
         add_row.addWidget(btn_add_lora)
@@ -367,8 +421,8 @@ class VideoPage(PageBase):
         l_lay.addWidget(host.lbl_motion_lora_hint)
         root.addWidget(grp_lora)
 
-        # ============ 🎙️ 配音 ============
-        grp_voice = _group("🎙️ 配音 (可选)")
+        # ============ 配音 ============
+        grp_voice = _group("配音 (可选)")
         vo_lay = QVBoxLayout(grp_voice)
         vo_lay.setSpacing(6)
 
@@ -381,7 +435,7 @@ class VideoPage(PageBase):
         eng_row.addWidget(_field("引擎:", 72))
         host.combo_tts_engine = QComboBox()
         host.combo_tts_engine.addItems(["ChatTTS (中文)", "GPT-SoVITS (日语)"])
-        host.combo_tts_engine.setMinimumHeight(32)
+        host.combo_tts_engine.setMinimumHeight(30)
         eng_row.addWidget(host.combo_tts_engine, 1)
         vo_lay.addLayout(eng_row)
 
@@ -389,25 +443,27 @@ class VideoPage(PageBase):
         host.txt_video_voice = QTextEdit()
         host.txt_video_voice.setFixedHeight(76)
         host.txt_video_voice.setPlaceholderText(
-            "旁白文字，例如：清晨的阳光洒在草地上，一只小猫追逐着蝴蝶。")
+            "输入旁白文字（留空则使用提示词）")
         vo_lay.addWidget(host.txt_video_voice)
 
         host.wrap_chattts = QWidget()
         c_lay = QVBoxLayout(host.wrap_chattts)
         c_lay.setContentsMargins(0, 0, 0, 0)
-        r = QHBoxLayout()
-        r.setSpacing(6)
-        r.addWidget(_field("说话人 Seed:", 92))
+        # 2×2 网格排布 4 个音色按钮：一行横排会超出面板宽度被裁掉
+        grid_seed = QGridLayout()
+        grid_seed.setHorizontalSpacing(6)
+        grid_seed.setVerticalSpacing(4)
+        grid_seed.setContentsMargins(0, 0, 0, 0)
+        grid_seed.addWidget(_field("说话人 Seed:", 92), 0, 0)
         host.spin_video_voice_seed = _spin(0, 999999, 2222, 1, 92)
-        r.addWidget(host.spin_video_voice_seed)
-        for txt, sd in (("👨 男1", 2222), ("👨 男2", 7869),
-                        ("👩 女1", 1983), ("👩 女2", 4099)):
+        grid_seed.addWidget(host.spin_video_voice_seed, 0, 1)
+        for i, (txt, sd) in enumerate((("男声 1", 2222), ("男声 2", 7869),
+                                       ("女声 1", 1983), ("女声 2", 4099))):
             b = _pill(txt, 62)
             b.clicked.connect(
                 lambda _=False, v=sd: host.spin_video_voice_seed.setValue(v))
-            r.addWidget(b)
-        r.addStretch()
-        c_lay.addLayout(r)
+            grid_seed.addWidget(b, i // 2, 2 + i % 2)
+        c_lay.addLayout(grid_seed)
         vo_lay.addWidget(host.wrap_chattts)
 
         host.wrap_sovits = QWidget()
@@ -419,10 +475,13 @@ class VideoPage(PageBase):
         r.setSpacing(8)
         r.addWidget(_field("参考音频:", 92))
         host.combo_sovits_ref = QComboBox()
-        host.combo_sovits_ref.setMinimumHeight(32)
+        host.combo_sovits_ref.setMinimumHeight(30)
+        host.combo_sovits_ref.setMinimumContentsLength(8)
+        host.combo_sovits_ref.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         host.combo_sovits_ref.addItems(["默认女声 (Nanami)"])
         r.addWidget(host.combo_sovits_ref, 1)
-        btn_pick_ref = _pill("📂 自定义", 88)
+        btn_pick_ref = _pill("自定义", 88)
         _wire(host, btn_pick_ref.clicked, "_on_pick_sovits_ref")
         r.addWidget(btn_pick_ref)
         s_lay.addLayout(r)
@@ -475,8 +534,8 @@ class VideoPage(PageBase):
         vo_lay.addWidget(host.lbl_voice_hint)
         root.addWidget(grp_voice)
 
-        # ============ ✨ 后处理 ============
-        grp_post = _group("✨ 后处理 (可选)")
+        # ============ 后处理 ============
+        grp_post = _group("后处理 (可选)")
         po_lay = QVBoxLayout(grp_post)
         po_lay.setSpacing(6)
 
@@ -496,7 +555,7 @@ class VideoPage(PageBase):
 
         r = QHBoxLayout()
         r.setSpacing(8)
-        host.chk_video_upscale = QCheckBox("🔍 视频放大 (Real-ESRGAN)")
+        host.chk_video_upscale = QCheckBox("视频放大 (Real-ESRGAN)")
         host.chk_video_upscale.setToolTip("512 → 1024 / 2048，显著增加耗时")
         r.addWidget(host.chk_video_upscale)
         host.combo_upscale_factor = QComboBox()
@@ -513,7 +572,7 @@ class VideoPage(PageBase):
 
         # ============ 🎞️ RIFE 插帧 ============
         # ⚠️ 之前 RIFE 只有实现、没有任何调用点：扩展市场里装了也用不上。
-        grp_rife = _group("🎞️ RIFE 插帧 — 提升流畅度")
+        grp_rife = _group("RIFE 插帧 — 提升流畅度")
         r_lay = QVBoxLayout(grp_rife)
         host.chk_rife = QCheckBox("生成后自动插帧")
         host.chk_rife.setToolTip(
@@ -530,7 +589,7 @@ class VideoPage(PageBase):
         host.combo_rife_fps = QComboBox()
         host.combo_rife_fps.addItems(["24", "30", "48", "60"])
         host.combo_rife_fps.setCurrentText("24")
-        host.combo_rife_fps.setMinimumHeight(32)
+        host.combo_rife_fps.setMinimumHeight(30)
         r.addWidget(host.combo_rife_fps, 1)
         r.addStretch()
         r_lay.addLayout(r)
@@ -542,23 +601,23 @@ class VideoPage(PageBase):
         _toggle_rife(False)
         root.addWidget(grp_rife)
 
-        # ============ 💾 输出设置 ============
-        grp_out = _group("💾 输出设置")
+        # ============ 输出设置 ============
+        grp_out = _group("输出设置")
         o_lay = QVBoxLayout(grp_out)
         r = QHBoxLayout()
         r.setSpacing(8)
         r.addWidget(_field("格式:", 72))
         host.combo_video_fmt = QComboBox()
         host.combo_video_fmt.addItems(["MP4", "GIF", "MP4 + GIF"])
-        host.combo_video_fmt.setMinimumHeight(32)
+        host.combo_video_fmt.setMinimumHeight(30)
         r.addWidget(host.combo_video_fmt, 1)
         r.addStretch()
         o_lay.addLayout(r)
         o_lay.addWidget(_hint("MP4 适合分享与二次剪辑，GIF 适合社交媒体。"))
         root.addWidget(grp_out)
 
-        # ============ 🎬 生成 ============
-        host.btn_gen_video = QPushButton("🎬 生成视频")
+        # ============ 生成 ============
+        host.btn_gen_video = QPushButton("生成视频")
         host.btn_gen_video.setObjectName("btnGenVideo")
         host.btn_gen_video.setMinimumHeight(48)
         host.btn_gen_video.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -566,7 +625,7 @@ class VideoPage(PageBase):
         root.addSpacing(6)
         root.addWidget(host.btn_gen_video)
 
-        host.lbl_video_status = QLabel("💤 待命中 — 设置参数后点击生成")
+        host.lbl_video_status = QLabel("待命中 — 设置参数后点击生成")
         host.lbl_video_status.setProperty("role", "hint")
         host.lbl_video_status.setWordWrap(True)
         root.addWidget(host.lbl_video_status)
@@ -617,7 +676,10 @@ class VideoPage(PageBase):
         # offscreen 测试环境下 QAudioOutput 会挂住进程，跳过音频输出
         if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
             host.audio_output = None
+            # 告诉契约自检：这里是**故意**不建的，别报成"缺失"
+            host._audio_output_skipped = True
         else:
+            host._audio_output_skipped = False
             host.audio_output = QAudioOutput()
             host.video_player.setAudioOutput(host.audio_output)
 
@@ -629,7 +691,7 @@ class VideoPage(PageBase):
         _wire(host, host.video_player.errorOccurred, "_on_video_player_error")
 
         host.lbl_video_placeholder = QLabel(
-            "🎥 视频生成后自动播放\n或从下方历史列表双击选择")
+            "视频生成后自动播放\n或从下方历史列表双击选择")
         host.lbl_video_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         host.lbl_video_placeholder.setMinimumHeight(300)
         host.lbl_video_placeholder.setProperty("role", "hint")
@@ -644,10 +706,10 @@ class VideoPage(PageBase):
 
         video_btn_row = QHBoxLayout()
         video_btn_row.setSpacing(4)
-        host.btn_video_save = QPushButton("💾 保存")
-        host.btn_video_refresh = QPushButton("🔄 刷新")
-        host.btn_video_pause = QPushButton("⏯️ 暂停")
-        host.btn_video_stop = QPushButton("⏹️ 停止")
+        host.btn_video_save = QPushButton("保存")
+        host.btn_video_refresh = QPushButton("刷新")
+        host.btn_video_pause = QPushButton("暂停 / 继续")
+        host.btn_video_stop = QPushButton("停止")
         for b in (host.btn_video_save, host.btn_video_refresh,
                   host.btn_video_pause, host.btn_video_stop):
             video_btn_row.addWidget(b)
@@ -667,10 +729,10 @@ class VideoPage(PageBase):
         # 统一画廊入口
         gallery_row = QHBoxLayout()
         gallery_row.setSpacing(6)
-        hint = QLabel("📂 历史视频已统一到「画廊」页")
+        hint = QLabel("历史视频已统一到「画廊」页")
         hint.setProperty("role", "hint")
         gallery_row.addWidget(hint, 1)
-        btn_to_gallery = QPushButton("🖼️ 打开画廊（动画）")
+        btn_to_gallery = QPushButton("打开画廊（动画）")
         btn_to_gallery.clicked.connect(lambda: (
             host.gallery.set_media_filter("video") if hasattr(host, "gallery") else None,
             host.nav.select("gallery") if hasattr(host, "nav") else None))
@@ -679,7 +741,7 @@ class VideoPage(PageBase):
 
         layout.addWidget(video_preview_wrap, 1)
 
-        lbl_log = QLabel("📋 生成日志:")
+        lbl_log = QLabel("生成日志:")
         lbl_log.setProperty("role", "hint")
         layout.addWidget(lbl_log)
         host.txt_log_video = QTextEdit()

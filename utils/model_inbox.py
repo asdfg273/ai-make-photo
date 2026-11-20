@@ -46,7 +46,7 @@ _README = """\
 把下载好的模型直接丢进这个文件夹（puton）就行。
 
 程序每次启动会自动：
-  1. 读取文件头判断它是 SD1.5 / SDXL / Flux / SD3 / Anima / LoRA；
+  1. 读取文件头判断它是 SD1.5 / SDXL / Flux / SD3 / Anima / MOSS-Image / LoRA；
   2. 移动到 models/ 或 loras/ 下正确的子目录；
   3. 弹窗告诉你每个文件去了哪里。
 
@@ -61,6 +61,12 @@ _README = """\
     判不出底模的进 loras/_unknown_dit；
   · Flux / SD3 除了底模还需要「引擎组件」（约 10GB），
     请在扩展市场 → 新架构引擎 里安装，否则放进来也用不了。
+  · Anima 除了底模还需要「基座组件」（Qwen3 文本编码器 / VAE，约 1.7GB）：
+    把整个基座目录（里面有 modular_model_index.json）也丢进来，会归位到
+    models/anima/。没有基座 Anima 出不了图，程序不会自动下载。
+  · MOSS-Image 本身就是**一个目录**（含 model_index.json 与
+    pipeline_moss_image.py，bf16 约 10GB），整个目录丢进来即可，
+    会归位到 models/mossimage/。ComfyUI 的单文件版本本程序不支持。
 """
 
 
@@ -169,7 +175,16 @@ def ensure_inbox() -> str:
         logger.warning(f"⚠️ 无法创建投递箱目录 {d}: {e}")
         return d
     readme = os.path.join(d, "README.txt")
-    if not os.path.exists(readme):
+    # 内容是程序生成的，所以**版本变了就覆盖**：老用户升级后仍能看到
+    # 新架构（如 MOSS-Image / Anima 基座）的放置说明，而不是半年前的旧文件。
+    old = ""
+    if os.path.exists(readme):
+        try:
+            with open(readme, "r", encoding="utf-8") as f:
+                old = f.read()
+        except OSError as e:
+            logger.debug(f"读取投递箱说明失败（将覆盖）: {e}")
+    if old != _README:
         try:
             with open(readme, "w", encoding="utf-8") as f:
                 f.write(_README)

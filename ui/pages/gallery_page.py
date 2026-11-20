@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class GalleryPage(PageBase):
-    page_id, title, icon = "gallery", "画廊", "🖼️"
+    page_id, title, icon = "gallery", "画廊", ""
 
     def build(self, host):
         self._host = host
@@ -35,9 +35,9 @@ class GalleryPage(PageBase):
 
         self._media_group = QButtonGroup(w)
         self._media_group.setExclusive(True)
-        btn_all = QPushButton("🗂️ 全部")
-        btn_img = QPushButton("🖼️ 图片")
-        btn_vid = QPushButton("🎬 动画")
+        btn_all = QPushButton("全部")
+        btn_img = QPushButton("图片")
+        btn_vid = QPushButton("动画")
         btn_all.setObjectName("btnMediaAll")
         btn_img.setObjectName("btnMediaImage")
         btn_vid.setObjectName("btnMediaVideo")

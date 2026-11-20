@@ -1,6 +1,8 @@
 # tests/test_v6_features.py — v6 新功能测试（无头，纯脚本）
 import os
 import _bootstrap  # noqa: F401,E402  (统一放宽 stdout 编码，避免 emoji 让脚本假失败)
+
+_bootstrap.isolate_config_globally()  # 隔离配置：不读写用户真实 app_config.json
 import sys
 import tempfile
 
@@ -144,8 +146,13 @@ def test_filmstrip_full_backfill():
     # 嫁接 main 的真实方法与 ParamSnapshotMixin 的安全设值
     win.reuse_params_from_path = types.MethodType(
         _m.AIDesktopApp.reuse_params_from_path, win)
+    # 回填逻辑已合并为唯一实现 apply_meta_params（_on_apply_gallery_params 只委托）
     win._on_apply_gallery_params = types.MethodType(
         _m.AIDesktopApp._on_apply_gallery_params, win)
+    win.apply_meta_params = types.MethodType(
+        _m.AIDesktopApp.apply_meta_params, win)
+    win._apply_meta_resolution = types.MethodType(
+        _m.AIDesktopApp._apply_meta_resolution, win)
     for n in ("_safe_set_int", "_safe_set_float", "_safe_set_combo"):
         setattr(win, n, types.MethodType(getattr(ParamSnapshotMixin, n), win))
     win._set_status = lambda *a, **k: None
@@ -160,7 +167,13 @@ def test_filmstrip_full_backfill():
     assert win.spin_steps.value() == 30
     assert win.spin_seed.value() == 12345
     assert win.combo_res.currentText() == "832x1216", win.combo_res.currentText()
-    assert win.combo_sampler.currentText() == "DPM++ 2M Karras"
+    # 采样器与 sigma 风格是两个下拉框；老元数据里写在一起的
+    # "DPM++ 2M Karras" 必须被拆开，否则界面上根本选不中
+    assert win.combo_sampler.currentText() == "DPM++ 2M", \
+        win.combo_sampler.currentText()
+    _style_combo = getattr(win, "combo_scheduler", None)
+    if _style_combo is not None:
+        assert _style_combo.currentText() == "Karras", _style_combo.currentText()
     assert "testModel_v1" in win.combo_model.currentText()
     cfg = win.scale_cfg.value() if hasattr(win.scale_cfg, "value") \
         else win.scale_cfg.get_value()

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class Img2ImgPage(PageBase):
-    page_id, title, icon = "img2img", "图生图", "🖼️"
+    page_id, title, icon = "img2img", "图生图", ""
 
     def build(self, host):
         self._host = host
@@ -31,9 +31,9 @@ class Img2ImgPage(PageBase):
         gi = QVBoxLayout(grp_i2i)
 
         btn_row = QHBoxLayout()
-        host.btn_load_img = QPushButton("📂 加载参考图")
+        host.btn_load_img = QPushButton("加载参考图")
         _wire(host, host.btn_load_img.clicked, "select_image")
-        host.btn_clear_img = QPushButton("🗑 清除")
+        host.btn_clear_img = QPushButton("清除")
         _wire(host, host.btn_clear_img.clicked, "clear_reference")
         btn_row.addWidget(host.btn_load_img)
         btn_row.addWidget(host.btn_clear_img)
@@ -56,13 +56,13 @@ class Img2ImgPage(PageBase):
         layout.addWidget(grp_i2i)
 
         # ---------- IP-Adapter ----------
-        grp_ipa = QGroupBox("🎭 IP-Adapter — 角色一致性")
+        grp_ipa = QGroupBox("IP-Adapter — 角色一致性")
         g_ipa = QGridLayout(grp_ipa)
 
         host.chk_use_ipa = QCheckBox("启用 IP-Adapter (锁定角色样貌)")
         g_ipa.addWidget(host.chk_use_ipa, 0, 0, 1, 4)
 
-        btn_load_ipa = QPushButton("📷 加载角色参考图")
+        btn_load_ipa = QPushButton("加载角色参考图")
         _wire(host, btn_load_ipa.clicked, "load_ipa_image")
         g_ipa.addWidget(btn_load_ipa, 1, 0)
 
@@ -86,23 +86,23 @@ class Img2ImgPage(PageBase):
         layout.addWidget(grp_ipa)
 
         # ---------- Pose Transfer ----------
-        grp_pt = QGroupBox("🎬 Pose Transfer — 智能姿势迁移 (推荐)")
+        grp_pt = QGroupBox("Pose Transfer — 智能姿势迁移 (推荐)")
         g_pt = QVBoxLayout(grp_pt)
 
         host.chk_pose_transfer = QCheckBox("启用 Pose Transfer (3 阶段流水线)")
         host.chk_pose_transfer.setToolTip(
-            "🎬 自动 3 阶段流水线:\n"
-            "1️⃣ 用提示词生成动作参考图\n"
-            "2️⃣ 自动提取 OpenPose 骨架\n"
-            "3️⃣ 骨架(锁动作) + 角色图(锁角色) → 最终图\n\n"
-            "✅ 完美解决「图生图看不懂提示词」问题\n"
-            "⚠️ 需要在上方上传 IP-Adapter 角色参考图\n"
-            "⏱ 总耗时约普通生成的 1.5~2 倍")
+            "自动 3 阶段流水线:\n"
+            "1. 用提示词生成动作参考图\n"
+            "2. 自动提取 OpenPose 骨架\n"
+            "3. 骨架(锁动作) + 角色图(锁角色) → 最终图\n\n"
+            "完美解决「图生图看不懂提示词」问题\n"
+            "需要在上方上传 IP-Adapter 角色参考图\n"
+            "总耗时约普通生成的 1.5~2 倍")
         _wire(host, host.chk_pose_transfer.toggled, "_on_pose_transfer_toggled")
         g_pt.addWidget(host.chk_pose_transfer)
 
         host.lbl_pt_tip = QLabel(
-            "💡 启用后会自动:\n"
+            "启用后会自动:\n"
             "   • 强制开启 IP-Adapter (用上方角色图锁人物)\n"
             "   • 强制使用 OpenPose ControlNet (锁动作)\n"
             "   • 忽略「重绘强度」(走 ControlNet 通道)")
@@ -138,7 +138,7 @@ class Img2ImgPage(PageBase):
         layout.addWidget(grp_pt)
 
         # ---------- 单图角色一致性增强 ----------
-        g_consist = QGroupBox("🎯 单图角色一致性增强")
+        g_consist = QGroupBox("单图角色一致性增强")
         v_consist = QVBoxLayout(g_consist)
 
         host.chk_auto_features = QCheckBox(
@@ -148,11 +148,11 @@ class Img2ImgPage(PageBase):
             "启用后,生成前会用 Qwen2-VL 分析参考图,\n"
             "自动提取发色/瞳色/兽耳/服装等关键特征,\n"
             "并以最高权重注入 prompt 最前端。\n"
-            "✅ 单图角色一致性必备")
+            "单图角色一致性必备")
         v_consist.addWidget(host.chk_auto_features)
 
         host.chk_reference_only = QCheckBox(
-            "🪞 启用 Reference-Only (锁定参考图细节,与 Pose 互斥)")
+            "启用 Reference-Only (锁定参考图细节,与 Pose 互斥)")
         host.chk_reference_only.setChecked(False)
         v_consist.addWidget(host.chk_reference_only)
 
@@ -176,7 +176,6 @@ class Img2ImgPage(PageBase):
         v_consist.addWidget(hint_ref)
 
         layout.addWidget(g_consist)
-        layout.addStretch()
 
         self._params = w
 

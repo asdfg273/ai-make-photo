@@ -10,7 +10,7 @@
     检查资源 → 存在 → 继续执行
              → 缺失 → 显示资源卡片 → 用户下载 → 校验 → 重新预检
 
-⚠️ 下载入口的边界（遵守项目既定策略）
+ 下载入口的边界（遵守项目既定策略）
 ------------------------------------
 **底模 / LoRA / VAE 不给下载按钮** —— 模型由用户自行下载，这是项目明确
 的策略。这几类缺失时只告诉用户"缺什么、放哪儿"。
@@ -29,8 +29,8 @@ from PyQt6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout,
                              QHeaderView, QLabel, QMessageBox, QProgressBar,
                              QPushButton, QTableWidget, QTableWidgetItem,
                              QVBoxLayout)
-
 from ui.i18n import ui_i18n
+
 logger = logging.getLogger(__name__)
 
 # 状态 → (中文标签, 颜色)

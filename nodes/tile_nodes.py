@@ -39,6 +39,7 @@ from workflow.registry import node
 from workflow.schema import (DataType, ParamSpec, PortSpec,
                              ResourceRequirement)
 from workflow.values import as_image
+from utils import tiled_hires
 
 logger = logging.getLogger(__name__)
 
@@ -328,13 +329,40 @@ def run_tiled_hires_fix(ctx, node, inputs):
                                width=tile, height=tile)
     _apply_negative(adapter, kw, neg)
     kw["strength"] = denoise
-    # 图生图尺寸由输入图的尺寸决定，显式宽高会被管线忽略甚至报冲突
-    kw.pop("width", None)
-    kw.pop("height", None)
-    kw.pop("prompt", None)
-    kw.pop("negative_prompt", None)
+    # 已经用 prompt_embeds 的架构（Compel 路线）才需要丢掉文本形式的 prompt，
+    # 否则 Anima/SD3 这类非 Compel 架构的提示词会被一起扔掉 —— 它们只有 prompt。
+    if "prompt_embeds" in kw:
+        kw.pop("prompt", None)
+        kw.pop("negative_prompt", None)
+    # 逐块尺寸要不要传，取决于管线认不认：
+    #   * SD1.5/SDXL 的 img2img `__call__` 没有 width/height（尺寸跟着 image 走），
+    #     硬传会 TypeError；
+    #   * Anima 的 ModularPipeline 恰恰相反，不传就按默认 1024 出图，等于每块
+    #     都在跑整图（实测单块 28~30s、峰值 9679MB）。
+    pass_size = (getattr(model, "arch_id", "") == "anima"
+                 or tiled_hires._accepts_kw(pipe, "width", "height"))
+    if not pass_size:
+        kw.pop("width", None)
+        kw.pop("height", None)
+    # 强度上限 + 步数补足（与主界面分块高清同一套策略）
+    requested_denoise = denoise
+    if 0.0 < tiled_hires.TILED_MAX_DENOISE < denoise:
+        denoise = tiled_hires.TILED_MAX_DENOISE
+        kw["strength"] = denoise
+        logger.warning(
+            f"⚠️ 分块重绘强度 {requested_denoise:g} 超过上限 {denoise:g}，"
+            f"已按 {denoise:g} 执行 —— 分块时每块只看到自己那部分画面，"
+            f"强度太大会各画各的（实测 0.35 就出现主体重复与可见块边界）")
+    steps_used = tiled_hires.boost_steps(
+        int(kw.get("num_inference_steps", steps) or steps), denoise)
+    if steps_used != int(kw.get("num_inference_steps", steps) or steps):
+        logger.info(f"ℹ️ 分块高清：{steps} 步 × 强度 {denoise:g} 生效步数不足 "
+                    f"{tiled_hires.MIN_EFFECTIVE_STEPS}，总步数提到 "
+                    f"{steps_used}（强度不变）—— 否则每块会被整块重画")
+        kw["num_inference_steps"] = steps_used
 
     items = []
+    plan = []
     no_tile = (target_w <= tile and target_h <= tile)
 
     if no_tile:
@@ -345,6 +373,9 @@ def run_tiled_hires_fix(ctx, node, inputs):
                    f"强度 {denoise} · seed {base_seed}")
         call = dict(kw)
         call["image"] = upscaled
+        if pass_size:
+            call["width"] = target_w
+            call["height"] = target_h
         call["generator"] = _generator(ctx.device, base_seed)
         ctx.check_cancel()
         with torch.inference_mode():
@@ -392,6 +423,9 @@ def run_tiled_hires_fix(ctx, node, inputs):
             tile_seed = base_seed + i
             call = dict(kw)
             call["image"] = crop
+            if pass_size:
+                call["width"] = t["w"]
+                call["height"] = t["h"]
             call["generator"] = _generator(ctx.device, tile_seed)
 
             try:
@@ -420,15 +454,27 @@ def run_tiled_hires_fix(ctx, node, inputs):
 
     # ---- 4) 融合 ----
     ctx.status(f"🧵 融合 {len(items)} 块 → {target_w}x{target_h}")
+    # 羽化宽度按**实际**重叠算（plan_tiles 会给比请求值更大的重叠，
+    # 按请求值的一半羽化会在平色区留下明显色阶）+ 整图分支就按图的一半
+    if no_tile:
+        feath = max(8, min(target_w, target_h) // 2)
+    else:
+        _ov = tiling.effective_overlap(plan)
+        feath = max(8, min(int(_ov[0]), int(_ov[1])) // 2)
     out_img = tiling.blend_stitch((target_w, target_h), items,
-                                  base=upscaled, feather=max(8, overlap // 2),
+                                  base=upscaled, feather=feath,
                                   mode=mode, color_correct=color_correct)
     out_img = out_img.convert("RGB")
     ctx.check_cancel()
 
     meta = {"tile_size": tile, "tile_overlap": overlap,
             "tile_overlap_effective": tiling.effective_overlap(plan),
-            "tile_denoise": denoise, "tile_scale": scale,
+            "tile_denoise": denoise,
+            "tile_denoise_requested": requested_denoise,
+            "tile_steps": int(kw.get("num_inference_steps", steps) or steps),
+            "tile_feather": feath,
+            "tile_pass_size": bool(pass_size),
+            "tile_scale": scale,
             "tile_count": len(items), "tile_total": len(items),
             "tile_method": method, "tile_blend": blend_label,
             "tile_vram_mode": vram_mode, "tile_color_correct": color_correct,

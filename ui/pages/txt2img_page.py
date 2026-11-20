@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class Txt2ImgPage(PageBase):
-    page_id, title, icon = "txt2img", "文生图", "🎨"
+    page_id, title, icon = "txt2img", "文生图", ""
 
     def build(self, host):
         self._host = host
@@ -49,11 +49,14 @@ class Txt2ImgPage(PageBase):
         # ── 5 个操作按钮 ──
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
-        host.btn_open_editor = QPushButton("🖌️ 编辑")
-        host.btn_save_as = QPushButton("💾 另存为")
-        host.btn_send_img2img = QPushButton("🔄 转图生图")
-        host.btn_send_inpaint = QPushButton("🎭 转重绘")
-        host.btn_compare = QPushButton("⚖️ 对比")
+        host.btn_open_editor = QPushButton("编辑")
+        host.btn_open_editor.setToolTip("编辑预览区当前的这张图")
+        # 旧别名: 生成中禁用/恢复（hasattr(self, "btn_edit")）用的就是它
+        host.btn_edit = host.btn_open_editor
+        host.btn_save_as = QPushButton("另存为")
+        host.btn_send_img2img = QPushButton("转到图生图")
+        host.btn_send_inpaint = QPushButton("转到重绘")
+        host.btn_compare = QPushButton("对比")
         host.btn_compare.setCheckable(True)
         host.btn_compare.setEnabled(False)   # 有修前快照后启用
         host.btn_compare.setToolTip(
@@ -65,7 +68,7 @@ class Txt2ImgPage(PageBase):
                   host.btn_compare):
             btn_row.addWidget(b)
         preview_layout.addLayout(btn_row)
-        _wire(host, host.btn_open_editor.clicked, "open_gallery_to_edit")
+        _wire(host, host.btn_open_editor.clicked, "open_editor")
         _wire(host, host.btn_save_as.clicked, "save_current_image_as")
         _wire(host, host.btn_send_img2img.clicked, "send_preview_to_img2img")
         _wire(host, host.btn_send_inpaint.clicked, "send_preview_to_inpaint")
@@ -75,7 +78,7 @@ class Txt2ImgPage(PageBase):
         layout.addWidget(preview_wrap, 1)
 
         # ── 日志 ──
-        lbl_log = QLabel("📋 生成日志:")
+        lbl_log = QLabel("生成日志:")
         lbl_log.setProperty("role", "hint")
         layout.addWidget(lbl_log)
         host.txt_log_image = QTextEdit()

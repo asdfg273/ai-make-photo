@@ -2,6 +2,9 @@
 # 覆盖: setup_ui + apply_config_to_ui + 预设/工具提示 + 画廊信号 + 信号桥
 # 模型加载在后台 daemon 线程，本测试不等它，验证完构造路径即退出
 import os
+import _bootstrap  # noqa: F401,E402  (统一放宽 stdout 编码 + 配置隔离)
+
+_bootstrap.isolate_config_globally()  # 隔离配置：不读写用户真实 app_config.json
 import sys
 import time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

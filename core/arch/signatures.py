@@ -226,11 +226,56 @@ _CLASS_TO_ARCH = {
     "StableDiffusion3Pipeline": "sd3",
     "FluxPipeline": "flux",
     "AnimaModularPipeline": "anima",
+    # MOSS-Image（OpenMOSS 5B DiT）的 diffusers 仓自带一个自定义管线文件
+    "MossImagePipeline": "mossimage",
+    # 现代视频架构（入口预留，引擎未接通；识别出来才能给出准确提示）
+    "LTXPipeline": "ltxvideo",
+    "LTXImageToVideoPipeline": "ltxvideo",
+    "LTXConditionPipeline": "ltxvideo",
+    "WanPipeline": "wan21",
+    "WanImageToVideoPipeline": "wan21",
+}
+
+# 目录里出现这些**管线文件**就说明是对应架构。比只看 _class_name 更稳：
+# 自定义管线仓库有时把 _class_name 写成别的（甚至留空）。
+_DIR_PIPELINE_HINTS = {
+    "pipeline_moss_image.py": "mossimage",
+    "pipeline_ltx_video.py": "ltxvideo",
+    "pipeline_ltx_condition.py": "ltxvideo",
+    "pipeline_wan.py": "wan21",
+    "pipeline_wan_i2v.py": "wan21",
 }
 
 
+def _detect_by_pipeline_file(path: str) -> str:
+    for fn, arch in _DIR_PIPELINE_HINTS.items():
+        if os.path.isfile(os.path.join(path, fn)):
+            return arch
+    return ""
+
+
+def _dir_weight_gb(path: str) -> float:
+    """目录里权重文件的合计体积（GB）。目录型权重（MOSS-Image）靠它报体积，
+    否则 `detect()` 会给 0 —— 显存策略会以为"这个模型不占权重"。"""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            if not name.lower().endswith((".safetensors", ".bin", ".pt", ".ckpt")):
+                continue
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                continue
+    return round(total / (1024 ** 3), 2)
+
+
 def _detect_dir(path: str) -> DetectResult:
-    for fn in ("model_index.json", "modular_model_index.json"):
+    weight_gb = _dir_weight_gb(path)
+    # modular_config.json 是「模块化管线」的入口；本项目的模块化管线目前只有
+    # Anima，所以即使里面没写 _class_name 也能判定（基座仓靠它识别，
+    # 用户把基座目录丢进 models/puton 时才不会判成"无法识别"）。
+    for fn in ("model_index.json", "modular_model_index.json",
+               "modular_config.json"):
         fp = os.path.join(path, fn)
         if not os.path.isfile(fp):
             continue
@@ -240,10 +285,22 @@ def _detect_dir(path: str) -> DetectResult:
         except Exception as e:
             logger.warning(f"⚠️ 读取 {fn} 失败: {e}")
             continue
-        cls = cfg.get("_class_name", "")
+        cls = cfg.get("_class_name", "") or cfg.get("_class", "")
         arch_id = _CLASS_TO_ARCH.get(cls, "unknown")
+        if arch_id == "unknown" and fn == "modular_config.json":
+            arch_id = "anima"
+            return DetectResult(arch_id, get_arch(arch_id),
+                                f"{fn}（模块化管线）", size_gb=weight_gb)
+        if arch_id == "unknown":
+            # _class_name 没在映射表里：再看目录里的自定义管线文件名
+            hint = _detect_by_pipeline_file(path)
+            if hint:
+                return DetectResult(hint, get_arch(hint),
+                                    f"{fn}: _class_name={cls} + "
+                                    f"自定义管线文件 → {hint}",
+                                    size_gb=weight_gb)
         return DetectResult(arch_id, get_arch(arch_id),
-                            f"{fn}: _class_name={cls}")
+                            f"{fn}: _class_name={cls}", size_gb=weight_gb)
 
     return DetectResult("unknown", get_arch("unknown"),
-                        "目录中无 model_index.json")
+                        "目录中无 model_index.json", size_gb=weight_gb)

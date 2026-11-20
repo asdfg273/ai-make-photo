@@ -3,6 +3,7 @@
 from PIL import Image, ImageDraw, ImageFont, ImageChops, ImageOps
 from PyQt6.QtWidgets import QColorDialog, QInputDialog
 from PyQt6.QtCore    import Qt
+from ui.theme        import PALETTE
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,9 +23,10 @@ class ToolsEventsMixin:
         self.text_mode     = False
         self.pick_mode     = False
 
-    def _set_status(self, text, color="#cdd6f4"):
+    def _set_status(self, text, color=None):
         self.lbl_status.setText(text)
-        self.lbl_status.setStyleSheet(f"color:{color}; font-size:13px;")
+        self.lbl_status.setStyleSheet(
+            f"color:{color or PALETTE['fg']}; font-size:12px;")
 
     def _refresh_brush_cursor(self):
         """根据当前工具状态刷新画布上的画笔光标圈"""
@@ -45,9 +47,9 @@ class ToolsEventsMixin:
         was = self.draw_mode and not self.is_eraser and not self.is_mask_brush
         self._exit_modes()
         self.draw_mode = not was
-        color = "#89b4fa" if self.draw_mode else "#cdd6f4"
-        state = "开启 ✅" if self.draw_mode else "关闭"
-        self._set_status(f"🖌 画笔模式 {state}（Shift+单击画直线）", color)
+        color = PALETTE["accent_hi"] if self.draw_mode else PALETTE["fg"]
+        state = "已开启" if self.draw_mode else "已关闭"
+        self._set_status(f"画笔模式{state}；Shift+单击可画直线", color)
         self._refresh_brush_cursor()
 
     def toggle_eraser(self):
@@ -55,27 +57,27 @@ class ToolsEventsMixin:
         self._exit_modes()
         self.is_eraser = not was
         self.draw_mode = self.is_eraser
-        color = "#f38ba8" if self.is_eraser else "#cdd6f4"
-        state = "开启 ✅" if self.is_eraser else "关闭"
-        self._set_status(f"🧽 橡皮模式 {state}", color)
+        color = PALETTE["accent_hi"] if self.is_eraser else PALETTE["fg"]
+        state = "已开启" if self.is_eraser else "已关闭"
+        self._set_status(f"橡皮模式{state}", color)
         self._refresh_brush_cursor()
 
     def toggle_mask_brush(self):
         was = self.is_mask_brush
         self._exit_modes()
         self.is_mask_brush = not was
-        self.draw_mode     = self.is_mask_brush
-        color = "#f38ba8" if self.is_mask_brush else "#cdd6f4"
-        state = "开启 ✅" if self.is_mask_brush else "关闭"
-        self._set_status(f"🔴 遮罩画笔 {state}", color)
+        self.draw_mode = self.is_mask_brush
+        color = PALETTE["accent_hi"] if self.is_mask_brush else PALETTE["fg"]
+        state = "已开启" if self.is_mask_brush else "已关闭"
+        self._set_status(f"遮罩画笔{state}", color)
         self._refresh_brush_cursor()
 
     def toggle_crop(self):
         was = self.crop_mode
         self._exit_modes()
         self.crop_mode = not was
-        state = "请拖拽选择裁剪区域 ✅" if self.crop_mode else "已取消"
-        self._set_status(f"✂ {state}", "#89b4fa")
+        state = "请拖拽选择裁剪区域" if self.crop_mode else "裁剪已取消"
+        self._set_status(state, PALETTE["accent_hi"])
         self._refresh_brush_cursor()
 
     def toggle_text(self):
@@ -84,19 +86,19 @@ class ToolsEventsMixin:
             if ok and text.strip():
                 self._exit_modes()
                 self.current_text_string = text.strip()
-                self.text_mode    = True
+                self.text_mode = True
                 self.text_element = None
-                self._set_status("📝 点击画布放置文字", "#cba6f7")
+                self._set_status("点击画布放置文字", PALETTE["accent_hi"])
         else:
             self.text_mode = False
-            self._set_status("📝 文字模式已关闭")
+            self._set_status("文字模式已关闭")
         self._refresh_brush_cursor()
 
     def toggle_eyedropper(self):
         """吸管:单击画布取样画笔颜色后自动退出"""
         self._exit_modes()
         self.pick_mode = True
-        self._set_status("💧 点击画布任意位置取色", "#94e2d5")
+        self._set_status("点击画布任意位置取色", PALETTE["info"])
         self._refresh_brush_cursor()
 
     def _cancel_any_mode(self):
@@ -108,7 +110,7 @@ class ToolsEventsMixin:
             self.crop_overlay = None
         # 退出裁剪时清掉预览框
         self.update_canvas(self.current_img, force=True)
-        self._set_status("⎋ 已退出所有模式")
+        self._set_status("已退出当前工具")
         self._refresh_brush_cursor()
 
     # ----------------------------------------------------------
@@ -119,7 +121,8 @@ class ToolsEventsMixin:
         if color.isValid():
             self.brush_color = color.name()
             self.color_preview.setStyleSheet(
-                f"background:{self.brush_color}; border-radius:4px;")
+                f"background:{self.brush_color}; border:1px solid {PALETTE['border']}; "
+                "border-radius:3px;")
             self._refresh_brush_cursor()
 
     def pick_text_color(self):
@@ -127,7 +130,8 @@ class ToolsEventsMixin:
         if color.isValid():
             self.text_color = color.name()
             self.text_color_preview.setStyleSheet(
-                f"background:{self.text_color}; border-radius:4px;")
+                f"background:{self.text_color}; border:1px solid {PALETTE['border']}; "
+                "border-radius:3px;")
 
     def _sample_color(self, x: int, y: int):
         """吸管取样"""
@@ -136,10 +140,11 @@ class ToolsEventsMixin:
             px = self.current_img.convert("RGB").getpixel((x, y))
             self.brush_color = "#%02x%02x%02x" % px
             self.color_preview.setStyleSheet(
-                f"background:{self.brush_color}; border-radius:4px;")
-            self._set_status(f"💧 已取色 {self.brush_color}", "#94e2d5")
+                f"background:{self.brush_color}; border:1px solid {PALETTE['border']}; "
+                "border-radius:3px;")
+            self._set_status(f"已取色 {self.brush_color}", PALETTE["info"])
         else:
-            self._set_status("💧 取色位置超出图像范围", "#f9e2af")
+            self._set_status("取色位置超出图像范围", PALETTE["warning"])
         self.pick_mode = False
 
     # ----------------------------------------------------------
@@ -153,31 +158,31 @@ class ToolsEventsMixin:
         else:
             self.update_canvas(self.current_img, force=True)
         state = "显示" if self._mask_preview_on else "隐藏"
-        self._set_status(f"🙈 遮罩预览已{state}", "#89dceb")
+        self._set_status(f"遮罩预览已{state}", PALETTE["info"])
 
     def clear_mask(self):
         if self.mask_img.getextrema() == (0, 0):
-            self._set_status("🧹 遮罩已经是空的", "#f9e2af")
+            self._set_status("遮罩已经是空的", PALETTE["warning"])
             return
         self.push_history()
         self.mask_img = Image.new("L", self.current_img.size, 0)
         self.update_canvas(self.current_img, force=True)
-        self._set_status("🧹 遮罩已清除", "#a6e3a1")
+        self._set_status("遮罩已清除", PALETTE["success"])
 
     def invert_mask(self):
         if self.mask_img.getextrema() == (0, 0):
-            self._set_status("🔁 遮罩为空,无需反转", "#f9e2af")
+            self._set_status("遮罩为空，无需反转", PALETTE["warning"])
             return
         self.push_history()
         self.mask_img = ImageOps.invert(self.mask_img)
         self._overlay_mask()
-        self._set_status("🔁 遮罩已反转", "#a6e3a1")
+        self._set_status("遮罩已反转", PALETTE["success"])
 
     def feather_mask(self, radius=None):
         """遮罩羽化(柔化边缘,重绘过渡更自然)"""
         from PIL import ImageFilter
         if self.mask_img.getextrema() == (0, 0):
-            self._set_status("🌫 遮罩为空,请先涂抹", "#f9e2af")
+            self._set_status("遮罩为空，请先涂抹", PALETTE["warning"])
             return
         if radius is None:
             sld = getattr(self, "sld_mask_feather", None)
@@ -188,31 +193,31 @@ class ToolsEventsMixin:
         self.mask_img = self.mask_img.filter(
             ImageFilter.GaussianBlur(radius))
         self._overlay_mask()
-        self._set_status(f"🌫 遮罩已羽化 {radius}px", "#a6e3a1")
+        self._set_status(f"遮罩已羽化 {radius} px", PALETTE["success"])
 
     def grow_mask(self, px: int = 4):
         """遮罩向外扩张"""
         from PIL import ImageFilter
         if self.mask_img.getextrema() == (0, 0):
-            self._set_status("➕ 遮罩为空,请先涂抹", "#f9e2af")
+            self._set_status("遮罩为空，请先涂抹", PALETTE["warning"])
             return
         self.push_history()
         self.mask_img = self.mask_img.filter(
             ImageFilter.MaxFilter(2 * px + 1))
         self._overlay_mask()
-        self._set_status(f"➕ 遮罩已扩张 {px}px", "#a6e3a1")
+        self._set_status(f"遮罩已扩展 {px} px", PALETTE["success"])
 
     def shrink_mask(self, px: int = 4):
         """遮罩向内收缩"""
         from PIL import ImageFilter
         if self.mask_img.getextrema() == (0, 0):
-            self._set_status("➖ 遮罩为空,请先涂抹", "#f9e2af")
+            self._set_status("遮罩为空，请先涂抹", PALETTE["warning"])
             return
         self.push_history()
         self.mask_img = self.mask_img.filter(
             ImageFilter.MinFilter(2 * px + 1))
         self._overlay_mask()
-        self._set_status(f"➖ 遮罩已收缩 {px}px", "#a6e3a1")
+        self._set_status(f"遮罩已收缩 {px} px", PALETTE["success"])
 
     # ----------------------------------------------------------
     #  鼠标事件
@@ -273,7 +278,7 @@ class ToolsEventsMixin:
         return r * (100 - max(0, min(100, hv))) / 100.0
 
     def _build_stroke(self, points, size, feather: float) -> Image.Image:
-        """硬笔画 → 可选羽化的笔画遮罩(L)"""
+        """将硬笔画转换为可选羽化的笔画遮罩(L)。"""
         from PIL import ImageFilter
         r = size // 2
         stroke = Image.new("L", self.current_img.size, 0)
@@ -418,7 +423,7 @@ class ToolsEventsMixin:
         # 文字也是"已提交的编辑"，同步基线，避免被后续调色抹掉
         self._commit_current_to_base()
         self.update_canvas(self.current_img, force=True)
-        self._set_status("✅ 文字已写入图层", "#a6e3a1")
+        self._set_status("文字已写入图像", PALETTE["success"])
 
     # ----------------------------------------------------------
     #  裁剪工具
@@ -470,7 +475,7 @@ class ToolsEventsMixin:
 
         if right - left < 10 or bottom - top < 10:
             self.update_canvas(self.current_img, force=True)
-            self._set_status("✂ 选区过小,已取消裁剪", "#f9e2af")
+            self._set_status("选区过小，已取消裁剪", PALETTE["warning"])
             return
 
         self._filter_anchor = None
@@ -482,7 +487,7 @@ class ToolsEventsMixin:
         self.original_img  = self.original_img.crop(box)
         self.mask_img      = self.mask_img.crop(box)
         self.update_canvas(self.current_img, force=True)
-        self._set_status(f"✅ 裁剪完成 → {self.current_img.size}", "#a6e3a1")
+        self._set_status(f"裁剪完成，尺寸：{self.current_img.size}", PALETTE["success"])
 
     # ----------------------------------------------------------
     #  变换
@@ -499,7 +504,7 @@ class ToolsEventsMixin:
         self.mask_img     = self.mask_img.transpose(method)
         self.update_canvas(self.current_img, force=True)
         name = "水平" if direction == "horizontal" else "垂直"
-        self._set_status(f"✅ {name}翻转完成", "#a6e3a1")
+        self._set_status(f"{name}翻转完成", PALETTE["success"])
 
     def rotate_image(self, angle: int):
         self._filter_anchor = None
@@ -512,14 +517,14 @@ class ToolsEventsMixin:
         self.mask_img     = self.mask_img.rotate(
             angle, expand=True, resample=Image.Resampling.NEAREST)
         self.update_canvas(self.current_img, force=True)
-        self._set_status(f"✅ 已旋转 {angle}°", "#a6e3a1")
+        self._set_status(f"已旋转 {angle}°", PALETTE["success"])
 
     def rotate_image_any(self):
         """任意角度旋转(取角度输入框的值)"""
         angle = self.spin_rotate_angle.value() \
             if hasattr(self, "spin_rotate_angle") else 0
         if angle % 360 == 0:
-            self._set_status("↻ 角度为 0,无需旋转", "#f9e2af")
+            self._set_status("角度为 0，无需旋转", PALETTE["warning"])
             return
         self.rotate_image(angle)
 
@@ -527,7 +532,7 @@ class ToolsEventsMixin:
         """等比缩放到指定长边(出图前对齐 SD 常用尺寸)"""
         w, h = self.current_img.size
         if max(w, h) == target:
-            self._set_status(f"📐 长边已是 {target}px", "#f9e2af")
+            self._set_status(f"长边已是 {target} px", PALETTE["warning"])
             return
         scale  = target / max(w, h)
         nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
@@ -541,7 +546,7 @@ class ToolsEventsMixin:
         self.mask_img     = self.mask_img.resize(
             (nw, nh), Image.Resampling.NEAREST)
         self.update_canvas(self.current_img, force=True)
-        self._set_status(f"📐 已缩放 → {nw}×{nh}", "#a6e3a1")
+        self._set_status(f"已缩放至 {nw}×{nh}", PALETTE["success"])
 
     def resize_dialog(self):
         """等比缩放对话框"""

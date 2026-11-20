@@ -22,6 +22,7 @@ from PyQt6.QtCore import Qt, pyqtSlot, QMetaObject, Q_ARG
 from PyQt6.QtGui import QIcon, QPixmap, QImage
 
 from utils.system_utils import logger
+from utils.paths import host_output_dir, MODEL_DIR
 from ui.i18n import ui_i18n
 
 
@@ -84,10 +85,10 @@ class VideoPanelMixin:
     # ==========================================================
     def on_generate_video(self):
         """触发视频生成流程 - 支持 4 种模式"""
-        logger.debug("🔵 [DEBUG] on_generate_video 被调用")
+        logger.debug(" [DEBUG] on_generate_video 被调用")
 
         if getattr(self, 'is_generating', False):
-            self._set_status(ui_i18n.tr("正在生成中,请等待"), "#ff7a17")
+            self._set_status(ui_i18n.tr("正在生成中,请等待"), "#e2a63d")
             return
         self.is_generating = True
 
@@ -103,8 +104,8 @@ class VideoPanelMixin:
                 if 0 <= mode_idx <= 3 else "文生视频"
             self._video_mode_label = mode_label
 
-            logger.debug(f"🔵 [DEBUG] mode = {mode_str} ({mode_label})")
-            logger.debug(f"🔵 [DEBUG] _video_input_path = {getattr(self, '_video_input_path', '未设置')}")
+            logger.debug(f" [DEBUG] mode = {mode_str} ({mode_label})")
+            logger.debug(f" [DEBUG] _video_input_path = {getattr(self, '_video_input_path', '未设置')}")
 
             # ---- 2. 提示词 ----
             prompt = self.txt_video_prompt.toPlainText().strip()
@@ -116,7 +117,7 @@ class VideoPanelMixin:
 
             if not prompt and mode_str != "prompt_travel":
                 self._reset_video_button()
-                self._set_status(ui_i18n.tr("请输入正面提示词"), "#ff7a17")
+                self._set_status(ui_i18n.tr("请输入正面提示词"), "#e2a63d")
                 return
 
             # ---- 3. 输入文件校验 ----
@@ -126,17 +127,17 @@ class VideoPanelMixin:
                     self._reset_video_button()
                     self._set_status(
                         ui_i18n.trf("{mode}需要选择输入文件", mode=ui_i18n.tr(mode_label)),
-                        "#ff7a17")
+                        "#e2a63d")
                     return
 
                 ext = os.path.splitext(input_path)[1].lower()
                 if mode_str == "img2video" and ext not in (".png", ".jpg", ".jpeg", ".webp", ".bmp"):
                     self._reset_video_button()
-                    self._set_status(ui_i18n.tr("图生视频请选择图片文件"), "#ff7a17")
+                    self._set_status(ui_i18n.tr("图生视频请选择图片文件"), "#e2a63d")
                     return
                 if mode_str == "vid2vid" and ext not in (".mp4", ".mov", ".avi", ".webm", ".gif"):
                     self._reset_video_button()
-                    self._set_status(ui_i18n.tr("视频转绘请选择视频文件"), "#ff7a17")
+                    self._set_status(ui_i18n.tr("视频转绘请选择视频文件"), "#e2a63d")
                     return
 
             # ---- 4. 基本参数 ----
@@ -188,7 +189,7 @@ class VideoPanelMixin:
 
                 if len(prompt_travel) < 2:
                     self._reset_video_button()
-                    self._set_status(ui_i18n.tr("提示词旅行至少需要 2 个关键帧"), "#ff7a17")
+                    self._set_status(ui_i18n.tr("提示词旅行至少需要 2 个关键帧"), "#e2a63d")
                     return
 
                 if not prompt:
@@ -205,7 +206,7 @@ class VideoPanelMixin:
                         (f, self.translator.translate(p)) for f, p in prompt_travel
                     ]
             except Exception as e:
-                logger.warning(f"⚠️ 翻译失败(忽略): {e}")
+                logger.warning(f" 翻译失败(忽略): {e}")
 
             # ---- 7. 高级参数 ----
             strength = float(self.spin_video_strength.value()) \
@@ -218,7 +219,7 @@ class VideoPanelMixin:
             # ---- 8. Motion LoRA ----
             motion_loras = self._collect_motion_loras() \
                 if hasattr(self, "_collect_motion_loras") else []
-            logger.debug(f"🔵 [DEBUG] motion_loras = {motion_loras}")
+            logger.debug(f" [DEBUG] motion_loras = {motion_loras}")
 
             # ---- 8.5 配音参数收集 ----
             voice_params = None
@@ -245,29 +246,46 @@ class VideoPanelMixin:
                     voice_text = self.txt_video_voice.toPlainText().strip()
                 if not voice_text:
                     voice_text = prompt
-                    logger.info("📝 配音文本框为空,使用提示词作为配音文本")
+                    logger.info(" 配音文本框为空,使用提示词作为配音文本")
                 else:
-                    logger.info(f"📝 使用配音文本框内容: {voice_text[:30]}...")
+                    logger.info(f" 使用配音文本框内容: {voice_text[:30]}...")
                 # SoVITS: 可选自动翻译为日语
                 if voice_params.get("engine") == "sovits":
                     if voice_params.get("auto_translate") and getattr(self, "translator", None):
                         try:
                             voice_text = self.translator.translate(voice_text, target_lang="ja")
-                            logger.info(f"📝 已翻译为日语: {voice_text[:30]}...")
+                            logger.info(f" 已翻译为日语: {voice_text[:30]}...")
                         except Exception as e:
-                            logger.warning(f"⚠️ 翻译失败,用原文: {e}")
+                            logger.warning(f" 翻译失败,用原文: {e}")
                 voice_params["text"] = voice_text
             # ---- 9. 状态 ----
             self._set_status(
-                f"🎬 [{mode_label}] 开始生成: {num_frames}帧 {width}x{height}",
-                "#ff7a17")
+                f" [{mode_label}] 开始生成: {num_frames}帧 {width}x{height}",
+                "#e2a63d")
             self._set_video_status("generating")
 
             # ---- 10. 进度回调 ----
+            # 分段长视频：每段都会从 0 开始跑 steps，如果直接按 step/num_steps 算，
+            # 进度条会 0→100 反复跳。这里记下"当前第几段/共几段"，把本段步数
+            # 折算成整体百分比；段号由 generate 的 segment_callback 告知。
+            seg_state = {"idx": 0, "total": 1}
+
+            def segment_callback(idx, total, n):
+                seg_state["idx"] = int(idx)
+                seg_state["total"] = max(1, int(total))
+                self._app_bridge.status_msg.emit(
+                    f" 长视频 第 {idx + 1}/{total} 段（{n} 帧）开始…", "#e2a63d")
+
             def progress_callback(pipe, step, timestep, callback_kwargs):
                 try:
-                    progress = int((step / max(num_steps, 1)) * 100)
-                    self._app_bridge.status_msg.emit(f"🎬 生成中 {progress}%", "#ff7a17")
+                    local = min(1.0, step / max(num_steps, 1))
+                    idx, total = seg_state["idx"], seg_state["total"]
+                    overall = int(((idx + local) / total) * 100)
+                    if total > 1:
+                        text = f" 生成中 第 {idx + 1}/{total} 段 {overall}%"
+                    else:
+                        text = f" 生成中 {overall}%"
+                    self._app_bridge.status_msg.emit(text, "#e2a63d")
                 except Exception:
                     pass
                 return callback_kwargs
@@ -282,19 +300,19 @@ class VideoPanelMixin:
                         if not model_name:
                             raise RuntimeError("请先在图片面板选择一个 SD 底模")
 
-                        logger.info(f"⏳ 视频生成前置:加载 SD 底模 {model_name} ...")
+                        logger.info(f" 视频生成前置:加载 SD 底模 {model_name} ...")
                         self.ai.load_model(model_name)
-                        logger.info("✅ 底模就绪,继续视频生成")
+                        logger.info(" 底模就绪,继续视频生成")
 
                     if hasattr(self, 'video_generator') and self.video_generator is not None:
                         if getattr(self.video_generator, '_base_model_name', None) != self.ai.current_model_name:
-                            logger.info("🔄 底模已更换,重建 VideoGenerator")
+                            logger.info(" 底模已更换,重建 VideoGenerator")
                             # 必须先 dispose：直接置 None 会漏掉 deepcopy 的 UNet
                             # 与共享组件上的 offload hook
                             try:
                                 self.video_generator.dispose()
                             except Exception as de:
-                                logger.warning(f"⚠️ 释放旧 VideoGenerator 失败(忽略): {de}")
+                                logger.warning(f" 释放旧 VideoGenerator 失败(忽略): {de}")
                             self.video_generator = None
 
                     if not hasattr(self, 'video_generator') or self.video_generator is None:
@@ -302,6 +320,27 @@ class VideoPanelMixin:
                         self.video_generator = VideoGenerator(self.ai)
                         self.video_generator._base_model_name = self.ai.current_model_name
 
+                    # 输出目录跟随设置里的输出目录（以前写死 photo/videos，
+                    # 用户改了输出目录后视频仍然跑到 photo/videos，找不到文件）
+                    _video_out_dir = os.path.join(host_output_dir(self), "videos")
+                    _lightning = ""
+                    _combo_l = getattr(self, "combo_video_lightning", None)
+                    if _combo_l is not None:
+                        _lightning = str(_combo_l.currentData() or "")
+                    _seg_frames = 16
+                    _spin_seg = getattr(self, "spin_segment_frames", None)
+                    if _spin_seg is not None:
+                        try:
+                            _seg_frames = int(_spin_seg.value())
+                        except Exception:
+                            pass
+                    _cont = 0.70
+                    _spin_cont = getattr(self, "spin_continuation", None)
+                    if _spin_cont is not None:
+                        try:
+                            _cont = float(_spin_cont.value())
+                        except Exception:
+                            pass
                     result = self.video_generator.generate(
                         prompt=prompt,
                         negative=negative,
@@ -316,13 +355,17 @@ class VideoPanelMixin:
                         use_context_window=use_context_window,
                         prompt_travel=prompt_travel if prompt_travel else None,
                         output_format=output_format,
-                        output_dir="photo/videos",
+                        output_dir=_video_out_dir,
                         progress_callback=progress_callback,
                         mode=mode_str,
                         input_path=input_path,
                         strength=strength,
                         ip_adapter_scale=ip_adapter_scale,
                         seed=seed_val,
+                        lightning=_lightning or None,
+                        segment_frames=_seg_frames,
+                        continuation_strength=_cont,
+                        segment_callback=segment_callback,
                     )
 
                     if isinstance(result, tuple) and len(result) == 2:
@@ -339,12 +382,12 @@ class VideoPanelMixin:
                             if final_path != orig_path and os.path.exists(final_path):
                                 try:
                                     os.remove(orig_path)
-                                    logger.info(f"🗑️ 已删除未配音版本: {os.path.basename(orig_path)}")
+                                    logger.info(f" 已删除未配音版本: {os.path.basename(orig_path)}")
                                 except Exception as e:
-                                    logger.warning(f"⚠️ 删除原视频失败: {e}")
+                                    logger.warning(f" 删除原视频失败: {e}")
 
                         except Exception as ve:
-                            logger.warning(f"⚠️ 配音合成失败(保留原视频): {ve}")
+                            logger.warning(f" 配音合成失败(保留原视频): {ve}")
                             traceback.print_exc()
 
                     # ── RIFE 插帧（配音之后做，音轨才能一起保留）──
@@ -361,7 +404,7 @@ class VideoPanelMixin:
                     )
 
                 except Exception as e:
-                    error_msg = f"❌ 视频生成失败: {str(e)}"
+                    error_msg = f" 视频生成失败: {str(e)}"
                     logger.error(f"[VIDEO GEN ERROR]\n{traceback.format_exc()}")
                     QMetaObject.invokeMethod(
                         self, "_on_video_gen_error",
@@ -370,30 +413,21 @@ class VideoPanelMixin:
                         Q_ARG(str, error_msg),
                     )
 
-            # ── GUI 线程预检（必须在起线程前做）──
-            # 图生视频需要 IP-Adapter；缺失时在这里弹窗告知体积/来源、
-            # 由用户决定是否下载（项目定位：模型自行下载，不静默下载）。
+            # 图生视频现在走 v2v 的首帧约束（把首帧重复成 num_frames 帧），
+            # 不再需要 IP-Adapter —— 以前那个"图生视频"只是拿这张图当风格参考，
+            # 画面根本不从它开始，还得让用户额外下 2.5GB 适配器。
             if mode_str == "img2video":
-                try:
-                    vg = getattr(self, "video_generator", None)
-                    if vg is None:
-                        from utils.video_gen import VideoGenerator
-                        vg = VideoGenerator(self.ai)
-                        self.video_generator = vg
-                    if not vg.preflight_ip_adapter(parent=self):
-                        self._reset_video_button()
-                        self._set_status(
-                            "⏸ 已取消：图生视频需要 IP-Adapter 模型", "#f9e2af")
-                        return
-                except Exception as pe:
-                    logger.warning(f"⚠️ IP-Adapter 预检异常: {pe}")
+                if not input_path or not os.path.isfile(input_path):
+                    self._reset_video_button()
+                    self._set_status("请先选择作为首帧的图片", "#e2a63d")
+                    return
 
             threading.Thread(target=generate_task, daemon=True).start()
 
         except Exception as e:
             logger.error(f"[VIDEO PARAM ERROR]\n{traceback.format_exc()}")
             self._reset_video_button()
-            self._set_status(ui_i18n.trf("参数校验失败: {error}", error=e), "#ff7a17")
+            self._set_status(ui_i18n.trf("参数校验失败: {error}", error=e), "#e2a63d")
 
     # ==========================================================
     #  TTS 配音 + FFmpeg 合并
@@ -426,14 +460,14 @@ class VideoPanelMixin:
                     speed=voice_params.get("speed", 1.0),
                 )
                 audio_path = temp
-                logger.info(f"🎙️ SoVITS 合成完成: {audio_path}")
+                logger.info(f" SoVITS 合成完成: {audio_path}")
             else:
                 audio_path = self.tts_engine.generate_chattts(
                     text, speaker_seed=voice_params.get("speaker_seed", 2222)
                 )
-                logger.info(f"🎙️ ChatTTS 合成完成: {audio_path}")
+                logger.info(f" ChatTTS 合成完成: {audio_path}")
         except Exception as e:
-            logger.error(f"❌ TTS 合成失败: {e}")
+            logger.error(f" TTS 合成失败: {e}")
             traceback.print_exc()
             if temp and os.path.exists(temp):
                 try:
@@ -446,15 +480,18 @@ class VideoPanelMixin:
         if not ffmpeg:
             try:
                 import imageio_ffmpeg; ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-                logger.info(f"📦 使用 imageio_ffmpeg: {ffmpeg}")
+                logger.info(f" 使用 imageio_ffmpeg: {ffmpeg}")
             except Exception as e:
-                logger.error(f"❌ ffmpeg 不可用 (shutil.which + imageio_ffmpeg 均失败): {e}")
+                logger.error(f" ffmpeg 不可用 (shutil.which + imageio_ffmpeg 均失败): {e}")
                 return video_path
         else:
-            logger.info(f"📦 使用系统 ffmpeg: {ffmpeg}")
+            logger.info(f" 使用系统 ffmpeg: {ffmpeg}")
 
         def probe_dur(path):
-            r = subprocess.run([ffmpeg, "-i", path], capture_output=True, text=True)
+            # stdin=DEVNULL：没有输出文件时 ffmpeg 会去读 stdin，无控制台的进程里会挂死
+            r = subprocess.run([ffmpeg, "-hide_banner", "-i", path],
+                               capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL)
             m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", r.stderr)
             return int(m.group(1))*3600 + int(m.group(2))*60 + float(m.group(3)) if m else 0.0
 
@@ -463,19 +500,31 @@ class VideoPanelMixin:
         out_path = f"{base}_voiced.mp4"
 
         if a_dur > v_dur + 0.1 and v_dur > 0:
+            # 语音比视频长 → 循环视频凑到语音长度
             cmd = [ffmpeg, "-y", "-stream_loop", "-1", "-i", video_path,
                    "-i", audio_path, "-map", "0:v:0", "-map", "1:a:0",
                    "-c:v", "libx264", "-preset", "fast", "-t", str(a_dur), out_path]
+        elif v_dur > 0:
+            # 语音比视频短 → 补静音到视频长度。
+            # ⚠️ 这里绝不能用 -shortest：它按"更短的那条流"截断，会把视频砍掉。
+            #    实测 6s 视频 + 2s 语音 → 旧写法只剩 2.04s。
+            cmd = [ffmpeg, "-y", "-i", video_path, "-i", audio_path,
+                   "-filter_complex", f"[1:a]apad=whole_dur={v_dur:.3f}[a]",
+                   "-map", "0:v:0", "-map", "[a]",
+                   "-c:v", "copy", "-c:a", "aac",
+                   "-t", f"{v_dur:.3f}", out_path]
         else:
+            # 探测不到视频时长（异常容器）：退回只合成音轨，不动视频流
             cmd = [ffmpeg, "-y", "-i", video_path, "-i", audio_path,
                    "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
-                   "-shortest", out_path]
+                   "-c:a", "aac", "-shortest", out_path]
 
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL)
         if r.returncode == 0:
-            logger.info(f"✅ 配音合并完成 → {os.path.basename(out_path)}")
+            logger.info(f" 配音合并完成 → {os.path.basename(out_path)}")
         else:
-            logger.error(f"❌ ffmpeg 合并失败 (code={r.returncode}): {r.stderr[:300]}")
+            logger.error(f" ffmpeg 合并失败 (code={r.returncode}): {r.stderr[:300]}")
             # 清理临时音频
             try:
                 if audio_path and os.path.exists(audio_path):
@@ -488,33 +537,37 @@ class VideoPanelMixin:
         try:
             if audio_path and os.path.exists(audio_path):
                 os.remove(audio_path)
-                logger.info(f"🗑️ 已清理临时音频: {os.path.basename(audio_path)}")
+                logger.info(f" 已清理临时音频: {os.path.basename(audio_path)}")
         except Exception as e:
-            logger.warning(f"⚠️ 清理临时音频失败: {e}")
+            logger.warning(f" 清理临时音频失败: {e}")
 
         # 可选：混合背景配乐
         bg_music = voice_params.get("bg_music", "")
         if bg_music and os.path.exists(bg_music):
             merged_path = out_path
             final_path = out_path.replace(".mp4", "_bgm.mp4")
+            # 配乐时长通常远大于视频：这里补静音后按 longest 混，
+            # 再用 -t 卡在视频长度，避免又一次把视频截短。
             bg_cmd = [
                 ffmpeg, "-y", "-i", merged_path, "-i", bg_music,
                 "-filter_complex",
-                "[0:a]volume=1.0[a0];[1:a]volume=0.3[a1];[a0][a1]amix=inputs=2:duration=shortest[a]",
+                "[0:a]volume=1.0[a0];[1:a]volume=0.3,apad[a1];"
+                "[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0[a]",
                 "-map", "0:v:0", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
-                "-shortest", final_path,
+                "-t", f"{max(probe_dur(merged_path), 0.1):.3f}", final_path,
             ]
-            r2 = subprocess.run(bg_cmd, capture_output=True, text=True)
+            r2 = subprocess.run(bg_cmd, capture_output=True, text=True,
+                                stdin=subprocess.DEVNULL)
             if r2.returncode == 0:
-                logger.info(f"✅ 背景音混合完成 → {os.path.basename(final_path)}")
+                logger.info(f" 背景音混合完成 → {os.path.basename(final_path)}")
                 return final_path
             else:
-                logger.warning(f"⚠️ 背景音混合失败 (code={r2.returncode}), 使用配音版")
+                logger.warning(f" 背景音混合失败 (code={r2.returncode}), 使用配音版")
 
         return out_path
 
     @pyqtSlot(str, str)
-    def _set_status_via_bridge(self, text: str, color: str = "#89dceb"):
+    def _set_status_via_bridge(self, text: str, color: str = "#4db6d8"):
         """供后台线程通过 QueuedConnection 安全更新状态栏。"""
         try:
             self._set_status(text, color)
@@ -539,22 +592,22 @@ class VideoPanelMixin:
             from utils.rife_interpolate import RIFEInterpolator
             ri = RIFEInterpolator()
             if not ri.is_available():
-                logger.warning("⚠️ RIFE 未安装，跳过插帧")
+                logger.warning(" RIFE 未安装，跳过插帧")
                 QMetaObject.invokeMethod(
                     self, "_set_status_via_bridge",
                     Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(str, "⚠️ RIFE 未安装（扩展市场可装），已跳过插帧"),
-                    Q_ARG(str, "#f9e2af"))
+                    Q_ARG(str, " RIFE 未安装（扩展市场可装），已跳过插帧"),
+                    Q_ARG(str, "#e2a63d"))
                 return video_path
 
             base, ext = os.path.splitext(video_path)
             out_path = f"{base}_rife{target}fps{ext or '.mp4'}"
-            logger.info(f"🎞️ [RIFE] 插帧: {os.path.basename(video_path)} → {target}fps")
+            logger.info(f" [RIFE] 插帧: {os.path.basename(video_path)} → {target}fps")
             QMetaObject.invokeMethod(
                 self, "_set_status_via_bridge",
                 Qt.ConnectionType.QueuedConnection,
-                Q_ARG(str, f"🎞️ RIFE 正在插帧到 {target}fps..."),
-                Q_ARG(str, "#89dceb"))
+                Q_ARG(str, f" RIFE 正在插帧到 {target}fps..."),
+                Q_ARG(str, "#4db6d8"))
 
             res = ri.interpolate_video(
                 video_path, output_video=out_path,
@@ -566,19 +619,19 @@ class VideoPanelMixin:
                 QMetaObject.invokeMethod(
                     self, "_set_status_via_bridge",
                     Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(str, f"ℹ️ 源帧率已≥{target}fps，无需插帧"),
-                    Q_ARG(str, "#f9e2af"))
+                    Q_ARG(str, f" 源帧率已≥{target}fps，无需插帧"),
+                    Q_ARG(str, "#e2a63d"))
                 return video_path
 
             return res
         except Exception as e:
-            logger.error(f"❌ RIFE 插帧失败(保留原视频): {e}")
+            logger.error(f" RIFE 插帧失败(保留原视频): {e}")
             try:
                 QMetaObject.invokeMethod(
                     self, "_set_status_via_bridge",
                     Qt.ConnectionType.QueuedConnection,
-                    Q_ARG(str, f"⚠️ RIFE 插帧失败，已保留原视频: {e}"),
-                    Q_ARG(str, "#f9e2af"))
+                    Q_ARG(str, f" RIFE 插帧失败，已保留原视频: {e}"),
+                    Q_ARG(str, "#e2a63d"))
             except Exception:
                 pass
             return video_path
@@ -630,14 +683,14 @@ class VideoPanelMixin:
             self._set_status(
                 ui_i18n.trf("视频生成完成: {path} (seed={seed})",
                             path=os.path.basename(video_path), seed=seed),
-                "#dadbdf")
+                "#dce5f2")
             self._set_video_status("completed", seed)
 
             if hasattr(self, 'play_video') and hasattr(self, 'video_widget'):
                 try:
                     self.play_video(video_path)
                 except Exception as e:
-                    logger.warning(f"⚠️ 播放失败: {e}")
+                    logger.warning(f" 播放失败: {e}")
 
             if hasattr(self, 'video_list'):
                 self._refresh_video_gallery()
@@ -653,18 +706,18 @@ class VideoPanelMixin:
                     except Exception:
                         pass
         except Exception as e:
-            self._set_status(ui_i18n.trf("视频生成后处理失败: {error}", error=e), "#ff7a17")
+            self._set_status(ui_i18n.trf("视频生成后处理失败: {error}", error=e), "#e2a63d")
 
     @pyqtSlot(int, str)
     def _on_video_gen_error(self, code: int, error_msg: str):
         """视频生成失败回调 (主线程)"""
         self._reset_video_button()
         self._set_video_status("failed")
-        self._set_status(error_msg, "#f38ba8")
+        self._set_status(error_msg, "#e2606f")
 
     def _on_video_player_error(self, error, error_string):
         """QMediaPlayer 播放错误"""
-        self._set_status(ui_i18n.trf("视频播放错误: {error}", error=error_string), "#ff7a17")
+        self._set_status(ui_i18n.trf("视频播放错误: {error}", error=error_string), "#e2a63d")
         if hasattr(self, 'video_stacked'):
             self.video_stacked.setCurrentIndex(0)
         elif hasattr(self, 'lbl_video_placeholder'):
@@ -701,7 +754,7 @@ class VideoPanelMixin:
         txt_prompt.setPlaceholderText("输入该段的提示词...")
         row.addWidget(txt_prompt)
 
-        btn_del = QPushButton("❌")
+        btn_del = QPushButton("")
         btn_del.setFixedWidth(30)
         widgets = {'frame_spin': spin_frame, 'prompt_edit': txt_prompt, 'btn_del': btn_del, 'row': row}
         btn_del.clicked.connect(lambda _, w=widgets: self._remove_travel_segment(w))
@@ -724,7 +777,7 @@ class VideoPanelMixin:
                 self.travel_segments.remove(widgets)
             self._auto_distribute_frames()
         except Exception as e:
-            logger.warning(f"⚠️ 移除旅行分段失败: {e}")
+            logger.warning(f" 移除旅行分段失败: {e}")
 
     def _auto_distribute_frames(self):
         if not self.travel_segments:
@@ -748,7 +801,7 @@ class VideoPanelMixin:
                 from utils.paths import host_output_dir
                 gallery.reload_from_dir(host_output_dir(self), limit=80)
             except Exception as e:
-                logger.warning(f'⚠️ 画廊刷新失败: {e}')
+                logger.warning(f' 画廊刷新失败: {e}')
         # 旧 video_list 已隐藏（v6 统一画廊），不再填缩略图
         if not hasattr(self, 'video_list') or self.video_list.isHidden():
             return
@@ -797,22 +850,22 @@ class VideoPanelMixin:
         try:
             os.startfile(vpath)
         except Exception as e:
-            logger.warning(f"⚠️ 打开视频失败: {e}")
+            logger.warning(f" 打开视频失败: {e}")
 
     # ==========================================================
     #  Motion LoRA
     # ==========================================================
     def _add_motion_lora_item(self):
-        """➕ 添加一个 Motion LoRA 到已选列表"""
+        """ 添加一个 Motion LoRA 到已选列表"""
         name = self.cmb_motion_lora_pick.currentText()
         if not name or name.startswith("--"):
             return
         # 去重
         for item in self.motion_lora_items:
             if item['name'] == name:
-                logger.warning(f"⚠️ {name} 已添加")
+                logger.warning(f" {name} 已添加")
                 if hasattr(self, '_app_bridge'):
-                    self._app_bridge.status_msg.emit(f"⚠️ {name} 已添加", "#ff7a17")
+                    self._app_bridge.status_msg.emit(f" {name} 已添加", "#e2a63d")
                 return
 
         from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton
@@ -834,13 +887,13 @@ class VideoPanelMixin:
 
         lbl_val = QLabel("0.80")
         lbl_val.setFixedWidth(40)
-        lbl_val.setStyleSheet("color:#8be9fd; font-size:12px;")
+        lbl_val.setStyleSheet("color:#4db6d8; font-size:12px;")
         slider.valueChanged.connect(lambda v, l=lbl_val: l.setText(f"{v/100:.2f}"))
 
-        btn_del = QPushButton("✕")
+        btn_del = QPushButton("")
         btn_del.setFixedSize(24, 24)
-        btn_del.setStyleSheet("QPushButton{color:#ff5555;background:transparent;border:none;font-weight:bold;}"
-                              "QPushButton:hover{background:#4a2020;border-radius:4px;}")
+        btn_del.setStyleSheet("QPushButton{color:#e2606f;background:transparent;border:none;font-weight:bold;}"
+                              "QPushButton:hover{background:#3a2530;border-radius:4px;}")
         btn_del.clicked.connect(lambda _, n=name: self._remove_motion_lora_item(n))
 
         layout.addWidget(lbl_name)
@@ -852,16 +905,16 @@ class VideoPanelMixin:
         self.motion_lora_items.append({
             'name': name, 'widget': row, 'slider': slider, 'label': lbl_val
         })
-        logger.info(f"✅ 已添加 Motion LoRA: {name}")
+        logger.info(f" 已添加 Motion LoRA: {name}")
 
     def _remove_motion_lora_item(self, name):
-        """✕ 移除某个 Motion LoRA"""
+        """ 移除某个 Motion LoRA"""
         for i, item in enumerate(self.motion_lora_items):
             if item['name'] == name:
                 item['widget'].setParent(None)
                 item['widget'].deleteLater()
                 self.motion_lora_items.pop(i)
-                logger.info(f"🗑️ 已移除 Motion LoRA: {name}")
+                logger.info(f" 已移除 Motion LoRA: {name}")
                 return
 
     def _collect_motion_loras(self):
@@ -893,20 +946,29 @@ class VideoPanelMixin:
         if not self.travel_segments:
             return
         self._auto_distribute_frames()
-        self._set_status(ui_i18n.tr("已均匀分布旅行分段帧号"), "#dadbdf")
+        self._set_status(ui_i18n.tr("已均匀分布旅行分段帧号"), "#dce5f2")
 
     def _scan_motion_loras(self):
-        """扫描 models/motion_lora 目录"""
+        """扫描 models/motion_lora 目录（用绝对路径，换工作目录也能扫到）"""
         result = []
-        lora_dir = "models/motion_lora"
+        lora_dir = os.path.join(MODEL_DIR, "motion_lora")
         try:
             if os.path.isdir(lora_dir):
                 for d in sorted(os.listdir(lora_dir)):
                     if os.path.isdir(os.path.join(lora_dir, d)):
                         result.append(d)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"扫描 Motion LoRA 失败({lora_dir}): {e}")
         return result
+
+    def _scan_lightning(self):
+        """扫描 models/lightning 下的加速 LoRA（AnimateDiff-Lightning）。"""
+        try:
+            from utils.video_gen import VideoGenerator
+            return VideoGenerator.list_lightning()
+        except Exception as e:
+            logger.warning(f"扫描加速 LoRA 失败: {e}")
+            return []
 
     def _update_video_duration_hint(self):
         """更新视频时长提示标签"""
@@ -924,7 +986,7 @@ class VideoPanelMixin:
         """清除已选视频/图片输入文件"""
         self._video_input_path = None
         self.lbl_video_input.setText(ui_i18n.tr("未选择文件"))
-        self._set_status(ui_i18n.tr("已清除输入文件"), "#dadbdf")
+        self._set_status(ui_i18n.tr("已清除输入文件"), "#dce5f2")
 
     def on_pick_video_input(self):
         from PyQt6.QtWidgets import QFileDialog
@@ -962,10 +1024,11 @@ class VideoPanelMixin:
             self, "选择参考音频 (3-10秒)", "", "音频文件 (*.wav *.mp3 *.flac)")
         if path:
             name = os.path.basename(path)
+            # 只清掉之前添加的自定义项（itemData 非 None），保留内置默认项
             for i in range(self.combo_sovits_ref.count() - 1, 0, -1):
-                if self.combo_sovits_ref.itemText(i).startswith("🎵 "):
+                if self.combo_sovits_ref.itemData(i) is not None:
                     self.combo_sovits_ref.removeItem(i)
-            self.combo_sovits_ref.addItem(f"🎵 {name}", path)
+            self.combo_sovits_ref.addItem(name, path)
             self.combo_sovits_ref.setCurrentIndex(self.combo_sovits_ref.count() - 1)
 
     def _on_long_video_toggled(self, checked: bool):
@@ -985,7 +1048,7 @@ class VideoPanelMixin:
     def _save_current_video(self):
         """保存当前播放的视频"""
         if not hasattr(self, 'current_video_path') or not self.current_video_path:
-            self._set_status(ui_i18n.tr("没有正在播放的视频"), "#ff7a17")
+            self._set_status(ui_i18n.tr("没有正在播放的视频"), "#e2a63d")
             return
         try:
             from PyQt6.QtWidgets import QFileDialog
@@ -998,9 +1061,9 @@ class VideoPanelMixin:
                 shutil.copy2(current_path, save_path)
                 self._set_status(
                     ui_i18n.trf("视频已保存: {path}", path=os.path.basename(save_path)),
-                    "#dadbdf")
+                    "#dce5f2")
         except Exception as e:
-            self._set_status(ui_i18n.trf("保存失败: {error}", error=e), "#ff7a17")
+            self._set_status(ui_i18n.trf("保存失败: {error}", error=e), "#e2a63d")
 
     def _on_video_media_changed(self, status):
         """视频媒体状态变化回调"""

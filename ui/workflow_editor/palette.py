@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (QFrame, QLabel, QLineEdit, QTreeWidget,
                              QTreeWidgetItem, QVBoxLayout)
 
@@ -19,7 +20,10 @@ logger = logging.getLogger(__name__)
 
 # 分类展示顺序（没列到的分类排在后面）
 CATEGORY_ORDER = ["模型", "文本", "采样", "潜空间", "图像", "控制", "适配",
-                  "修复", "放大", "视频", "输出", "通用", "测试"]
+                  "修复", "放大", "视频", "输出", "通用", "测试", "高级"]
+
+# 能执行任意代码的节点：单独标红，避免误拖到正式工作流里
+RISKY_NODE_TYPES = {"PythonScript"}
 
 
 class NodePalette(QFrame):
@@ -88,6 +92,11 @@ class NodePalette(QFrame):
                 if res.requires:
                     tip += "\n" + ui_i18n.trf(
                         "依赖: {requirements}", requirements=", ".join(res.requires))
+                if s.type in RISKY_NODE_TYPES:
+                    child.setForeground(0, QBrush(QColor("#f38ba8")))
+                    tip = (ui_i18n.tr("⚠️ 会执行你自己写的 Python 代码")
+                           + "（" + ui_i18n.tr("默认关闭，需在设置里打开") + "）\n\n"
+                           + tip)
                 if tip:
                     child.setToolTip(0, tip.strip())
                 top.addChild(child)

@@ -68,7 +68,7 @@ class GenerationMixin:
     def _output_dir(self) -> str:
         """当前输出目录（优先用户在设置里选的，回落 photo/）。
 
-        ⚠️ 以前主出图、XY 网格、漫画、放大这些保存点都直接用常量
+         以前主出图、XY 网格、漫画、放大这些保存点都直接用常量
         `OUTPUT_DIR`，于是设置里的「输出目录」对**主出图路径完全无效** ——
         只有编辑器归档和批量生成读配置，两套实现各走各的：
         图写进 photo/，画廊读 photo/，而 batch_runner 却盯着 outputs/，
@@ -127,7 +127,7 @@ class GenerationMixin:
         if hasattr(self, 'btn_upscale'): self.btn_upscale.setEnabled(True)
 
     def _on_cancelled(self):
-        self._bridge.status_signal.emit("🛑 已打断", "#ff5555")
+        self._bridge.status_signal.emit("已打断", "#ff5555")
 
     # ----------------------- 控件读值 -----------------------
     def _ui_read(self, fn, default=None):
@@ -186,6 +186,23 @@ class GenerationMixin:
         return self._ui_read(lambda: w.text().strip(), "") or ""
 
     # ----------------------------------------------------------
+    def _adetailer_call(self, pipe, call_kwargs):
+        """ADetailer 的统一调用入口。
+
+        非 modular 架构（SD1.5/SDXL/SD3）原样直连 `pipe(**kwargs)`，
+        保持以前的蒙版 inpaint 行为；Anima 这类 ModularPipeline 必须把参数
+        搬进 `PipelineState`，否则 `pipe(prompt=...)` 直接 TypeError。
+        """
+        kw = dict(call_kwargs)
+        ctx = {
+            "en_prompts": [kw.get("prompt") or ""],
+            "en_neg": kw.get("negative_prompt") or "",
+            "steps": kw.get("num_inference_steps") or 24,
+            "cfg": kw.get("guidance_scale") or 6.5,
+        }
+        kw = self._adapt_call(pipe, ctx, kw)
+        return pipe(**kw)
+
     def apply_adetailer(self, base_image, prompt, negative_prompt, seed,
                     target="现实脸部", strength=None):
         """简洁封装，正确匹配 process_adetailer 的真实签名"""
@@ -197,6 +214,8 @@ class GenerationMixin:
                 base_image, self.ai.inpaint_pipe,
                 prompt, negative_prompt,
                 strength=strength, target=target,
+                img2img_pipe=getattr(self.ai, "img2img_pipe", None),
+                call=self._adetailer_call,
             )
     # ==================================================================
     #  启动生成
@@ -216,7 +235,7 @@ class GenerationMixin:
                 QMessageBox.warning(self, "警告", "启用了动作控制，但没有载入真人动作图！")
             return
         if getattr(self, 'is_generating', False):
-            self._bridge.status_signal.emit("⚠️ 已有任务在运行", "#f38ba8")
+            self._bridge.status_signal.emit("已有任务在运行", "#f38ba8")
             return
         self.is_generating = True
         self.cancel_flag   = False
@@ -236,8 +255,11 @@ class GenerationMixin:
         VRAMManager.print_status()
 
         ctx = None
+        # 队列要按"这次到底成没成"归档，不能只看线程活没活。
+        self._gen_outcome = "running"
+        self._gen_outcome_error = ""
         try:
-            logger.info("\n🚀 [任务开始]")
+            logger.info("\n [任务开始]")
 
             # 1. 准备上下文 (设备/参数/翻译)
             ctx = self._gt_prepare_context()
@@ -250,7 +272,7 @@ class GenerationMixin:
                 get_enhancer().unload()
                 from utils.vram_manager import VRAMManager
                 VRAMManager.cleanup()
-                logger.info("🧹 Qwen 已卸载，准备加载底模")
+                logger.info("Qwen 已卸载，准备加载底模")
                 VRAMManager.print_status()
             except Exception as e:
                 logger.warning(f"Qwen 卸载失败（不影响生成）: {e}")
@@ -268,7 +290,7 @@ class GenerationMixin:
                         is_sdxl=getattr(self.ai, 'is_sdxl', False),
                     )
             except Exception as e:
-                print(f"⚠️ 分辨率策略调整失败（忽略）: {e}")
+                print(f"分辨率策略调整失败（忽略）: {e}")
 
 
             # 3. 配置 IP-Adapter
@@ -281,8 +303,10 @@ class GenerationMixin:
             self._gt_run_pose_transfer(ctx)
 
             # 6. 切采样器
-            logger.debug(f"🟢 step 14: 切采样器 = {ctx['sampler_name']}")
-            self.ai.switch_sampler(ctx['sampler_name'])
+            logger.debug(f"step 14: 切采样器 = {ctx['sampler_name']}")
+            # sigma 风格与采样器名一起交给唯一实现（core/samplers.py）
+            self.ai.switch_sampler(ctx['sampler_name'],
+                                   ctx.get('sampler_scheduler') or None)
 
             # 7. X/Y 炼丹分支 (返回 True 表示已处理)
             if self._gt_try_xy_plot(ctx):
@@ -290,9 +314,11 @@ class GenerationMixin:
 
             # 8. 主生成循环
             self._gt_main_loop(ctx)
+            self._gen_outcome = "done"
 
         except InterruptedError:
-            logger.info("⏸ [generation_task] 用户中断")
+            self._gen_outcome = "cancelled"
+            logger.info("[generation_task] 用户中断")
             try:
                 from utils.vram_manager import VRAMManager
                 VRAMManager.cleanup()
@@ -300,16 +326,21 @@ class GenerationMixin:
             except Exception:
                 pass
             try: self._bridge.cancel_signal.emit()
-            except Exception: pass
+            except Exception as e: logger.debug(f"取消信号发送失败(忽略): {e}")
 
         except Exception:
             err = traceback.format_exc()
-            logger.error("❌ [generation_task] 异常:")
+            self._gen_outcome = "failed"
+            self._gen_outcome_error = (str(err).strip().splitlines()[-1][:200] if err else "")
+            logger.error("[generation_task] 异常:")
             logger.error(err)
             try: self._bridge.error_signal.emit(err)
-            except Exception: pass
+            except Exception as e: logger.warning(f"错误信号发送失败: {e}")
 
         finally:
+            # 提前 return 的分支（没模型 / 已在生成 / XY 炼丹）也要有定论
+            if getattr(self, "_gen_outcome", "running") in ("running", None):
+                self._gen_outcome = "done"
             self._gt_cleanup()
             self.is_generating = False
             from utils.vram_manager import VRAMManager
@@ -322,14 +353,14 @@ class GenerationMixin:
 
         # --- 设备 ---
         device_str = self._cbo(getattr(self, 'combo_device', None))
-        if   "CUDA" in device_str: target_device = "cuda"
-        elif "MPS"  in device_str: target_device = "mps"
-        elif "CPU"  in device_str: target_device = "cpu"
-        else: target_device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.debug(f"🟢 step 2: 设备 = {target_device}")
+        if   "CUDA"in device_str: target_device = "cuda"
+        elif "MPS"in device_str: target_device = "mps"
+        elif "CPU"in device_str: target_device = "cpu"
+        else: target_device = "cuda"if torch.cuda.is_available() else "cpu"
+        logger.debug(f"step 2: 设备 = {target_device}")
 
         if getattr(self.ai, 'device', None) != target_device:
-            logger.info(f"🔄 切换设备: {self.ai.device} -> {target_device}")
+            logger.info(f"切换设备: {self.ai.device} -> {target_device}")
             self.ai.device = target_device
             if hasattr(self.ai, 'clear_memory'):
                 self.ai.clear_memory()
@@ -337,16 +368,16 @@ class GenerationMixin:
         model_data = self._ui_read(
             lambda: self.combo_model.currentData(), None) \
             if hasattr(self, 'combo_model') else None
-        if isinstance(model_data, dict) and 'name' in model_data:
+        if isinstance(model_data, dict) and 'name'in model_data:
             model_name = model_data['name']
             model_type = model_data.get('type', '')  # 顺便记录类型
-            logger.debug(f"🟢 模型: [{model_type}] {model_name}")
+            logger.debug(f"模型: [{model_type}] {model_name}")
         else:
             # 兜底:剥离 [xxGB] 后缀
             raw = self._cbo(getattr(self, 'combo_model', None))
-            model_name = raw.split('  [')[0].strip() if raw else ""
+            model_name = raw.split('[')[0].strip() if raw else ""
             model_type = ''
-            logger.debug(f"🟢 模型(兜底): {model_name}")
+            logger.debug(f"模型(兜底): {model_name}")
 
         raw_prompt = self._txt(getattr(self, 'txt_prompt', None))
         raw_neg    = self._txt(getattr(self, 'txt_neg', None))
@@ -371,36 +402,56 @@ class GenerationMixin:
             from utils.app_utils import parse_lora_tags
             raw_prompt, lora_tags = parse_lora_tags(raw_prompt)
             if lora_tags:
-                logger.info(f"🎯 提示词内 LoRA 标签: {lora_tags}")
+                logger.info(f"提示词内 LoRA 标签: {lora_tags}")
                 self._bridge.status_signal.emit(
-                    "🎯 检测到 <lora:> 标签: "
-                    + "、".join(f"{t['name']}:{t['weight']:.2f}" for t in lora_tags[:4]),
+                    "检测到 <lora:> 标签: "
+                    + "、".join(f"{t['name']}:{t['weight']:.2f}"for t in lora_tags[:4]),
                     "#cba6f7")
         except Exception as e:
-            logger.warning(f"⚠️ LoRA 标签解析失败(忽略): {e}")
+            logger.warning(f"LoRA 标签解析失败(忽略): {e}")
 
         mode_idx = self._ui_read(
             lambda: self.combo_trans_mode.currentIndex(), 2) \
             if hasattr(self, 'combo_trans_mode') else 2
         trans_mode = ["dict", "ai", "auto"][mode_idx]
-        logger.info(f"🌐 翻译模式: {trans_mode}")
+
+        # 「是否翻译」开关：关掉就把中文原文直接投递给模型。
+        # 以前这里没有选择权 —— 一律先翻成英文（CLIP 只认英文），
+        # 但 MOSS-Image 这类用多语种 LLM 做文本编码器的模型，
+        # 翻成英文反而把「中文文字渲染」这个卖点抹掉了。
+        translate_on = True
+        try:
+            if hasattr(self, 'chk_translate_prompt'):
+                translate_on = bool(self.chk_translate_prompt.isChecked())
+        except Exception as e:
+            logger.debug(f"读取「翻译成英文」开关失败，按开启处理: {e}")
+
+        # 模型自己懂中文 + 用户没关开关 → 仍然尊重用户选择，只提示
+        if translate_on and self._arch_supports_zh():
+            logger.info("ℹ️ 当前模型原生支持中文提示词，"
+                        "但「翻译成英文再生成」是勾选状态，仍会先翻译")
+
+        logger.info(f"翻译模式: {trans_mode}"
+                    + ("" if translate_on else "（已关闭翻译，直接投递原文）"))
 
         # --- AI 改写 ---
         raw_prompt = self._gt_apply_prompt_enhance(raw_prompt)
 
         # --- 翻译反向词 ---
-        en_neg = self.translator.translate(raw_neg, mode=trans_mode) if raw_neg else ""
+        en_neg = self._translate_or_raw(raw_neg, mode=trans_mode)
 
         # --- 数值参数 ---
         steps    = self._spn(getattr(self, 'spin_steps', None)) or 30
         strength = self._sld(getattr(self, 'scale_str', None))
         cfg      = self._sld(getattr(self, 'scale_cfg', None))
         res_text = self._cbo(getattr(self, 'combo_res', None))
-        if 'x' in res_text:
+        if 'x'in res_text:
             width, height = map(int, res_text.split('x'))
         else:
             width, height = 512, 512
         sampler_name = self._cbo(getattr(self, 'combo_sampler', None))
+        sampler_scheduler = (self._cbo(
+            getattr(self, 'combo_scheduler', None)) or '默认')
         cn_strength = self._sld(getattr(self, 'scale_cn_strength', None)) or 1.0
 
         raw_pt = self._sld(getattr(self, 'slider_pt_cn', None))
@@ -423,8 +474,8 @@ class GenerationMixin:
             if total_generate_count > SAFETY_THRESHOLD and \
                 not getattr(self, "_batch_mode", False):
                 if not self._gt_confirm_batch(combo_count, base_count, total_generate_count):
-                    logger.info(f"⏸ 用户取消批量队列 ({total_generate_count} 张)")
-                    self._bridge.status_signal.emit("⏸ 已取消批量生成", "#f38ba8")
+                    logger.info(f"用户取消批量队列 ({total_generate_count} 张)")
+                    self._bridge.status_signal.emit("已取消批量生成", "#f38ba8")
                     return None
 
             expanded = []
@@ -433,17 +484,17 @@ class GenerationMixin:
             parsed_raw_prompts = expanded
 
             self._bridge.status_signal.emit(
-                f"📖 批量队列启动: {combo_count} 组合 × {base_count} 张 = {total_generate_count} 张",
+                f"批量队列启动: {combo_count} 组合 × {base_count} 张 = {total_generate_count} 张",
                 "#ffd700"
             )
-            logger.info(f"🎯 [批量] {combo_count} 组合 × {base_count} 张/组 = 共 {total_generate_count} 张")
+            logger.info(f"[批量] {combo_count} 组合 × {base_count} 张/组 = 共 {total_generate_count} 张")
         else:
             total_generate_count = base_count
             parsed_raw_prompts   = [parsed_raw_prompts[0]] * base_count
 
         # ── 角色一致性（人物保持）配置 ──
         _current_page = getattr(self, "_current_page_id", "txt2img")
-        # ⚠️ 以前这里是硬编码 False/0.7：UI 上的「🪞 Reference-Only」勾选框
+        #  以前这里是硬编码 False/0.7：UI 上的「 Reference-Only」勾选框
         #    没有任何信号连接、滑块值也被忽略，导致整套 Reference-Only 是死功能。
         use_reference_only = self._chk(getattr(self, 'chk_reference_only', None))
         # 滑块 50~100 → 0.50~1.00
@@ -457,12 +508,12 @@ class GenerationMixin:
 
         # Reference-Only 与 Pose Transfer 互斥（UI 文案已声明，代码没落实）
         if use_reference_only and self._chk(getattr(self, 'chk_pose_transfer', None)):
-            logger.warning("⚠️ Reference-Only 与 Pose Transfer 互斥，优先 Pose Transfer")
+            logger.warning("Reference-Only 与 Pose Transfer 互斥，优先 Pose Transfer")
             use_reference_only = False
             self._bridge.status_signal.emit(
-                "⚠️ Reference-Only 与 Pose Transfer 互斥，已按 Pose Transfer 执行", "#fab387")
+                "Reference-Only 与 Pose Transfer 互斥，已按 Pose Transfer 执行", "#fab387")
         if use_reference_only:
-            logger.info(f"🪞 Reference-Only 已启用，参考强度={ref_fidelity:.2f}")
+            logger.info(f"Reference-Only 已启用，参考强度={ref_fidelity:.2f}")
 
         # ── 角色特征提取 ──
         # 参考图来源：优先 IP-Adapter 角色图，其次图生图参考图。
@@ -481,15 +532,17 @@ class GenerationMixin:
 
         # ── 翻译每个 prompt,并把特征拼到最前面 ──
         # 注意顺序：先拼特征再查预算，因为特征串本身也吃 token 预算
+        # 「翻译成英文再生成」关掉时：直接把原文（可能是中文）送进模型。
+        # 只有 MOSS-Image 这种文本编码器本身是多语种 LLM 的架构才建议关。
         en_prompts = []
         for p in parsed_raw_prompts:
-            en = self.translator.translate(p, mode=trans_mode) if p else ""
+            en = self._translate_or_raw(p, mode=trans_mode) if p else ""
             if extracted_features:
-                en = f"{extracted_features}, {en}" if en else extracted_features
+                en = f"{extracted_features}, {en}"if en else extracted_features
             en_prompts.append(en)
 
         if extracted_features:
-            logger.info(f"📝 注入特征后第一条 prompt:\n   {en_prompts[0][:200]}...")
+            logger.info(f"注入特征后第一条 prompt:\n   {en_prompts[0][:200]}...")
 
         # ── 提示词长度诊断（仅报告，**不修改用户内容**）──
         # 更正：实测本项目的 Compel 用 truncate_long_prompts=False，
@@ -500,10 +553,20 @@ class GenerationMixin:
             from utils.prompt_budget import enforce
             _rep = enforce(en_prompts[0], en_neg, tag="正向")
             if _rep.untranslated_cjk or _rep.positive_chunks > 2:
+                # 关掉翻译时，"含未翻译中文"是**用户的选择**，不该再劝他去翻译；
+                # 只有模型自己能读中文时才提示"这样也行"。
+                if _rep.untranslated_cjk and not translate_on:
+                    _hint = ("，含中文（已按你的设置不翻译；"
+                             + ("当前模型原生支持中文)"
+                                if self._arch_supports_zh() else
+                                "注意：当前模型的文本编码器可能读不懂中文)"))
+                elif _rep.untranslated_cjk:
+                    _hint = "，含未翻译中文建议用 AI 翻译"
+                else:
+                    _hint = ""
                 self._bridge.status_signal.emit(
-                    f"📏 提示词 {_rep.positive_tokens} token"
-                    f"（{_rep.positive_chunks} 个编码块）"
-                    + ("，含未翻译中文建议用 AI 翻译" if _rep.untranslated_cjk else ""),
+                    f"提示词 {_rep.positive_tokens} token"
+                    f"（{_rep.positive_chunks} 个编码块）" + _hint,
                     "#fab387")
         except Exception as _be:
             logger.debug(f"[提示词诊断] 跳过: {_be}")
@@ -521,6 +584,9 @@ class GenerationMixin:
             'en_neg':            en_neg,
             'parsed_raw_prompts': parsed_raw_prompts,
             'en_prompts':        en_prompts,
+            # 是否把中文翻成英文再投递；False 表示 en_prompts 里就是原文
+            'translate_prompt':  translate_on,
+            'zh_prompt_native':  self._arch_supports_zh(),
 
             # === 数值 ===
             'steps':             steps,
@@ -529,6 +595,7 @@ class GenerationMixin:
             'width':             width,
             'height':            height,
             'sampler_name':      sampler_name,
+            'sampler_scheduler': sampler_scheduler,
             'cn_strength':       cn_strength,
             'pt_cn_strength':    pt_cn_strength,
             'total_count':       total_generate_count,
@@ -541,6 +608,15 @@ class GenerationMixin:
             'ipa_pil_image':     None,
             'ipa_scale':         0.9,
             'ipa_variant':       "plus",
+            # 多参考图（主界面「 多参考图」）：装了 N 个适配器后，
+            # ipa_images 是 N 张图、ipa_scales 是每适配器一个强度、
+            # ipa_masks 是每张图的注意力掩码（没有掩码时为 None）
+            'ipa_multi':         False,
+            'ipa_images':        None,
+            'ipa_scales':        None,
+            'ipa_masks':         None,
+            'ipa_summary':       "",
+            'ipa_ref_dicts':     [],
 
             # === 流程开关 ===
             'use_img2img':       False,
@@ -586,8 +662,8 @@ class GenerationMixin:
             except OSError:
                 key = (os.path.abspath(ref_img), 0, 0)
         if key is not None and key in cache:
-            logger.info(f"♻️ 复用缓存的角色特征: {cache[key][:80]}")
-            self._bridge.status_signal.emit("♻️ 角色特征已缓存（跳过 AI 分析）", "#7ed957")
+            logger.info(f"复用缓存的角色特征: {cache[key][:80]}")
+            self._bridge.status_signal.emit("角色特征已缓存（跳过 AI 分析）", "#7ed957")
             return cache[key]
 
         try:
@@ -596,10 +672,10 @@ class GenerationMixin:
                         if hasattr(PromptEnhancer, 'instance')
                         else PromptEnhancer())
             self._bridge.status_signal.emit(
-                "🔍 正在分析参考图角色特征（首次较慢，之后走缓存）...", "#7ed957")
+                "正在分析参考图角色特征（首次较慢，之后走缓存）...", "#7ed957")
             feats = enhancer.extract_character_features(ref_img)
             if feats:
-                logger.info(f"✨ 角色特征:\n   {feats}")
+                logger.info(f"角色特征:\n   {feats}")
                 if key is not None:
                     # 只留最近 4 张，避免长期驻留
                     if len(cache) >= 4:
@@ -607,7 +683,7 @@ class GenerationMixin:
                     cache[key] = feats
             return feats or ""
         except Exception as e:
-            logger.warning(f"⚠️ 特征提取失败(跳过): {e}")
+            logger.warning(f"特征提取失败(跳过): {e}")
             return ""
 
     def _gt_apply_prompt_enhance(self, raw_prompt):
@@ -638,15 +714,47 @@ class GenerationMixin:
                     pass
             if new_prompt and new_prompt.strip():
                 self._bridge.status_signal.emit(
-                    f"✨ 已改写({_mode}): {new_prompt[:60]}...", "#b48ead")
+                    f"已改写({_mode}): {new_prompt[:60]}...", "#b48ead")
                 return new_prompt
         except Exception as e:
-            logger.warning(f"⚠️ 智能改写失败: {e}")
+            logger.warning(f"智能改写失败: {e}")
         return raw_prompt
 
+    def _apply_arch_guidance_default(self):
+        """模型带推荐 CFG 时，把明显偏离的滑杆拉回推荐值（只提示、不广播信号）。"""
+        arch = getattr(self.ai, "current_arch_id", "") or ""
+        if not arch:
+            return 0.0
+        try:
+            from core.arch.base import build_arch_profile
+            rec = float(getattr(build_arch_profile(arch), "default_guidance", 0.0) or 0.0)
+        except Exception as _e:
+            logger.debug(f"取架构推荐 CFG 失败（忽略）: {_e}")
+            return 0.0
+        if rec <= 0 or rec >= 10:
+            return 0.0
+        try:
+            cur = float(self.scale_cfg.float_value())
+        except Exception:
+            return 0.0
+        # 偏离一倍以内认为是用户有意微调，不动
+        if cur <= 0 or abs(cur - rec) <= max(1.0, rec * 0.5):
+            return 0.0
+        try:
+            self.scale_cfg.setValue(rec)
+        except Exception:
+            return 0.0
+        msg = f"「{arch}」官方推荐 CFG {rec:g}（当前 {cur:g}），已把 CFG 调到 {rec:g}"
+        logger.info("🎚️ " + msg)
+        try:
+            self._bridge.status_signal.emit(msg, "#f9e2af")
+        except Exception:
+            pass
+        return rec
+
     def _gt_load_model(self, ctx):
-        self._bridge.status_signal.emit("🧠 正在加载底层大模型...", "#ffd700")
-        logger.debug(f"🟢 step 9: 调用 ai.load_model({ctx['model_name']})")
+        self._bridge.status_signal.emit("正在加载底层大模型...", "#ffd700")
+        logger.debug(f"step 9: 调用 ai.load_model({ctx['model_name']})")
         # CLIP Skip 在 load_model 内部自动应用，这里先把 UI 意图同步给引擎
         try:
             self.ai.clip_skip = max(
@@ -657,6 +765,10 @@ class GenerationMixin:
             "dit_quantization": getattr(self.config, "dit_quantization", "off"),
             "dit_group_offload": getattr(self.config, "dit_group_offload", True),
             "dit_offload_blocks": getattr(self.config, "dit_offload_blocks", 1),
+            # MOSS-Image 专用：8bit 常驻显存（省 9.5GB 内存、每步约慢 18%）
+            "moss_accel": bool(getattr(self.config, "moss_accel", False)),
+            # MOSS-Image 专用：纯 torch 的 int8 权重量化（off / int8 / int8te）
+            "moss_quant": str(getattr(self.config, "moss_quant", "off") or "off"),
         }
         self.ai.load_model(ctx['model_name'])
         from utils.step_cache import configure_step_cache
@@ -667,37 +779,270 @@ class GenerationMixin:
             float(getattr(self.config, "step_cache_threshold", 0.18)),
             int(getattr(self.config, "step_cache_max_skips", 2)),
         )
+        # 官方推荐的 CFG：MOSS-Image 是 3.0（它只在负向分支跳层，CFG 调大会过曝）。
+        # 这里只在"当前和推荐值差得离谱"时把滑杆拉回推荐值，并明确写进日志与状态栏 ——
+        # 不静默改用户设置，但也不让默认的 7.0 白跑一张废图。
+        try:
+            _rec_cfg = self._apply_arch_guidance_default()
+            if _rec_cfg:
+                # ctx 是在加载模型之前快照的，这里同步一下，避免"这一张"仍用旧 CFG
+                ctx["cfg"] = _rec_cfg
+        except Exception as _e:
+            logger.debug(f"应用架构推荐 CFG 失败（忽略）: {_e}")
+        # 模型一换，提示词该不该翻中文的判断就变了 → 刷新提示文案
+        try:
+            refresh = getattr(self, "_refresh_prompt_lang_hint", None)
+            if callable(refresh):
+                refresh()
+        except Exception as e:
+            logger.debug(f"刷新提示词语言提示失败: {e}")
 
-    def _gt_setup_ipa(self, ctx):
-        use_ipa = self._ui_read(
-            lambda: self.chk_use_ipa.isChecked(), False) \
-            if hasattr(self, 'chk_use_ipa') else False
-        ipa_image_path = getattr(self, 'ipa_image_path', None)
+    def _gt_aux_state(self, ctx=None) -> dict:
+        """**只读**地算出 LoRA / ControlNet / IP-Adapter 的"用户意图"。
+
+        为什么必须单独有这么一个函数
+        ----------------------------
+        这三项的**真实值**原本由 `_gt_setup_ipa` / `_gt_apply_loras` /
+        `_gt_run_pose_transfer` 写进 ctx，而那三个函数只在 `start_generation`
+        主流程里被调用，并且都带副作用（加载 LoRA 权重、装载 IP-Adapter、
+        跑姿势提取推理）。`_gt_prepare_context()` 返回的是**初值**：
+
+            'use_ipa': False, 'use_pose': False, 'lora_meta_info': []
+
+        于是 `builder.build_from_ui()`（只调 `_gt_prepare_context()`）拿到的
+        永远是"什么都没开"—— 界面勾了 LoRA/ControlNet/IP-Adapter，
+        生成的工作流图里一个对应节点都没有，**而且不报错不警告**。
+        用户以为用了，实际引擎里根本没跑。这是最危险的一类故障。
+
+        这里把"读 UI → 值"这一段抽成**纯函数**（不加载、不推理、无副作用），
+        让 builder 和上面三个 setup 函数**共用同一套读数**，两边不会再对不上。
+
+        返回的 `use_pose` / `use_ipa` 是**意图**（用户想要什么），不是
+        "最终是否成功"——是否成功要等真正加载才知道。builder 要的就是意图。
+        """
+        ctx = ctx or {}
+
+        # ---- IP-Adapter ----
+        use_ipa = self._chk(getattr(self, 'chk_use_ipa', None))
+        ipa_image_path = (getattr(self, 'ipa_image_path', None)
+                          or getattr(self, 'ref_image_path', None) or "")
         ipa_scale = self._ui_read(
             lambda: self.spin_ipa_scale.value(), 0.6) \
             if hasattr(self, 'spin_ipa_scale') else 0.6
         ipa_variant_text = self._ui_read(
             lambda: self.combo_ipa_variant.currentText(), "plus") \
             if hasattr(self, 'combo_ipa_variant') else "plus"
-        ipa_variant = "plus" if "plus" in ipa_variant_text else "standard"
+        ipa_variant = "plus"if "plus"in str(ipa_variant_text) else "standard"
 
-        # 校验
+        # ---- 姿势控制 / Pose Transfer ----
+        use_pose_manual = self._chk(getattr(self, 'chk_use_pose', None))
+        use_pose_transfer = self._chk(getattr(self, 'chk_pose_transfer', None))
+        pose_image_path = getattr(self, 'pose_image_path', None) or ""
+        # Pose Transfer 需要角色参考图，且会自动启用 IP-Adapter
+        if use_pose_transfer and ipa_image_path:
+            use_ipa = True
+        use_pose = bool(use_pose_manual or use_pose_transfer)
+
+        # ---- 多参考图 (IP-Adapter) ----
+        # 与单张 IPA **分开报**：builder 需要据此决定"挂角色节点
+        # (IPAdapterIdentity/Style/Composition) 还是旧的单张 IPAdapterApply"。
+        # 两者同时开时以**多参考图为准**（单张那条不会再走，否则
+        # load_ip_adapter 的第二次调用是覆盖语义，结果两边都不对）。
+        ipa_ref_entries = []
+        try:
+            _reader = getattr(self, "ipa_refs", None)
+            if callable(_reader):
+                ipa_ref_entries = [dict(r) for r in _reader()
+                                   if isinstance(r, dict)
+                                   and r.get("enabled", True)]
+        except Exception as e:
+            logger.warning(f"读取多参考图配置失败: {e}")
+            ipa_ref_entries = []
+        use_ipa_refs = bool(
+            getattr(getattr(self, "config", None), "use_ipa_refs", False)
+            and ipa_ref_entries)
+
+        # ---- LoRA：提示词里的 <lora:> 标签优先，其次是槽位 ----
+        lora_list = []
+        lora_meta_info = []
+        for t in (ctx.get('lora_tags') or []):
+            try:
+                lora_list.append((str(t["name"]), float(t["weight"])))
+                lora_meta_info.append(f"{t['name']}:{float(t['weight']):.2f}")
+            except Exception:
+                continue
+        tag_names = {os.path.basename(n) for n, _ in lora_list}
+        if hasattr(self, 'combo_loras') and hasattr(self, 'scale_loras'):
+            try:
+                rows = min(len(self.combo_loras), len(self.scale_loras))
+            except Exception:
+                rows = 0
+            for i in range(rows):
+                lname = self._cbo(self.combo_loras[i])
+                lweight = self._sld(self.scale_loras[i])
+                if not lname or lname == "无":
+                    continue
+                if os.path.basename(lname) in tag_names:
+                    continue
+                lora_list.append((lname, float(lweight)))
+                lora_meta_info.append(f"{lname}:{float(lweight):.2f}")
+
+        return {
+            "use_ipa": bool(use_ipa),
+            "ipa_image_path": ipa_image_path or "",
+            "ipa_scale": float(ipa_scale or 0.6),
+            "ipa_variant": ipa_variant,
+            "use_ipa_refs": use_ipa_refs,
+            "ipa_refs": ipa_ref_entries,
+            "use_pose": use_pose,
+            "use_pose_manual": bool(use_pose_manual),
+            "use_pose_transfer": bool(use_pose_transfer),
+            "pose_image_path": pose_image_path,
+            "lora_list": lora_list,
+            "lora_meta_info": lora_meta_info,
+        }
+
+    def _gt_pose_pil_image(self):
+        """读出用户上传的骨架图（PIL）。
+
+         以前这里的代码是 `getattr(self, 'pose_image', None)`，而
+        `self.pose_image` **在整个项目里从来没有被赋过值** —— 于是
+        `ctx['pose_image']` 恒为 None，`prepare_controlnet("openpose")`
+        永远不会执行：用户上传了骨架图、勾了"启用姿态控制"，
+        程序却完全忽略它，而且没有任何提示。
+        真正被赋值的属性是 `self.pose_image_path`（见 load_pose_image）。
+        """
+        path = getattr(self, 'pose_image_path', None)
+        if not path:
+            return None
+        # 兼容"有人确实塞了 PIL 对象进来"的情况
+        if not isinstance(path, str):
+            return path
+        if not os.path.exists(path):
+            logger.warning(f"骨架图不存在，忽略: {path}")
+            return None
+        try:
+            return Image.open(path).convert("RGB")
+        except Exception as e:
+            logger.warning(f"骨架图读取失败（忽略）: {e}")
+            return None
+
+    # ==================================================================
+    #  IP-Adapter 强度 / 占位图的统一口径
+    # ==================================================================
+    def _ipa_pipe_scale(self, ctx, fallback=0.6):
+        """`set_ip_adapter_scale()` 的载荷：多参考图时是**列表**，单图时是标量。
+
+         为什么必须区分：diffusers 0.40 的 `set_ip_adapter_scale` 会校验
+        `len(scale_configs) == len(attn_processor.scale)`；装了 N(>1) 个适配器
+        时传一个标量会抛
+        `ValueError: Cannot assign 1 scale_configs to N IP-Adapter.`
+        以前这条异常在很多地方被 `except: pass` 吞掉 → "看起来设过了，
+        其实强度没变"，属于静默失效。这里统一成同一个口径。
+        """
+        try:
+            scales = ctx.get("ipa_scales") if isinstance(ctx, dict) else None
+            if scales:
+                return [float(s) for s in scales]
+        except Exception:
+            pass
+        try:
+            return float(ctx.get("ipa_scale", fallback))
+        except Exception:
+            return float(fallback)
+
+    def _ipa_adapter_count(self, pipe=None) -> int:
+        """当前（共享 UNet 上）装了**几个** IP-Adapter；拿不到按 1 算。"""
+        try:
+            ai = getattr(self, "ai", None)
+            if ai is not None:
+                n = int(ai.ipa_adapter_count(pipe) or 0)
+                if n > 0:
+                    return n
+        except Exception:
+            pass
+        return 1
+
+    def _ipa_placeholder_images(self, pipe=None, size=224):
+        """装了 N 个适配器时的占位图（**必须正好 N 张**）。
+
+        diffusers 的 `prepare_ip_adapter_image_embeds` 会严格校验
+        `len(ip_adapter_image) == 适配器数量`，少一张就抛 ValueError。
+        所以"临时关掉 IPA"（ADetailer / Pose Transfer 的纯姿势参考图）
+        也要按数量补齐占位图，而不是只给一张。
+        """
+        n = self._ipa_adapter_count(pipe)
+        dummy = Image.new("RGB", (size, size), (0, 0, 0))
+        return dummy if n <= 1 else [dummy for _ in range(n)]
+
+    def _ipa_zero_scale(self, pipe=None):
+        """把强度全设为 0 的载荷（同样是"多适配器要给列表"）。"""
+        n = self._ipa_adapter_count(pipe)
+        return 0.0 if n <= 1 else [0.0] * n
+
+    def _gt_setup_ipa(self, ctx):
+        # ── 多参考图优先 ──
+        # 主界面配了多参考图就**一次**装 N 个适配器（每张图一个独立强度）；
+        # 单张那条路不能再走：`load_ip_adapter()` 第二次调用是**覆盖**语义，
+        # 同时走会把多参考图整体冲掉。
+        _multi = None
+        try:
+            _apply_multi = getattr(self, "_apply_ipa_refs_if_enabled", None)
+            if callable(_apply_multi):
+                _multi = _apply_multi(ctx)
+        except Exception as e:
+            logger.warning(f"多参考图准备异常（改走单张 IP-Adapter）: {e}")
+            _multi = None
+        if _multi:
+            _scales = list(_multi.get("scales") or [])
+            ctx['use_ipa']        = True
+            ctx['ipa_multi']      = True
+            ctx['ipa_images']     = list(_multi.get("images") or [])
+            ctx['ipa_scales']     = _scales
+            ctx['ipa_masks']      = _multi.get("masks")
+            ctx['ipa_scale']      = max(_scales) if _scales else 0.6
+            # 元数据里要能看出"用了哪几张、各自什么角色/强度"
+            ctx['ipa_variant']    = "+".join(
+                getattr(_multi["plan"], "variants", None) or []) or "multi"
+            ctx['ipa_summary']    = _multi.get("summary") or ""
+            ctx['ipa_ref_dicts']  = [r.to_dict()
+                                     for r in (_multi.get("refs") or [])]
+            ctx['ipa_pil_image']  = None
+            ctx['ipa_image_path'] = None
+            try:
+                self._bridge.status_signal.emit(
+                    f"多参考图已就绪：{ctx['ipa_summary']}", "#a6e3a1")
+            except Exception:
+                pass
+            return
+
+        # 读数统一走 _gt_aux_state（保证与 builder 用的是同一套规则）
+        _st = self._gt_aux_state(ctx)
+        use_ipa = _st["use_ipa"]
+        ipa_image_path = _st["ipa_image_path"] or None
+        ipa_scale = _st["ipa_scale"]
+        ipa_variant = _st["ipa_variant"]
+        # ⚠️ 这两段以前是分开的，而且顺序写反了：这里先把 use_ipa 置 False，
+        # 下一段再判断 `use_ipa and not ipa_image_path` —— 条件恒为 False，
+        # 于是"勾了 IP-Adapter 却没选参考图"这条提示**永远不会出现**，
+        # 用户只看到一次静默降级。合并成一段：先报状态，再清标志。
         if use_ipa and not ipa_image_path:
             self._bridge.status_signal.emit(
-                "⚠️ IP-Adapter 已开启但未加载参考图,自动跳过", "#fab387")
+                "IP-Adapter 已开启但未加载参考图,自动跳过", "#fab387")
+            logger.info("IP-Adapter 已开启但参考图为空 → 本次跳过 IP-Adapter")
             use_ipa = False
         if use_ipa and ipa_image_path and not os.path.exists(ipa_image_path):
             self._bridge.status_signal.emit(
-                f"⚠️ 角色参考图丢失: {ipa_image_path},自动跳过", "#fab387")
+                f"角色参考图丢失: {ipa_image_path},自动跳过", "#fab387")
             use_ipa = False
 
         ipa_pil_image = None
         if use_ipa:
             ipa_pil_image = Image.open(ipa_image_path).convert("RGB")
-            logger.debug(f"🟢 IP-Adapter 参考图已加载 {ipa_pil_image.size}")
+            logger.debug(f"IP-Adapter 参考图已加载 {ipa_pil_image.size}")
 
             self._bridge.status_signal.emit(
-                "🎭 正在加载 IP-Adapter (角色一致性)...", "#fab387")
+                "正在加载 IP-Adapter (角色一致性)...", "#fab387")
             ok = self.ai.prepare_ip_adapter(variant=ipa_variant)
             if ok:
                 self.ai.set_ip_adapter_scale(ipa_scale)
@@ -709,22 +1054,22 @@ class GenerationMixin:
                     ipa_classes = (IPAdapterAttnProcessor, IPAdapterAttnProcessor2_0)
                     ipa_count = bad_count = 0
                     for n, p in self.ai.txt2img_pipe.unet.attn_processors.items():
-                        if 'attn2' in n:
+                        if 'attn2'in n:
                             if isinstance(p, ipa_classes): ipa_count += 1
                             else: bad_count += 1
-                    logger.warning(f"🟢 [诊断] IPA attn2: {ipa_count} 正确 / {bad_count} 错误")
+                    logger.warning(f"[诊断] IPA attn2: {ipa_count} 正确 / {bad_count} 错误")
                     if bad_count > 0 or ipa_count == 0:
                         self._bridge.status_signal.emit(
-                            "⚠️ IP-Adapter 安装异常,自动卸载", "#fab387")
+                            "IP-Adapter 安装异常,自动卸载", "#fab387")
                         try: self.ai.unload_ip_adapter()
-                        except Exception: pass
+                        except Exception as e: logger.warning(f"IP-Adapter 自动卸载失败: {e}")
                         use_ipa = False
                         ipa_pil_image = None
                 except Exception as e:
-                    logger.warning(f"⚠️ 诊断 IPA 异常: {e}")
+                    logger.warning(f"诊断 IPA 异常: {e}")
             else:
                 try: self.ai.unload_ip_adapter()
-                except Exception: pass
+                except Exception as e: logger.warning(f"IP-Adapter 卸载失败: {e}")
                 use_ipa = False
                 ipa_pil_image = None
         else:
@@ -739,34 +1084,20 @@ class GenerationMixin:
         ctx['ipa_image_path'] = ipa_image_path
 
     def _gt_apply_loras(self, ctx):
-        lora_config_list = []
-        lora_meta_info   = []
-        # 先放提示词里的 <lora:> 标签（显式写在提示词里 = 用户当下意图，优先级更高）
-        for t in (ctx.get('lora_tags') or []):
-            lora_config_list.append((t["name"], float(t["weight"])))
-            lora_meta_info.append(f"{t['name']}:{t['weight']:.2f}")
-        tag_names = {n for n, _ in lora_config_list}
-
-        if hasattr(self, 'combo_loras') and hasattr(self, 'scale_loras'):
-            for i in range(min(len(self.combo_loras), len(self.scale_loras))):
-                lname   = self._cbo(self.combo_loras[i])
-                lweight = self._sld(self.scale_loras[i])
-                if lname and lname != "无":
-                    # 提示词标签里已有同名 LoRA → 跳过，避免重复挂载
-                    if os.path.basename(lname) in tag_names:
-                        logger.info(f"⏭️ LoRA {lname} 已由提示词标签指定，跳过槽位")
-                        continue
-                    lora_config_list.append((lname, float(lweight)))
-                    lora_meta_info.append(f"{lname}:{lweight:.2f}")
+        # 读数统一走 _gt_aux_state：builder 编译工作流时用的是同一套，
+        # 不会出现"图里挂的 LoRA 和实际生成挂的不一样"
+        _st = self._gt_aux_state(ctx)
+        lora_config_list = list(_st["lora_list"])
+        lora_meta_info = list(_st["lora_meta_info"])
 
         if lora_config_list:
             self.ai.apply_multiple_loras(lora_config_list, sub_dir=None)
-            logger.debug(f"🟢 LoRA 已应用: {lora_config_list}")
+            logger.debug(f"LoRA 已应用: {lora_config_list}")
         else:
         # apply_multiple_loras 内部先 unload 再挂载；传空列表 = 卸载上一次的残留
         # （原本缺 else，上一轮挂的 LoRA 会串到本轮没配 LoRA 的出图上）
             self.ai.apply_multiple_loras([], sub_dir=None)
-            logger.debug("🧹 本轮无 LoRA，已清空残留")
+            logger.debug("本轮无 LoRA，已清空残留")
 
         ctx['lora_meta_info'] = lora_meta_info
 
@@ -829,12 +1160,12 @@ class GenerationMixin:
     def _prepare_init_image(self, img, tag=""):
         """底图诊断 +（按需）细节预处理。返回 (处理后的图, 说明文本)。"""
         issues, stats = self._analyze_init_image(img)
-        prefix = f"{tag} " if tag else ""
+        prefix = f"{tag} "if tag else ""
         note = (f"{prefix}底图亮度={stats['mean']:.0f} 对比={stats['std']:.0f} "
                 f"饱和={stats['sat']:.0f}")
 
         if not issues:
-            logger.info(f"✅ {note}（质量正常，未做预处理）")
+            logger.info(f"{note}（质量正常，未做预处理）")
             return img, ""
 
         warn = "、".join(issues)
@@ -846,20 +1177,20 @@ class GenerationMixin:
             pass
 
         if not do_enhance:
-            logger.warning(f"⚠️ {note} → {warn}（预处理已关闭）")
+            logger.warning(f"{note} → {warn}（预处理已关闭）")
             return img, warn
 
         enhanced = self._enhance_init_image(img)
         new_issues, new_stats = self._analyze_init_image(enhanced)
         logger.warning(
-            f"⚠️ {note} → {warn}；已做 CLAHE 细节增强 → "
+            f"{note} → {warn}；已做 CLAHE 细节增强 → "
             f"亮度={new_stats['mean']:.0f} 对比={new_stats['std']:.0f}")
 
         # 极端情况：增强后仍不适合做底图 → 明确建议提高 denoise
         advice = ""
         if new_stats["mean"] < 25 or new_stats["std"] < 12:
             advice = "（底图质量过差，建议提高「重绘强度」或换一张参考图）"
-            logger.warning(f"⚠️ {advice}")
+            logger.warning(f"{advice}")
 
         return enhanced, f"{warn}{advice}"
 
@@ -951,9 +1282,9 @@ class GenerationMixin:
         return canvas, f"比例差异大，保持比例+边缘延展（{sw}x{sh}→{new_w}x{new_h}）"
 
     def _gt_run_pose_transfer(self, ctx):
-    # 🔧 必须先定义这两个变量
-        use_pose_transfer = self._chk(getattr(self, 'chk_pose_transfer', None))
-        use_pose_manual   = self._chk(getattr(self, 'chk_use_pose', None))
+        _st = self._gt_aux_state(ctx)
+        use_pose_transfer = _st["use_pose_transfer"]
+        use_pose_manual   = _st["use_pose_manual"]
 
         try:
             import torch
@@ -967,24 +1298,26 @@ class GenerationMixin:
                     except Exception:
                         pass
                 ie.to(device="cuda", dtype=torch.float16)
-                logger.info("🔧 image_encoder → cuda / float16")
+                logger.info("image_encoder → cuda / float16")
         except Exception as e:
-            logger.warning(f"⚠️ image_encoder 迁移失败: {e}")
+            logger.warning(f"image_encoder 迁移失败: {e}")
 
         # ── 分支 A: 手动 ControlNet 模式(用户自己上传骨架图) ──
         if use_pose_manual and not use_pose_transfer:
             ctx['use_pose']   = True
-            ctx['pose_image'] = getattr(self, 'pose_image', None)
+            #  必须从 pose_image_path 读（self.pose_image 从未被赋值过）
+            ctx['pose_image'] = self._gt_pose_pil_image()
             if ctx['pose_image'] is not None:
                 self.ai.prepare_controlnet("openpose")
-                # 🔧 同时开 IPA 时,要同步到 controlnet_pipe
+                #  同时开 IPA 时,要同步到 controlnet_pipe
                 if ctx['use_ipa']:
                     self.ai.sync_ipa_to_controlnet()
                     try:
-                        self.ai.controlnet_pipe.set_ip_adapter_scale(ctx['ipa_scale'])
+                        self.ai.controlnet_pipe.set_ip_adapter_scale(
+                            self._ipa_pipe_scale(ctx))
                     except Exception:
                         pass
-            # ⚠️ 手动模式用基础 CN 滑块的值,不覆盖
+            #  手动模式用基础 CN 滑块的值,不覆盖
             return
 
         # ── 分支 B: 不开 Pose Transfer 直接返回 ──
@@ -992,21 +1325,21 @@ class GenerationMixin:
             return
 
         # ── 分支 C: Pose Transfer 三阶段 ──
-        logger.info("🎬 进入 Pose Transfer 模式")
+        logger.info("进入 Pose Transfer 模式")
         ctx['pose_transfer_used'] = True
 
         # 必须有角色参考图
         char_ref_path = ctx.get('ipa_image_path') or getattr(self, 'ref_image_path', None)
         if not char_ref_path:
             raise RuntimeError(
-                "❌ Pose Transfer 模式需要角色参考图!\n"
+                "Pose Transfer 模式需要角色参考图!\n"
                 "请先在【图生图】Tab 上传 IP-Adapter 角色参考图。"
             )
 
         # 自动开 IPA(如果用户没勾)
         if not ctx['use_ipa']:
             self._bridge.status_signal.emit(
-                "🎭 自动启用 IP-Adapter (Pose Transfer 必需)...", "#fab387")
+                "自动启用 IP-Adapter (Pose Transfer 必需)...", "#fab387")
             ctx['ipa_pil_image'] = Image.open(char_ref_path).convert("RGB")
             ok = self.ai.prepare_ip_adapter(variant="plus")
             if not ok:
@@ -1018,8 +1351,8 @@ class GenerationMixin:
 
         # ── Stage 1: 生成动作参考图 ──
         self._bridge.status_signal.emit(
-            "🎬 [1/3] Pose Transfer: 生成动作参考图...", "#ffd700")
-        logger.info("🎬 [Stage 1/3] 生成动作参考图...")
+            "[1/3] Pose Transfer: 生成动作参考图...", "#ffd700")
+        logger.info("[Stage 1/3] 生成动作参考图...")
 
         stage1_prompt = (
             f"masterpiece, best quality, 1girl, solo, full body, simple white background, "
@@ -1029,13 +1362,14 @@ class GenerationMixin:
             random.randint(1, 2_147_483_647))
 
         # 临时关 IPA 生成纯净姿势参考图
-        saved_scale = ctx['ipa_scale']
+        saved_scale = self._ipa_pipe_scale(ctx)
         try:
-            self.ai.txt2img_pipe.set_ip_adapter_scale(0.0)
+            self.ai.txt2img_pipe.set_ip_adapter_scale(
+                self._ipa_zero_scale(self.ai.txt2img_pipe))
         except Exception:
             pass
 
-        dummy_ipa = Image.new("RGB", (224, 224), (0, 0, 0))
+        dummy_ipa = self._ipa_placeholder_images(self.ai.txt2img_pipe)
         with torch.inference_mode():
             pose_ref_img = self.ai.txt2img_pipe(
                 prompt=stage1_prompt,
@@ -1059,26 +1393,27 @@ class GenerationMixin:
 
         # ── Stage 2: 提取骨架 + 同步 IPA 到 ControlNet pipe ──
         self._bridge.status_signal.emit(
-            "🦴 [2/3] 提取 OpenPose 骨架...", "#ffd700")
+            "[2/3] 提取 OpenPose 骨架...", "#ffd700")
         self.ai.prepare_controlnet("openpose")
         skeleton_img = self.ai.get_control_image(pose_ref_img, "openpose")
 
-        # 🔧 关键:同步 IPA(否则 Stage 3 会报 tuple 错误)
+        #  关键:同步 IPA(否则 Stage 3 会报 tuple 错误)
         if ctx['use_ipa']:
             sync_ok = self.ai.sync_ipa_to_controlnet()
             if not sync_ok:
                 self._bridge.status_signal.emit(
-                    "⚠️ IPA 同步到 CN 失败,Stage 3 不使用角色一致性", "#fab387")
+                    "IPA 同步到 CN 失败,Stage 3 不使用角色一致性", "#fab387")
                 ctx['use_ipa'] = False
                 ctx['ipa_pil_image'] = None
             else:
                 try:
-                    self.ai.controlnet_pipe.set_ip_adapter_scale(ctx['ipa_scale'])
+                    self.ai.controlnet_pipe.set_ip_adapter_scale(
+                        self._ipa_pipe_scale(ctx))
                 except Exception:
                     pass
 
         ctx['cn_strength'] = ctx['pt_cn_strength']
-        logger.info(f"🎯 Pose Transfer 参数: CN={ctx['cn_strength']:.2f}, "
+        logger.info(f"Pose Transfer 参数: CN={ctx['cn_strength']:.2f}, "
               f"IPA={ctx['ipa_scale']:.2f}")
 
         try:
@@ -1091,7 +1426,148 @@ class GenerationMixin:
         ctx['pose_image']   = skeleton_img
         ctx['skip_img2img'] = True
         self._bridge.status_signal.emit(
-            "🎨 [3/3] 准备最终生成...", "#ffd700")
+            "[3/3] 准备最终生成...", "#ffd700")
+
+    # ── 高清方式：整图 / 分块 ─────────────────────────────
+    def _hires_mode_resolved(self) -> str:
+        """把「高清方式」下拉与配置解析成 `latent`（整图）或 `tiled`（分块）。
+
+        这个下拉以前只被写进 config（`hires_mode`），主界面生成流程从没读过，
+        选了「分块 (省显存)」也照样整图 img2img —— 等于白给一个选项。
+        判定规则与 `workflow/builder.py` 的 `_hires_mode()` 一致：下拉明确选了
+        就听下拉；选「自动」时显存 < 10GB 视为分块候选，但只有**不能 offload**
+        的架构（Anima 的 ModularPipeline）才真的走分块 —— 能 offload 的
+        SD1.5/SDXL 在 1024² 整图重绘更快，且没有块边界。
+        """
+        try:
+            from utils.tiled_hires import resolve_mode
+        except Exception as e:
+            logger.debug(f"分块高清模块不可用，退回整图: {e}")
+            return "latent"
+        try:
+            ui_text = self.combo_hires_mode.currentText()
+        except Exception:
+            ui_text = ""
+        cfg = getattr(self, "config", None)
+        cfg_mode = getattr(cfg, "hires_mode", "auto") or "auto"
+        total_gb = None
+        try:
+            import torch
+            if torch.cuda.is_available():
+                total_gb = (torch.cuda.get_device_properties(0).total_memory
+                            / (1024 ** 3))
+        except Exception:
+            total_gb = None
+        mode = resolve_mode(ui_text=ui_text, cfg_mode=cfg_mode,
+                            total_gb=total_gb)
+        # 「自动」再多收一道：只有**权重不能 CPU offload** 的架构才必须分块。
+        # Anima 的 ModularPipeline 权重常驻（约 5.6GB），整图 2× 到 1024² 实测
+        # 峰值 9679MB 直接爆；而 SD1.5/SDXL 能 offload，1024² 整图重绘反而更快，
+        # 也没有块边界。要 2K/4K 请手动选「分块 (省显存)」。
+        auto = (("分块" not in str(ui_text or ""))
+                and ("整图" not in str(ui_text or ""))
+                and str(cfg_mode or "auto").strip().lower() not in
+                ("latent", "tiled"))
+        if auto and mode == "tiled":
+            i2i = getattr(self.ai, "img2img_pipe", None)
+            if i2i is not None and hasattr(i2i, "enable_model_cpu_offload"):
+                mode = "latent"
+                logger.info("「高清方式 = 自动」：当前架构支持 CPU offload，"
+                            "整图高清更快；要 2K 以上请手动选「分块 (省显存)」")
+        logger.debug(f"高清方式: {mode}（下拉={ui_text!r} 配置={cfg_mode!r} "
+                     f"显存={total_gb and round(total_gb, 1)}GB）")
+        return mode
+
+    def _gt_tiled_hires(self, image, ctx, kwargs):
+        """阶段 2 的分块 Hires.fix：放大 → 逐块 img2img → 羽化拼回整图。
+
+        三个踩过的坑，改这里之前先看一眼：
+        * **每块必须显式传 height/width**。ModularPipeline（Anima）不传尺寸
+          就按默认 1024 出图，等于每块都在跑整图：实测单块 28~30s、
+          峰值 9679MB（超 8GB 会换 WDDM 页面文件）；传了以后单块 3.8s、
+          4 块合计 15.5s、峰值 7099MB。
+        * 不要把 `ctx['width']/['height']` 改成放大后的尺寸 —— 元数据里
+          width/height 记的是基础图尺寸，`hires_size` 由 `hires_scale` 推算，
+          改了会变成二次放大。
+        * 每块种子按 base+i 递增，同参数可复现。
+        """
+        from utils import tiled_hires
+
+        cfg = getattr(self, "config", None)
+        i2i = getattr(self.ai, "img2img_pipe", None)
+        if i2i is None:
+            logger.warning("分块高清需要 img2img 管线，当前架构没有，已跳过")
+            return image
+        try:
+            scale = float(self.combo_hires_scale.currentText())
+        except Exception:
+            scale = float(getattr(cfg, "hires_scale", 2.0) or 2.0)
+        # 分块模式用自己的强度滑杆（默认 0.25）；没这个控件的老界面
+        # 才退回整图那个「降噪强度」
+        try:
+            denoise = float(self.scale_hires_tile_denoise.float_value())
+        except Exception:
+            try:
+                denoise = float(self.scale_hires_denoise.float_value())
+            except Exception:
+                denoise = float(getattr(cfg, "hires_tile_denoise",
+                                        getattr(cfg, "hires_denoise", 0.25))
+                                or 0.25)
+        try:
+            method = self.combo_hires_upscaler.currentText() or "Lanczos"
+        except Exception:
+            method = "Lanczos"
+        tile_size = int(getattr(cfg, "hires_tile_size", 640) or 640)
+        overlap = int(getattr(cfg, "hires_tile_overlap", 48) or 48)
+        base_seed = int(ctx.get("seed", -1) or -1)
+
+        # 逐块尺寸由分块器自己给，这里把这些键剔掉，免得覆盖
+        call_kwargs = {k: v for k, v in dict(kwargs).items()
+                       if k not in ("image", "width", "height", "strength",
+                                    "latents", "ip_adapter_image")}
+        steps = int(ctx.get("steps", 0) or 0)
+        if steps:
+            call_kwargs["num_inference_steps"] = steps
+
+        def _check_cancel():
+            if getattr(self, "cancel_flag", False):
+                raise RuntimeError("用户已取消（分块高清）")
+
+        logger.info(f"🧩 分块高清洗参数: scale={scale} tile={tile_size} "
+                    f"overlap={overlap} denoise={denoise} method={method} "
+                    f"seed={base_seed}")
+        # SD1.5/SDXL 的 img2img 没有 width/height 参数（尺寸跟 image 走），
+        # Anima 的 ModularPipeline 恰恰相反，不传就按 1024 出图 → 必须传。
+        _arch = getattr(self.ai, "current_arch_id", "") or ""
+        _pass_size = True if _arch == "anima" else None
+        try:
+            out, meta = tiled_hires.tiled_img2img(
+                i2i, image,
+                scale=scale, tile_size=tile_size, overlap=overlap,
+                denoise=denoise, method=method, seed=base_seed,
+                call_kwargs=call_kwargs, pass_size=_pass_size,
+                call=lambda **kw: self._gt_safe_pipe_call(i2i, ctx, **kw),
+                progress=lambda done, total:
+                    self._bridge.sub_prog_signal.emit(done, total),
+                status=lambda text:
+                    self._bridge.status_signal.emit(text, "#ff1493"),
+                check_cancel=_check_cancel,
+            )
+        except Exception as e:
+            if "已取消" in str(e):
+                logger.warning("分块高清已取消，保留基础图（未放大）")
+                self._bridge.status_signal.emit("分块高清已取消", "#f9e2af")
+                return image
+            logger.error(f"分块高清失败，退回基础图: {e}", exc_info=True)
+            self._bridge.status_signal.emit(
+                f"分块高清失败（{e}），已保留基础图", "#f38ba8")
+            return image
+
+        ctx['tile_meta'] = dict(meta or {})
+        text = tiled_hires.describe(meta or {})
+        logger.info(f"🧩 分块高清完成：{text}")
+        self._bridge.status_signal.emit(f"分块高清完成：{text}", "#a6e3a1")
+        return out
 
     def _gt_safe_pipe_call(self, pipe, ctx, **call_kwargs):
         """
@@ -1099,8 +1575,15 @@ class GenerationMixin:
         1. 自动处理 IPA 占位图 (UNet 被污染时)
         2. 支持 Compel 长提示词 (>77 tokens)
         """
+        if pipe is None:
+            # 架构没有对应管线时的兜底拦截。以前走到 pipe(**kwargs) 才炸，
+            # 抛的是 'NoneType' object is not callable，用户完全看不出原因。
+            _arch = getattr(self.ai, "current_arch_id", "?") or "?"
+            raise RuntimeError(
+                f"当前架构「{_arch}」没有对应的生成管线（pipeline 为 None）。\n"
+                "该能力可能不受此底模支持，请查看日志确认或更换底模。")
         call_kwargs = self._adapt_call(pipe, ctx, call_kwargs)
-        if "state" in call_kwargs:
+        if "state"in call_kwargs:
             return pipe(**call_kwargs)
         unet_has_ipa = (
             pipe is not None
@@ -1111,19 +1594,19 @@ class GenerationMixin:
         if unet_has_ipa:
             user_provided = call_kwargs.get("ip_adapter_image") is not None
             if not user_provided:
-                # 喂 dummy + scale=0
-                call_kwargs["ip_adapter_image"] = Image.new("RGB", (224, 224), (0, 0, 0))
+                # 喂 dummy + scale=0（多适配器时占位图要正好 N 张）
+                call_kwargs["ip_adapter_image"] = self._ipa_placeholder_images(pipe)
                 try:
-                    pipe.set_ip_adapter_scale(0.0)
-                    logger.info("🔧 [safe_call] UNet 含 IPA 但未启用 → dummy + scale=0")
-                except Exception:
-                    pass
+                    pipe.set_ip_adapter_scale(self._ipa_zero_scale(pipe))
+                    logger.info("[safe_call] UNet 含 IPA 但未启用 → dummy + scale=0")
+                except Exception as e:
+                    logger.warning(f"[safe_call] 关闭 IPA 失败: {e}")
             else:
-                # 用户启用了 IPA,设置正确 scale
+                # 用户启用了 IPA：设置正确 scale（多参考图 = per-adapter 列表）
                 try:
-                    pipe.set_ip_adapter_scale(ctx.get('ipa_scale', 0.6))
-                except Exception:
-                    pass
+                    pipe.set_ip_adapter_scale(self._ipa_pipe_scale(ctx))
+                except Exception as e:
+                    logger.warning(f"[safe_call] 设置 IPA 强度失败: {e}")
 
         if call_kwargs.get('prompt'):
             try:
@@ -1137,13 +1620,16 @@ class GenerationMixin:
                     call_kwargs.pop('negative_prompt', None)
                     call_kwargs.update(embeds)
                     logger.info(
-                        f"✅ Compel 生效（{getattr(self.ai, 'current_arch_id', 'unknown')}），"
+                        f"Compel 生效（{getattr(self.ai, 'current_arch_id', 'unknown')}），"
                         f"embeds {tuple(embeds['prompt_embeds'].shape)}"
                     )
                 else:
-                    logger.info("ℹ️ Compel 未返回 embeds，使用原始提示词")
+                    logger.info("Compel 未返回 embeds，使用原始提示词")
             except Exception as e:
                 logger.warning(f"Compel 编码失败，回退原始提示词: {e}")
+
+        # 非 SD 系管线（MOSS-Image 等）不一定接受 SD 的全套 kwargs
+        call_kwargs = self._prepare_pipe_kwargs(pipe, call_kwargs, ctx)
 
         try:
             output = pipe(**call_kwargs)
@@ -1151,24 +1637,99 @@ class GenerationMixin:
             # 恢复 IPA scale (供下次调用)
             if unet_has_ipa and ctx.get('use_ipa'):
                 try:
-                    pipe.set_ip_adapter_scale(ctx['ipa_scale'])
-                except Exception:
-                    pass
+                    pipe.set_ip_adapter_scale(self._ipa_pipe_scale(ctx))
+                except Exception as e:
+                    logger.warning(f"[safe_call] 恢复 IPA 强度失败: {e}")
 
             return output
 
         except InterruptedError:
             raise
         except Exception as e:
-            logger.error(f"❌ Pipeline 调用失败: {e}")
+            logger.error(f"Pipeline 调用失败: {e}")
             raise
+
+    @staticmethod
+    def _pipe_accepts(pipe, *names):
+        """管线的 `__call__` 是否接受这些 kwargs（有 **kwargs 就算接受）。"""
+        import inspect
+        try:
+            params = inspect.signature(pipe.__call__).parameters
+        except Exception:
+            return True
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD
+               for p in params.values()):
+            return True
+        return all(n in params for n in names)
+
+    def _prepare_pipe_kwargs(self, pipe, call_kwargs, ctx):
+        """按管线的真实签名裁剪 kwargs，并给不支持 callback 的管线补进度钩子。
+
+        MOSS-Image 的 `__call__` 没有 `callback_on_step_end`，直接传会
+        TypeError: unexpected keyword argument。裁剪的同时用 `scheduler.step`
+        钩子把进度和取消能力补回来（不然 5 分钟一张图没有任何反馈）。
+        """
+        if not call_kwargs:
+            return call_kwargs
+        cb_keys = ("callback_on_step_end", "callback_on_step_end_tensor_inputs")
+        if not self._pipe_accepts(pipe, *cb_keys):
+            dropped = [k for k in cb_keys if k in call_kwargs]
+            for k in dropped:
+                call_kwargs.pop(k, None)
+            if dropped:
+                logger.info("当前管线不支持 %s，已改用调度器钩子报告进度",
+                            "/".join(dropped))
+                self._attach_step_progress(pipe, ctx)
+
+        # 其余不认识的键一律丢掉（宁可少传，也不要 TypeError 整张图失败）
+        import inspect
+        try:
+            params = inspect.signature(pipe.__call__).parameters
+        except Exception:
+            return call_kwargs
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD
+               for p in params.values()):
+            return call_kwargs
+        for key in list(call_kwargs):
+            if key not in params:
+                logger.warning("管线不接受参数 %s，已省略", key)
+                call_kwargs.pop(key, None)
+        return call_kwargs
+
+    def _attach_step_progress(self, pipe, ctx):
+        """给不支持 step 回调的管线挂 `scheduler.step` 钩子：进度 + 可取消。"""
+        sched = getattr(pipe, "scheduler", None)
+        if sched is None or getattr(sched, "_ui_step_hook", False):
+            return
+        orig = sched.step
+        total = max(1, int(ctx.get("steps") or 1))
+        state = {"i": 0}
+
+        def step(model_output, timestep, sample, **kw):
+            if getattr(self, "cancel_flag", False):
+                raise InterruptedError("用户中断")
+            out = orig(model_output, timestep, sample, **kw)
+            state["i"] += 1
+            try:
+                self._bridge.progress_signal.emit(
+                    min(100, int(state["i"] * 100 / total)))
+            except Exception:
+                logger.debug("进度信号发送失败", exc_info=True)
+            return out
+
+        try:
+            sched.step = step
+            sched._ui_step_hook = True
+            logger.info("已用 scheduler.step 钩子接管进度/取消（管线无 step 回调）")
+        except Exception as e:
+            logger.warning("挂调度器进度钩子失败: %s", e)
 
     def _gt_try_xy_plot(self, ctx):
         if not self._chk(getattr(self, 'chk_enable_xy', None)):
             return False
 
-        logger.debug("🟢 进入 XY 分支")
-        self._bridge.status_signal.emit("📊 进入 X/Y 炼丹模式...", "#ffd700")
+        logger.debug("进入 XY 分支")
+        self._bridge.status_signal.emit("进入 X/Y 炼丹模式...", "#ffd700")
         generator = torch.Generator(self.ai.device).manual_seed(
             random.randint(1, 2_147_483_647))
 
@@ -1182,10 +1743,10 @@ class GenerationMixin:
                 if getattr(_prof, 'prompt_mode', None) != "compel":
                     # 非 Compel 架构（Anima/Cosmos 等）本就走原始提示词，
                     # 这是设计如此，不是异常 —— 不能每次都告警吓用户。
-                    logger.info("ℹ️ 当前架构不使用 Compel，提示词交由管线内部编码")
+                    logger.info("当前架构不使用 Compel，提示词交由管线内部编码")
                 else:
                     logger.warning(
-                        "⚠️ Compel 未生效，回退为由管线内部编码提示词"
+                        "Compel 未生效，回退为由管线内部编码提示词"
                         "（超过 77 token 的部分会被截断）")
                 base_kwargs = {"prompt": ctx['en_prompts'][0],
                                "negative_prompt": ctx['en_neg']}
@@ -1195,7 +1756,9 @@ class GenerationMixin:
             "guidance_scale":      ctx['cfg'],
             "generator":           generator,
         })
-        if ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
+        if ctx['use_ipa'] and ctx.get('ipa_images'):
+            base_kwargs["ip_adapter_image"] = list(ctx['ipa_images'])
+        elif ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
             base_kwargs["ip_adapter_image"] = ctx['ipa_pil_image']
 
         xy_meta = {
@@ -1219,13 +1782,13 @@ class GenerationMixin:
         if (ctx['use_ipa'] and getattr(self, 'ref_image_path', None)
                 and not ctx['skip_img2img']):
             self._bridge.status_signal.emit(
-                "💡 IP-Adapter 已启用,自动忽略图生图参考图(避免冲突)", "#fab387")
+                "IP-Adapter 已启用,自动忽略图生图参考图(避免冲突)", "#fab387")
 
         for i in range(ctx['total_count']):
             if getattr(self, 'cancel_flag', False):
                 break
 
-            logger.debug(f"🟢 [{i+1}/{ctx['total_count']}] 开始")
+            logger.debug(f"[{i+1}/{ctx['total_count']}] 开始")
             self._bridge.progress_signal.emit(i, ctx['total_count'])
 
             # 种子优先级：批量覆盖(_seed_override) > 用户填的 spin_seed(>=0) > 随机。
@@ -1238,7 +1801,7 @@ class GenerationMixin:
                 current_seed = (_fixed + i) if _fixed is not None and _fixed >= 0 \
                     else random.randint(1, 2_147_483_647)
             self._bridge.status_signal.emit(
-                f"🔥 第 {i+1}/{ctx['total_count']} 张 (Seed: {current_seed}) ...",
+                f"第 {i+1}/{ctx['total_count']} 张 (Seed: {current_seed}) ...",
                 "#00ffff")
             self._bridge.sub_prog_signal.emit(0, ctx['steps'])
 
@@ -1247,9 +1810,28 @@ class GenerationMixin:
             except InterruptedError:
                 raise
             except Exception as e:
-                logger.error(f"❌ 第 {i+1} 张生成失败: {e}")
+                logger.error(f"第 {i+1} 张生成失败: {e}")
                 traceback.print_exc()
                 continue
+
+            # 步间缓存到底省没省：每张图说一句实话（只在真正启用时才会打）。
+            try:
+                from utils.step_cache import step_cache_summary
+                logger.info(step_cache_summary())
+            except Exception as e:
+                logger.debug(f"步间缓存统计读取失败(忽略): {e}")
+            # "勾了加速但一点没快"必须当场看见，而不是等用户去翻设置页：
+            # 只有 0 命中时才往界面日志里写一行（有命中就只留在日志文件里，
+            # 免得每张图都刷屏）。
+            try:
+                from utils.step_cache import step_cache_status_text
+                _cache_text = step_cache_status_text()
+                if "0 步命中" in _cache_text:
+                    _append = getattr(self, "append_log", None)
+                    if callable(_append):
+                        _append(f"⚠️ {_cache_text}", "#fab387")
+            except Exception as e:
+                logger.debug(f"步间缓存状态提示失败(忽略): {e}")
 
             # 区域提示词 / 局部重绘：在保存前按区域逐个重绘。
             # 失败只警告并沿用原图 —— 区域是"锦上添花"，绝不能因为它出不了图。
@@ -1263,14 +1845,14 @@ class GenerationMixin:
             self.last_generated_path = save_path
             generated_paths.append(save_path)
             try: self._bridge.preview_img_sig.emit(image.copy())
-            except Exception: pass
+            except Exception as e: logger.debug(f"预览图信号发送失败(忽略): {e}")
             try: self._bridge.gallery_add_signal.emit(save_path)
-            except Exception: pass
+            except Exception as e: logger.debug(f"画廊信号发送失败(忽略): {e}")
             self._bridge.progress_signal.emit(i + 1, ctx['total_count'])
 
         if not getattr(self, 'cancel_flag', False):
             self._bridge.status_signal.emit(
-                f"✅ 全部完成! 共生成 {len(generated_paths)} 张", "#00ff00")
+                f"全部完成! 共生成 {len(generated_paths)} 张", "#00ff00")
         self._bridge.progress_signal.emit(ctx['total_count'], ctx['total_count'])
 
     def _gt_generate_one(self, ctx, i, current_seed):
@@ -1281,30 +1863,31 @@ class GenerationMixin:
         en_neg    = ctx['en_neg']
 
         # prompt embeds vs 普通 prompt
-        if ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
+        if ctx['use_ipa'] and (ctx['ipa_pil_image'] is not None
+                               or ctx.get('ipa_images')):
             embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
         else:
             embed_kwargs = self.ai.encode_prompt(en_prompt, en_neg)
             pe = embed_kwargs.get('prompt_embeds') if embed_kwargs else None
             if pe is not None:
-                logger.info(f"✅ Compel 生效，embeds {tuple(pe.shape)}")
+                logger.info(f"Compel 生效，embeds {tuple(pe.shape)}")
             else:
                 embed_kwargs = self.ai.encode_prompt(en_prompt, en_neg)
                 pe = embed_kwargs.get('prompt_embeds') if embed_kwargs else None
                 if pe is not None:
-                    logger.info(f"✅ Compel 生效，embeds {tuple(pe.shape)}")
+                    logger.info(f"Compel 生效，embeds {tuple(pe.shape)}")
                 elif getattr(self.ai, 'arch_profile', None) is not None \
                      and getattr(self.ai, 'arch_profile', None).prompt_mode != "compel":
                     embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
                 else:
                     logger.warning(
-                        "⚠️ Compel 未生效，回退为由管线内部编码提示词"
+                        "Compel 未生效，回退为由管线内部编码提示词"
                         "（超过 77 token 的部分会被截断）")
                     embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
 
         # ETA 回调
         cur_prompt = ctx['en_prompts'][i] if i < len(ctx['en_prompts']) else ""
-        prompt_preview = cur_prompt[:35] + "..." if len(cur_prompt) > 35 else cur_prompt
+        prompt_preview = cur_prompt[:35] + "..."if len(cur_prompt) > 35 else cur_prompt
 
         t0 = time.time()
         def step_cb(pipe, step_index, timestep, callback_kwargs,
@@ -1318,13 +1901,13 @@ class GenerationMixin:
             self._bridge.sub_prog_signal.emit(done, _steps)
             _lat = callback_kwargs.get('latents') if callback_kwargs else None
             if _lat is not None and not torch.isfinite(_lat).all():
-                logger.error(f"💥 latents 在第 {step_index+1} 步出现 NaN/Inf")
+                logger.error(f"latents 在第 {step_index+1} 步出现 NaN/Inf")
 
             if done == 1 or done == _steps or done % 3 == 0:
                 elapsed = time.time() - _t0
                 eta = (elapsed / done) * (_steps - done) if done > 0 else 0
                 self._bridge.status_signal.emit(
-                    f"🔥 [{i+1}/{ctx['total_count']}] {done}/{_steps} | "
+                    f"[{i+1}/{ctx['total_count']}] {done}/{_steps} | "
                     f"ETA {eta:.1f}s | Seed:{current_seed} | {_preview}",
                     "#00ffff"
                 )
@@ -1340,7 +1923,16 @@ class GenerationMixin:
             "callback_on_step_end_tensor_inputs": ["latents"],
         }
         kwargs.update(embed_kwargs)
-        if ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
+        if ctx['use_ipa'] and ctx.get('ipa_images'):
+            # 多参考图：一次给 N 张图（长度必须等于适配器数量）
+            kwargs["ip_adapter_image"] = list(ctx['ipa_images'])
+            # 每张图可选的区域蒙版（注意力层），没有就完全不传这个 kwargs
+            _masks = ctx.get('ipa_masks')
+            if _masks:
+                _cak = dict(kwargs.get("cross_attention_kwargs") or {})
+                _cak["ip_adapter_masks"] = _masks
+                kwargs["cross_attention_kwargs"] = _cak
+        elif ctx['use_ipa'] and ctx['ipa_pil_image'] is not None:
             kwargs["ip_adapter_image"] = ctx['ipa_pil_image']
 
         # ── 图生图底图加载 ──
@@ -1354,8 +1946,8 @@ class GenerationMixin:
                     init_img, tag=os.path.basename(init_path))
                 if _q_warn:
                     self._bridge.status_signal.emit(
-                        f"⚠️ 参考图质量问题：{_q_warn}", "#fab387")
-                # ⚠️ 不能直接 resize：宽高比不一致时会把人物/脸拉伸变形，
+                        f"参考图质量问题：{_q_warn}", "#fab387")
+                #  不能直接 resize：宽高比不一致时会把人物/脸拉伸变形，
                 # 而"像不像同一个人"恰恰最怕形变（低 denoise 下形变会被保留）。
                 # 比例接近 → 居中裁剪；差异大 → 保持比例 + 边缘延展填充。
                 init_img, how = self._fit_to_target(
@@ -1364,22 +1956,22 @@ class GenerationMixin:
                 ctx['use_img2img'] = True
                 ctx['init_fit'] = how
                 logger.info(
-                    f"✅ 图生图模式: {os.path.basename(init_path)} | "
+                    f"图生图模式: {os.path.basename(init_path)} | "
                     f"强度={ctx['strength']:.2f} | 适配={how}"
                 )
             except Exception as e:
-                logger.error(f"❌ 加载底图失败: {e}")
+                logger.error(f"加载底图失败: {e}")
                 ctx['use_img2img'] = False
                 # 以前是静默降级成纯文生图：用户以为在做图生图，
                 # 结果参考图完全没参与，还找不到原因。
                 self._bridge.status_signal.emit(
-                    f"⚠️ 参考图加载失败，已降级为文生图：{os.path.basename(init_path)}",
+                    f"参考图加载失败，已降级为文生图：{os.path.basename(init_path)}",
                     "#f38ba8")
         else:
             if init_path:
-                logger.warning(f"⚠️ 参考图路径不存在: {init_path}")
+                logger.warning(f"参考图路径不存在: {init_path}")
                 self._bridge.status_signal.emit(
-                    "⚠️ 参考图文件不存在，已降级为文生图", "#f38ba8")
+                    "参考图文件不存在，已降级为文生图", "#f38ba8")
             ctx['use_img2img'] = False
 
         if torch.cuda.is_available():
@@ -1389,13 +1981,13 @@ class GenerationMixin:
         _use_freeu = self._chk(getattr(self, 'chk_freeu', None))
         if _use_freeu and self.ai.freeu_supported():
             self.ai.enable_freeu()
-            logger.info("✨ FreeU 已启用（本次生成）")
+            logger.info("FreeU 已启用（本次生成）")
         elif _use_freeu:
-            logger.info("⏭️ FreeU 已勾选但当前架构不支持，跳过")
+            logger.info("FreeU 已勾选但当前架构不支持，跳过")
 
         with torch.inference_mode():
             # ── 阶段 1: 基础图像生成 ──
-            with performance_timer("🎨 阶段 1: 基础图像生成"):
+            with performance_timer("阶段 1: 基础图像生成"):
                 image = self._gt_run_base_pipe(ctx, kwargs)
 
             # 修前快照：任一精修阶段开启时，保存阶段 1 结果供"修前/修后"对比
@@ -1422,34 +2014,44 @@ class GenerationMixin:
 
             # ── 阶段 2: Hires.fix ──
             if self._chk(getattr(self, 'chk_hires', None)):
-                # ⚠️ 不是所有架构都有标准 img2img 管线：
+                #  不是所有架构都有标准 img2img 管线：
                 # Anima（ModularPipeline/Cosmos DiT）等架构的 img2img_pipe 是 None，
-                # 旧代码不判空就直接调用 → `TypeError: 'NoneType' object is not callable`，
+                # 旧代码不判空就直接调用 → `TypeError: 'NoneType'object is not callable`，
                 # 而且是在**基础图像已经生成之后**才失败，整张图白出。
                 _i2i = getattr(self.ai, 'img2img_pipe', None)
                 _prof = getattr(self.ai, 'arch_profile', None)
                 _pmode = getattr(_prof, 'prompt_mode', None)
+                _arch = getattr(self.ai, 'current_arch_id', '?')
+                # 「高清方式」下拉（自动/整图/分块）以前只写进 config，
+                # 主界面从来没用过 —— 选了"分块"也还是整图跑，白给用户一个选项。
+                _hmode = self._hires_mode_resolved()
                 if ctx['use_ipa']:
                     self._bridge.status_signal.emit(
-                        "⚠️ IP-Adapter 模式跳过 Hires.fix", "#fab387")
+                        "IP-Adapter 模式跳过 Hires.fix", "#fab387")
                 elif _i2i is None:
                     self._bridge.status_signal.emit(
-                        f"⚠️ 当前架构（{getattr(self.ai, 'current_arch_id', '?')}）"
+                        f"当前架构（{_arch}）"
                         f"无标准 img2img 管线，已跳过 Hires.fix（基础图仍会保存）",
                         "#f9e2af")
                     logger.warning(
-                        "⏭️ Hires.fix 跳过：img2img_pipe 为 None"
-                        f"（arch={getattr(self.ai, 'current_arch_id', '?')}, "
-                        f"prompt_mode={_pmode}）")
-                elif _pmode not in (None, "compel"):
-                    # 非 Compel 架构的 Hires 需要 PipelineState 适配，暂不冒险
+                        "Hires.fix 跳过：img2img_pipe 为 None"
+                        f"（arch={_arch}, prompt_mode={_pmode}）")
+                elif _hmode == "tiled":
                     self._bridge.status_signal.emit(
-                        f"⚠️ {getattr(self.ai, 'current_arch_id', '?')} 架构暂不支持 "
-                        f"Hires.fix，已跳过（基础图仍会保存）", "#f9e2af")
-                    logger.warning(f"⏭️ Hires.fix 跳过：prompt_mode={_pmode}")
+                        "阶段 2: Hires.fix（分块）...", "#ff1493")
+                    with performance_timer("Hires.fix 分块"):
+                        image = self._gt_tiled_hires(image, ctx, kwargs)
+                elif _pmode not in (None, "compel"):
+                    # 非 Compel 架构的整图 Hires 需要 PipelineState 适配，暂不冒险；
+                    # 分块路径不走这条判断（它只传原始 prompt/尺寸，与 compel 无关）。
+                    self._bridge.status_signal.emit(
+                        f"{_arch} 架构暂不支持整图 Hires.fix，已跳过（基础图仍会保存）"
+                        f"；如需放大请把「高清方式」设为「分块 (省显存)」",
+                        "#f9e2af")
+                    logger.warning(f"Hires.fix 跳过：prompt_mode={_pmode}")
                 else:
                     self._bridge.status_signal.emit(
-                        "✨ 阶段 2: Hires.fix...", "#ff1493")
+                        "阶段 2: Hires.fix...", "#ff1493")
                     with performance_timer("Hires.fix"):
                      hires_str = self._sld(getattr(self, 'scale_hires', None))
                      hires_kwargs = {k: v for k, v in kwargs.items()
@@ -1463,11 +2065,11 @@ class GenerationMixin:
             # ── 阶段 3: ADetailer 脸部 ──
             if self._chk(getattr(self, 'chk_use_adetailer', None)):
                 self._bridge.status_signal.emit(
-                    "✨ 阶段 3: ADetailer 脸部精修...", "#17a2b8")
+                    "阶段 3: ADetailer 脸部精修...", "#17a2b8")
                 face_target = self._cbo(getattr(self, 'combo_ad_target', None)) or "现实脸部"
                 face_str    = self._sld(getattr(self, 'scale_adetailer_strength', None))
 
-                # 🔧 ADetailer 前临时禁用 IPA (避免污染)
+                #  ADetailer 前临时禁用 IPA (避免污染)
 
                 saved_scale, has_ipa = self._adetailer_disable_ipa()
                 had_tiling = self._adetailer_disable_vae_tiling()
@@ -1477,7 +2079,10 @@ class GenerationMixin:
                              image = process_adetailer(
                                  image, self.ai.inpaint_pipe,
                                  en_prompt, en_neg,
-                                 strength=face_str, target=face_target)
+                                 strength=face_str, target=face_target,
+                                 img2img_pipe=getattr(
+                                     self.ai, "img2img_pipe", None),
+                                 call=self._adetailer_call)
                 finally:
                      self._adetailer_restore_vae_tiling(had_tiling)
                      self._adetailer_restore_ipa(saved_scale, has_ipa)
@@ -1485,13 +2090,13 @@ class GenerationMixin:
             # ── 阶段 4: ADetailer 手部 ──
             if self._chk(getattr(self, 'chk_use_ad_hand', None)):
                 self._bridge.status_signal.emit(
-                    "✨ 阶段 4: ADetailer 手部精修...", "#17a2b8")
+                    "阶段 4: ADetailer 手部精修...", "#17a2b8")
                 hand_target = self._cbo(getattr(self, 'combo_ad_hand', None)) or "现实手部"
                 hand_str    = self._sld(getattr(self, 'scale_ad_hand', None))
                 blend_ratio = self._sld(getattr(self, 'scale_ad_hand_blend', None))
                 blend_ratio = max(0.0, min(1.0, blend_ratio if blend_ratio > 0 else 0.65))
 
-                # 🔧 ADetailer 前临时禁用 IPA
+                #  ADetailer 前临时禁用 IPA
                 saved_scale, has_ipa = self._adetailer_disable_ipa()
                 had_tiling = self._adetailer_disable_vae_tiling()
                 try:
@@ -1501,7 +2106,10 @@ class GenerationMixin:
                              repaired_image = process_adetailer(
                                  image, self.ai.inpaint_pipe,
                                  en_prompt, en_neg,
-                                 strength=hand_str, target=hand_target)
+                                 strength=hand_str, target=hand_target,
+                                 img2img_pipe=getattr(
+                                     self.ai, "img2img_pipe", None),
+                                 call=self._adetailer_call)
                          image = self._gt_region_blend(
                              original_image, repaired_image, blend_ratio)
                 finally:
@@ -1515,9 +2123,9 @@ class GenerationMixin:
             image = image.convert("RGB")
         import numpy as np
         _arr = np.asarray(image)
-        logger.info(f"🔬 图像 max={_arr.max()} mean={_arr.mean():.2f}")
+        logger.info(f"图像 max={_arr.max()} mean={_arr.mean():.2f}")
         if torch.cuda.is_available():
-            logger.info(f"🔬 本次峰值 {torch.cuda.max_memory_allocated()/1024**3:.2f}GB")
+            logger.info(f"本次峰值 {torch.cuda.max_memory_allocated()/1024**3:.2f}GB")
 
         return image
 
@@ -1580,7 +2188,7 @@ class GenerationMixin:
             and not use_pose and not use_inpaint and not use_img2img):
             ref_pipe = getattr(self.ai, 'reference_pipe', None)
             if ref_pipe is None:
-                logger.info("⏳ 首次使用 Reference-Only,正在准备...")
+                logger.info("首次使用 Reference-Only,正在准备...")
                 self.ai.prepare_reference_only()
                 ref_pipe = self.ai.reference_pipe
 
@@ -1590,7 +2198,7 @@ class GenerationMixin:
                                    'guidance_scale', 'width', 'height', 'generator',
                                    'prompt_embeds', 'negative_prompt_embeds')}
 
-            logger.info(f"🪞 [Reference-Only] fidelity={ref_fidelity:.2f}")
+            logger.info(f"[Reference-Only] fidelity={ref_fidelity:.2f}")
             output = ref_pipe(
                 ref_image=ref_image,
                 reference_attn=True,
@@ -1610,6 +2218,15 @@ class GenerationMixin:
 
         # ── 路径 2: Inpaint ──
         elif use_inpaint and inpaint_img is not None and inpaint_mask is not None:
+            # SD3 这类架构没有 inpaint 管线（diffusers 未提供），
+            # 以前会拿 txt2img 管线顶替 → 调用时 TypeError 让人摸不着头脑。
+            # 这里提前给出可操作的中文提示。
+            if self.ai.inpaint_pipe is None:
+                _arch = getattr(self.ai, "current_arch_id", "?") or "?"
+                raise RuntimeError(
+                    f"当前架构「{_arch}」没有 inpaint（局部重绘）管线。\n"
+                    "请改用「🎯 区域提示词 / 局部重绘」分组，"
+                    "或换用 SD1.5 / SDXL 底模。")
             mask_hard, mask_soft = self._gt_make_inpaint_masks(inpaint_mask)
             composite = (inpaint_img, mask_soft)
             output = self._gt_safe_pipe_call(
@@ -1625,11 +2242,37 @@ class GenerationMixin:
 
         # ── 路径 4: img2img ──
         elif use_img2img and init_img is not None:
-            output = self._gt_safe_pipe_call(
-                self.ai.img2img_pipe, ctx,
-                **kwargs, **ip_kwargs,
-                image=init_img, strength=strength,
-            )
+            if getattr(self.ai, 'img2img_pipe', None) is not None:
+                output = self._gt_safe_pipe_call(
+                    self.ai.img2img_pipe, ctx,
+                    **kwargs, **ip_kwargs,
+                    image=init_img, strength=strength,
+                )
+            elif getattr(self.ai, 'current_arch_id', '') == "anima":
+                # Anima 走 ModularPipeline（AnimaAutoBlocks），原生支持 img2img：
+                # 同一根管线，state 里带 image/strength 即自动切换工作流
+                # （VAE 编码底图 → 按 strength 切片时间步 → 加噪 → 去噪）。
+                # _adapt_call 会把这两个键带进 PipelineState。
+                logger.info(f"[Anima] 图生图: strength={strength:.2f}")
+                output = self._gt_safe_pipe_call(
+                    self.ai.txt2img_pipe, ctx,
+                    **kwargs, **ip_kwargs,
+                    image=init_img, strength=strength,
+                )
+            else:
+                # 其余架构（如 SD3）确实没有 img2img 管线：
+                # 显式回退文生图（忽略底图与重绘强度），保住出图并提示用户，
+                # 与 Hires.fix 的取舍一致。
+                _arch = getattr(self.ai, "current_arch_id", "?") or "?"
+                _msg = (f"当前架构（{_arch}）无图生图管线，"
+                        f"已改用文生图（忽略底图/重绘强度 {strength:.2f}）")
+                logger.warning(_msg)
+                try:
+                    self._bridge.status_signal.emit(_msg, "#f9e2af")
+                except Exception:
+                    pass
+                output = self._gt_safe_pipe_call(
+                    self.ai.txt2img_pipe, ctx, **kwargs, **ip_kwargs)
 
         # ── 路径 5: 纯 txt2img ──
         else:
@@ -1703,6 +2346,43 @@ class GenerationMixin:
             np.clip(gen * a + base * (1.0 - a), 0, 255).astype(np.uint8))
 
 
+    def _translate_or_raw(self, text: str, mode: str = "auto") -> str:
+        """按「翻译成英文再生成」开关决定最终投递的文本。
+
+        唯一实现：主流程、高清放大等路径都走这里，避免又出现
+        "某条路径忘了尊重用户的翻译开关"这类两套逻辑。
+        """
+        if not text:
+            return ""
+        on = True
+        try:
+            chk = getattr(self, 'chk_translate_prompt', None)
+            if chk is not None:
+                on = bool(chk.isChecked())
+        except Exception as e:
+            logger.debug(f"读取「翻译成英文」开关失败（按开启处理）: {e}")
+        if not on:
+            return text
+        return self.translator.translate(text, mode=mode)
+
+    def _arch_supports_zh(self) -> bool:
+        """当前模型是否**原生理解中文**提示词（MOSS-Image 这类）。
+
+        依据是架构能力表里的 `supports_zh_prompt`，不是模型名字符串 ——
+        以前凡是"按名字猜能力"的地方都出过两套说法。
+        """
+        try:
+            arch = getattr(self.ai, "current_arch_id", "") or ""
+            if not arch:
+                return False
+            from core.arch import get_arch
+            info = get_arch(arch)
+            return bool(getattr(getattr(info, "caps", None),
+                                "supports_zh_prompt", False))
+        except Exception as e:
+            logger.debug(f"读取「中文提示词」能力失败（按不支持处理）: {e}")
+            return False
+
     def _adapt_call(self, pipe, ctx, kwargs):
         arch_id = getattr(self.ai, 'current_arch_id', '')
         prof = getattr(self.ai, 'arch_profile', None)
@@ -1717,19 +2397,23 @@ class GenerationMixin:
             from diffusers.modular_pipelines import PipelineState
             values = {}
             # 把标准 call kwargs 里已有的值搬进 state，其余从 ctx 兜底
+            # image/strength：Anima（AnimaAutoBlocks）的 img2img 触发输入，
+            # state 里带上 image 即自动切到 img2img 工作流（VAE 编码→按
+            # strength 切片时间步→加噪→去噪）；纯文生图时这两个键不会出现。
             for k in ("prompt", "negative_prompt", "prompt_embeds",
                       "negative_prompt_embeds", "generator",
                       "num_inference_steps", "guidance_scale",
-                      "width", "height", "num_images_per_prompt"):
+                      "width", "height", "num_images_per_prompt",
+                      "image", "strength"):
                 if k in kwargs:
                     values[k] = kwargs.pop(k)
-            if "prompt" not in values:
+            if "prompt"not in values:
                 values["prompt"] = kwargs.get("prompt") or (ctx.get('en_prompts') or [""])[0]
-            if "negative_prompt" not in values:
+            if "negative_prompt"not in values:
                 values["negative_prompt"] = ctx.get('en_neg') or ""
-            if "guidance_scale" not in values:
+            if "guidance_scale"not in values:
                 values["guidance_scale"] = ctx.get('cfg') or 7.0
-            if "num_inference_steps" not in values:
+            if "num_inference_steps"not in values:
                 values["num_inference_steps"] = ctx.get('steps') or 30
             kwargs.clear()
             kwargs["state"] = PipelineState(values=values)
@@ -1740,6 +2424,13 @@ class GenerationMixin:
             kwargs.pop("prompt_embeds", None)
             kwargs.pop("negative_prompt_embeds", None)
             kwargs["prompt"] = kwargs.get("prompt") or ctx['en_prompts'][0]
+
+        # MOSS-Image 的官方采样参数里有一条 `uncond_skip_layers=[22]`
+        # （负向分支跳过第 22 层，少了它会明显降低画质）。
+        # 这个键只对它的自定义管线有意义，别的架构传了会 TypeError，
+        # 所以按架构白名单注入，而不是无条件塞。
+        if arch_id == "mossimage" and "uncond_skip_layers" not in kwargs:
+            kwargs["uncond_skip_layers"] = [22]
         return kwargs
 
 
@@ -1754,12 +2445,12 @@ class GenerationMixin:
                                   index=i,
                                   total=int(ctx.get('total_count', 1) or 1))
         except Exception as e:
-            logger.warning(f"⚠️ 构建元数据失败（仍会保存图片）: {e}")
+            logger.warning(f"构建元数据失败（仍会保存图片）: {e}")
             meta = None
 
         # 文件名
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_model = "".join(c if c.isalnum() or c in "._-" else "_"
+        safe_model = "".join(c if c.isalnum() or c in "._-"else "_"
                              for c in (ctx['model_name'] or "model"))[:40]
         filename = f"{ts}_{safe_model}_{i+1:02d}.png"
         _od = self._output_dir()
@@ -1771,24 +2462,24 @@ class GenerationMixin:
             from utils.image_metadata import save_image
             ok = save_image(self, image, save_path, meta)
             if ok and os.path.exists(save_path) and os.path.getsize(save_path) > 1024:
-                logger.info(f"💾 已保存: {save_path} "
+                logger.info(f"已保存: {save_path} "
                       f"({os.path.getsize(save_path)//1024} KB)")
                 return save_path
-            logger.warning(f"⚠️ 保存的文件大小异常: {save_path}")
+            logger.warning(f"保存的文件大小异常: {save_path}")
         except Exception as e:
-            logger.warning(f"⚠️ 主保存失败: {e},降级保存...")
+            logger.warning(f"主保存失败: {e},降级保存...")
             try:
                 image.save(save_path, format="PNG")
                 if os.path.exists(save_path):
-                    logger.warning(f"💾 [降级] 已保存: {save_path}")
+                    logger.warning(f"[降级] 已保存: {save_path}")
                     return save_path
             except Exception as e2:
-                logger.error(f"❌ 降级保存也失败: {e2}")
+                logger.error(f"降级保存也失败: {e2}")
                 traceback.print_exc()
         return None
 
     def _gt_cleanup(self):
-        logger.info("🏁 [generation_task] 结束")
+        logger.info("[generation_task] 结束")
         self.is_generating = False
         # 清掉批量任务留下的种子覆盖，否则批量跑完后手动生成会一直沿用
         # 最后一张图的 seed（表现为"种子被锁死"）
@@ -1796,17 +2487,22 @@ class GenerationMixin:
         # 生图结束后关闭 FreeU（避免显存多占）
         try:
             self.ai.disable_freeu()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"关闭 FreeU 失败(忽略): {e}")
         try:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-        except Exception: pass
-        try: self.cleanup_temp_files(verbose=True)
-        except Exception: pass
-        try: self._bridge.done_signal.emit()
-        except Exception: pass
+        except Exception as e:
+            logger.debug(f"显存清理失败(忽略): {e}")
+        try:
+            self.cleanup_temp_files(verbose=True)
+        except Exception as e:
+            logger.debug(f"临时文件清理失败(忽略): {e}")
+        try:
+            self._bridge.done_signal.emit()
+        except Exception as e:
+            logger.debug(f"完成信号发送失败(忽略): {e}")
 
     def _adetailer_disable_ipa(self):
         """
@@ -1819,7 +2515,7 @@ class GenerationMixin:
 
         try:
             for proc in inpaint_pipe.unet.attn_processors.values():
-                if 'IPAdapter' in type(proc).__name__:
+                if 'IPAdapter'in type(proc).__name__:
                     has_ipa = True
                     break
         except Exception:
@@ -1827,11 +2523,17 @@ class GenerationMixin:
 
         if has_ipa:
             try:
-                saved_scale = getattr(self.ai, '_ipa_scale', 0.7)
-                inpaint_pipe.set_ip_adapter_scale(0.0)
-                logger.info(f"  🔧 [ADetailer] 临时禁用 IPA (saved scale={saved_scale:.2f})")
+                # 多参考图时是 per-adapter 列表；单图时是标量（两者都存得下）
+                scales = getattr(self.ai, "_ipa_scales", None)
+                if scales:
+                    saved_scale = [float(s) for s in scales]
+                else:
+                    saved_scale = float(getattr(self.ai, '_ipa_scale', 0.7) or 0.7)
+                inpaint_pipe.set_ip_adapter_scale(
+                    self._ipa_zero_scale(inpaint_pipe))
+                logger.info(f"[ADetailer] 临时禁用 IPA (saved={saved_scale})")
             except Exception as e:
-                logger.warning(f"  ⚠️ [ADetailer] 禁用 IPA 失败: {e}")
+                logger.warning(f"[ADetailer] 禁用 IPA 失败: {e}")
 
         return saved_scale, has_ipa
 
@@ -1860,14 +2562,18 @@ class GenerationMixin:
             VRAMManager._set_vae_option(pipe, "tiling", True)
 
     def _adetailer_restore_ipa(self, saved_scale, has_ipa):
-        """ADetailer 跑完后恢复 IPA scale"""
+        """ADetailer 跑完后恢复 IPA scale（多参考图时是 per-adapter 列表）"""
         if not has_ipa or saved_scale is None:
             return
         try:
             self.ai.inpaint_pipe.set_ip_adapter_scale(saved_scale)
-            logger.info(f"  ✅ [ADetailer] IPA scale 已恢复 ({saved_scale:.2f})")
+            if isinstance(saved_scale, (list, tuple)):
+                _shown = "+".join(f"{float(s):.2f}"for s in saved_scale)
+            else:
+                _shown = f"{float(saved_scale):.2f}"
+            logger.info(f"[ADetailer] IPA scale 已恢复 ({_shown})")
         except Exception as e:
-            logger.warning(f"  ⚠️ [ADetailer] 恢复 IPA 失败: {e}")
+            logger.warning(f"[ADetailer] 恢复 IPA 失败: {e}")
 
     # ==================================================================
     #  中断生成
@@ -1875,8 +2581,11 @@ class GenerationMixin:
     def stop_generation(self):
         if getattr(self, 'is_generating', False):
             self.cancel_flag = True
+            queue = getattr(self, "_generation_queue", None)
+            if queue is not None:
+                queue.wake()
             self._bridge.status_signal.emit(
-                "🛑 正在打断，请等待当前步骤结束...", "#ff5555")
+                "正在打断，请等待当前步骤结束...", "#ff5555")
             if hasattr(self, 'btn_stop'):
                 self.btn_stop.setEnabled(False)
 
@@ -1946,11 +2655,11 @@ class GenerationMixin:
                         logger.info(f"[PREVIEW-6] live_preview_signal 已发送: {tmp_path}")
 
                 except Exception as e:
-                    logger.error(f"❌ [PREVIEW-SAVE-EXC] {e}")
+                    logger.error(f"[PREVIEW-SAVE-EXC] {e}")
 
         except Exception as e:
             import traceback
-            logger.error(f"❌ [PREVIEW-EXC] {e}")
+            logger.error(f"[PREVIEW-EXC] {e}")
             traceback.print_exc()
 
         return callback_kwargs
@@ -1980,7 +2689,7 @@ class GenerationMixin:
                   "model", "model_hash", "sampler", "scheduler", "steps",
                   "cfg", "seed", "size"):
             full.setdefault(k, meta.get("en_prompt", "unknown")
-                            if k == "prompt_final" else "unknown")
+                            if k == "prompt_final"else "unknown")
         try:
             host_meta = self  # 水印配置在 host.config 上
             if watermark:
@@ -1996,7 +2705,7 @@ class GenerationMixin:
             finally:
                 cfg.watermark_enabled = prev
         except Exception as e:
-            logger.warning(f"⚠️ 元数据写入失败，降级保存: {e}")
+            logger.warning(f"元数据写入失败，降级保存: {e}")
             try:
                 img.save(save_path)
             except Exception:
@@ -2039,7 +2748,7 @@ class GenerationMixin:
 
                     counter += 1
                     self._bridge.status_signal.emit(
-                        f"📊 XY 矩阵 {counter}/{total_cells}  "
+                        f"XY 矩阵 {counter}/{total_cells}  "
                         f"X={x_type}:{x_v}  Y={y_type}:{y_v}", "#00ffff")
 
                     kwargs = dict(base_kwargs)
@@ -2066,7 +2775,7 @@ class GenerationMixin:
                             eta = ((elapsed / done) * (_steps - done)
                                    if done > 0 else 0)
                             self._bridge.status_signal.emit(
-                                f"🎨 XY {counter}/{total_cells} · "
+                                f"XY {counter}/{total_cells} · "
                                 f"步 {done}/{_steps} · "
                                 f"剩余 {eta:.1f}s",
                                 "#89dceb"
@@ -2116,7 +2825,7 @@ class GenerationMixin:
             self._bridge.preview_signal.emit(save_path)
 
             self._bridge.status_signal.emit(
-                "✅ X/Y 矩阵生成完成！", "#00ff00")
+                "X/Y 矩阵生成完成！", "#00ff00")
 
         except InterruptedError:
             self._bridge.cancel_signal.emit()
@@ -2145,7 +2854,7 @@ class GenerationMixin:
                         self.ai.apply_multiple_loras(
                             [(lname, float(val))], sub_dir=sub_dir)
         except Exception as e:
-            logger.warning(f"⚠ 应用 XY 参数失败 ({axis_type}={val}): {e}")
+            logger.warning(f"应用 XY 参数失败 ({axis_type}={val}): {e}")
 
     def _compose_xy_grid(self, cell_images, x_vals, y_vals,
                          x_type, y_type):
@@ -2198,7 +2907,7 @@ class GenerationMixin:
     def generate_comic_strip(self, image_list):
         try:
             self._bridge.status_signal.emit(
-                "🖼 正在拼合分镜连环画...", "#ffd700")
+                "正在拼合分镜连环画...", "#ffd700")
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             _od = self._output_dir()
             os.makedirs(_od, exist_ok=True)
@@ -2209,7 +2918,7 @@ class GenerationMixin:
             logger.info(f"[EMIT-1432] preview_signal: {save_path}")
             self._bridge.preview_signal.emit(save_path)
             self._bridge.status_signal.emit(
-                "✅ 连环画拼合完成！", "#00ff00")
+                "连环画拼合完成！", "#00ff00")
         except Exception:
             self._bridge.error_signal.emit(traceback.format_exc())
 
@@ -2234,12 +2943,12 @@ class GenerationMixin:
         threading.Thread(target=self._upscale_task, daemon=True).start()
 
     def _resolve_device(self, raw: str) -> str:
-        """把下拉框里的任意格式('AUTO' / '自动 (auto)' / '显卡 (cuda)' 等)
-           解析为 torch 能识别的 'cuda' / 'mps' / 'cpu'。"""
+        """把下拉框里的任意格式('AUTO'/ '自动 (auto)'/ '显卡 (cuda)'等)
+           解析为 torch 能识别的 'cuda'/ 'mps'/ 'cpu'。"""
         import re
         s = (raw or "").lower()
 
-        # 抽出括号里的英文值,如 "自动 (auto)" → "auto"
+        # 抽出括号里的英文值,如 "自动 (auto)"→ "auto"
         m = re.search(r'\(([^)]+)\)', s)
         if m:
             s = m.group(1).strip()
@@ -2247,18 +2956,18 @@ class GenerationMixin:
         # 去掉多余空格/中文字符
         s = s.strip()
 
-        if "cuda" in s or "gpu" in s or "显卡" in s:
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        if "mps" in s or "苹果" in s:
+        if "cuda"in s or "gpu"in s or "显卡"in s:
+            return "cuda"if torch.cuda.is_available() else "cpu"
+        if "mps"in s or "苹果"in s:
             try:
                 if torch.backends.mps.is_available():
                     return "mps"
             except Exception:
                 pass
             return "cpu"
-        if "cpu" in s:
+        if "cpu"in s:
             return "cpu"
-        if "auto" in s or "自动" in s or s == "":
+        if "auto"in s or "自动"in s or s == "":
             if torch.cuda.is_available():
                 return "cuda"
             try:
@@ -2269,15 +2978,15 @@ class GenerationMixin:
             return "cpu"
 
         # 未知 → 安全兜底
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        return "cuda"if torch.cuda.is_available() else "cpu"
 
 
     def _upscale_task(self):
         try:
-            # ─────────── ★ 兜底:确保 img2img 管线已就绪 ───────────
+            # ───────────  兜底:确保 img2img 管线已就绪 ───────────
             if getattr(self.ai, "img2img_pipe", None) is None:
                 self._bridge.status_signal.emit(
-                    "⏳ 正在加载图生图管线(首次放大)...", "#fab387")
+                    "正在加载图生图管线(首次放大)...", "#fab387")
 
                 model_name = self._cbo(getattr(self, 'combo_model', None))
                 if not model_name or model_name in (
@@ -2303,7 +3012,7 @@ class GenerationMixin:
                     sig = inspect.signature(self.ai.load_model)
                     params = sig.parameters
                     call_kwargs = {}
-                    if "device" in params:
+                    if "device"in params:
                         call_kwargs["device"] = device
                     try:
                         self.ai.load_model(model_name, **call_kwargs)
@@ -2324,11 +3033,11 @@ class GenerationMixin:
                         "img2img 管线加载失败,请检查模型文件是否完整。")
 
                 self._bridge.status_signal.emit(
-                    "✅ 图生图管线已就绪,开始放大...", "#a6e3a1")
+                    "图生图管线已就绪,开始放大...", "#a6e3a1")
 
             # ─────────── 原有放大逻辑 ───────────
             self._bridge.status_signal.emit(
-                "🔍 正在进行高清放大...", "#ffd700")
+                "正在进行高清放大...", "#ffd700")
             src_path = self.last_generated_path
             img      = Image.open(src_path).convert("RGB")
 
@@ -2344,22 +3053,20 @@ class GenerationMixin:
 
             raw_prompt = self._txt(getattr(self, 'txt_prompt', None))
             raw_neg    = self._txt(getattr(self, 'txt_neg', None))
-            en_prompt  = (self.translator.translate(raw_prompt)
-                          if raw_prompt else "")
-            en_neg     = (self.translator.translate(raw_neg)
-                          if raw_neg else "")
+            en_prompt  = self._translate_or_raw(raw_prompt)
+            en_neg     = self._translate_or_raw(raw_neg)
 
             embed_kwargs = self.ai.encode_prompt(en_prompt, en_neg)
             pe = embed_kwargs.get('prompt_embeds') if embed_kwargs else None
             if pe is not None:
-                logger.info(f"✅ Compel 生效，embeds {tuple(pe.shape)}")
+                logger.info(f"Compel 生效，embeds {tuple(pe.shape)}")
             elif (getattr(self.ai, 'arch_profile', None) is not None
                   and getattr(self.ai.arch_profile, 'prompt_mode', None) != "compel"):
                 # 非 Compel 架构（raw/flux/anima），正常回退原始提示词，不告警
                 embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
             else:
                 logger.warning(
-                    "⚠️ Compel 未生效，回退为由管线内部编码提示词"
+                    "Compel 未生效，回退为由管线内部编码提示词"
                     "（超过 77 token 的部分会被截断）")
                 embed_kwargs = {"prompt": en_prompt, "negative_prompt": en_neg}
 
@@ -2379,7 +3086,7 @@ class GenerationMixin:
                     eta = ((elapsed / done) * (_steps - done)
                            if done > 0 else 0)
                     self._bridge.status_signal.emit(
-                        f"🔍 放大 {done}/{_steps} · "
+                        f"放大 {done}/{_steps} · "
                         f"已用 {elapsed:.1f}s · "
                         f"剩余 {eta:.1f}s",
                         "#ffd700"
@@ -2396,7 +3103,7 @@ class GenerationMixin:
             }
             kwargs.update(embed_kwargs)
 
-            # ⚠ 修复:用 img2img_pipe,不是 txt2img_pipe
+            #  修复:用 img2img_pipe,不是 txt2img_pipe
             with torch.inference_mode():
                 img = self.ai.img2img_pipe(**kwargs).images[0]
 
@@ -2424,7 +3131,7 @@ class GenerationMixin:
             self.last_generated_path = out_path
             self._bridge.preview_signal.emit(out_path)
             self._bridge.status_signal.emit(
-                "✅ 高清放大完成！", "#00ff00")
+                "高清放大完成！", "#00ff00")
 
         except InterruptedError:
             self._bridge.cancel_signal.emit()
@@ -2455,7 +3162,7 @@ class GenerationMixin:
         def _ask_on_main():
             from PyQt6.QtWidgets import QMessageBox
             msg = (
-                f"⚠️ 批量队列确认\n\n"
+                f"批量队列确认\n\n"
                 f"侦测到 {combo_count} 个 prompt 组合\n"
                 f"每个组合生成 {per_count} 张\n"
                 f"共计 {total} 张图\n\n"
@@ -2480,17 +3187,17 @@ class GenerationMixin:
 
     def _on_error_to_log(self, err_text: str):
         """错误信息打到日志框,不弹窗,便于复制"""
-        self.set_status("❌ 生成出错 — 详情见下方日志", "#f38ba8")
+        self.set_status("生成出错 — 详情见下方日志", "#f38ba8")
 
-        self.append_log("─" * 60, "#f38ba8")
-        self.append_log("❌ [错误堆栈]", "#f38ba8")
+        self.append_log("─"* 60, "#f38ba8")
+        self.append_log("[错误堆栈]", "#f38ba8")
         for line in err_text.rstrip().splitlines():
             safe = (line.replace("&", "&amp;")
                         .replace("<", "&lt;")
                         .replace(">", "&gt;")
                         .replace(" ", "&nbsp;"))
             self.append_log(safe, "#f38ba8")
-        self.append_log("─" * 60, "#f38ba8")
+        self.append_log("─"* 60, "#f38ba8")
 
         # 兜底恢复按钮状态
         try:

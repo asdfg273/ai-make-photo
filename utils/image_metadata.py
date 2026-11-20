@@ -66,15 +66,46 @@ def _save_cache():
         logger.debug(f"哈希缓存写入失败（忽略）: {e}")
 
 
+def _dir_sha256(path: str) -> str:
+    """目录型权重的"清单摘要"：按 (相对路径, 大小) 排序后取 sha256。
+
+    不读权重内容（25GB 读一遍要几分钟），只读文件名与大小 ——
+    换分片、改体积都会让摘要变化，够用于元数据里的「Model hash」。
+    """
+    try:
+        h = hashlib.sha256()
+        rows = []
+        for root, _dirs, files in os.walk(path):
+            for name in files:
+                fp = os.path.join(root, name)
+                try:
+                    rows.append((os.path.relpath(fp, path).replace("\\", "/"),
+                                 os.path.getsize(fp)))
+                except OSError:
+                    continue
+        for rel, size in sorted(rows):
+            h.update(f"{rel}:{size}\n".encode("utf-8"))
+        return "dir:" + h.hexdigest()[:32]
+    except Exception as e:
+        logger.debug(f"目录摘要计算失败 {path}: {e}")
+        return "unknown"
+
+
 def file_sha256(path: str, block: int = 1 << 20) -> str:
     """文件的 sha256（十六进制）。
 
     结果按 (路径, 大小, mtime) 缓存到磁盘 —— 底模动辄 2~7GB，
     每次出图都重算会让保存卡好几秒。同一文件只算一次。
     失败返回 "unknown"，绝不抛异常。
+
+    目录型权重（MOSS-Image / Anima 基座）不能按文件算：这里改用
+    "目录清单摘要" —— 对所有 (相对路径, 大小) 排序后取 sha256，
+    不读权重内容，1 秒内完成，且换了权重就会变。
     """
     if not path or not os.path.exists(path):
         return "unknown"
+    if os.path.isdir(path):
+        return _dir_sha256(path)
     try:
         st = os.stat(path)
         key = os.path.abspath(path)
@@ -141,6 +172,10 @@ def build_metadata(host, ctx, seed, *, image=None, kind="txt2img",
     put("negative_final", ctx.get("en_neg", ""))
     # 原始整段（多提示词时保留用户原输入）
     put("prompt_raw_all", ctx.get("raw_prompt", ""))
+    # 这张图的提示词到底有没有被翻译过（False 时 prompt_final 就是原文），
+    # 以及当时模型是否原生懂中文 —— 回查时能看出"为什么翻/没翻"
+    put("translate_prompt", ctx.get("translate_prompt", True))
+    put("zh_prompt_native", ctx.get("zh_prompt_native", False))
     put("prompt_mode", getattr(getattr(ai, "arch_profile", None),
                                "prompt_mode", "unknown"))
     put("clip_skip", getattr(cfg, "clip_skip", 0))
@@ -181,9 +216,32 @@ def build_metadata(host, ctx, seed, *, image=None, kind="txt2img",
     put("ip_adapter_enabled", use_ipa)
     put("ip_adapter_variant", ctx.get("ipa_variant", "none") if use_ipa else "none")
     put("ip_adapter_weight", _fmt(ctx.get("ipa_scale", 0.0)) if use_ipa else "none")
+    # ── 多参考图（主界面「🎭 多参考图」：一次装 N 个适配器）──
+    # 只写"这张图到底用了哪几张参考图"，否则过几天完全无法复现
+    # （"用了 IP-Adapter" 和 "用了 3 张、各什么角色什么强度"是两回事）。
+    _refs = ctx.get("ipa_ref_dicts") or []
+    if use_ipa and _refs:
+        put("ip_adapter_ref_count", len(_refs))
+        put("ip_adapter_refs", len(_refs))
+        put("ip_adapter_roles", ", ".join(
+            str(r.get("role", "")) for r in _refs if isinstance(r, dict)))
+        put("ip_adapter_weights", ", ".join(
+            _fmt(r.get("weight", 0.0)) for r in _refs if isinstance(r, dict)))
+        put("ip_adapter_ref_paths", " | ".join(
+            str(r.get("path", "")) for r in _refs if isinstance(r, dict)))
+        put("ip_adapter_summary", ctx.get("ipa_summary", "") or "")
+        # 逐条也留一份（ip_adapter_ref_1 / _2 …），方便脚本/工具直接数
+        for _i, _r in enumerate(_refs[:8], start=1):
+            if isinstance(_r, dict):
+                put(f"ip_adapter_ref_{_i}",
+                    f"{_r.get('role', '')}@{_fmt(_r.get('weight', 0.0))} "
+                    f"{_r.get('path', '')}".strip())
 
     # ── 采样 ────────────────────────────────────────────
     put("sampler", ctx.get("sampler_name", "unknown"))
+    # sigma 风格（Karras / Exponential / Beta / 默认）。以前只写采样器名，
+    # A1111 串里的 "Schedule type:" 永远是空，回填时风格也丢了。
+    put("scheduler", ctx.get("sampler_scheduler") or "默认")
     sched = None
     try:
         pipe = getattr(ai, "txt2img_pipe", None)
@@ -247,6 +305,28 @@ def build_metadata(host, ctx, seed, *, image=None, kind="txt2img",
         put("hires_upscaler", "off")
         put("hires_size", "off")
 
+    # ── 分块高清（Hires.fix 的分块实现）─────────────────
+    #  每块 img2img 再拼回整图，参数不记下来就完全没法复现。
+    tile_meta = ctx.get("tile_meta") or {}
+    put("hires_mode",
+        "tiled" if tile_meta.get("tiled_hires")
+        else ("latent" if hires_on else "off"))
+    if tile_meta:
+        put("tile_size", tile_meta.get("tile_size", ""))
+        put("tile_overlap", tile_meta.get("tile_overlap", ""))
+        put("tile_overlap_effective",
+            tile_meta.get("tile_overlap_effective", ""))
+        put("tile_count", tile_meta.get("tile_count", ""))
+        put("tile_blend", tile_meta.get("tile_blend", ""))
+        put("tile_method", tile_meta.get("tile_method", ""))
+        put("tile_seed", tile_meta.get("tile_seed", ""))
+        put("tile_denoise", tile_meta.get("tile_denoise", ""))
+        # 生效步数不足会把每块整块重画，所以 tiled 会把总步数抬上去，
+        # 这里两个都记下来，看 PNG 的人才知道实际跑了多少步。
+        put("tile_steps", tile_meta.get("tile_steps", ""))
+        put("tile_effective_steps",
+            tile_meta.get("tile_effective_steps", ""))
+
     # ── ADetailer ───────────────────────────────────────
     def _checked(name):
         try:
@@ -298,6 +378,14 @@ def build_metadata(host, ctx, seed, *, image=None, kind="txt2img",
     return meta
 
 
+def _a1111_schedule(style) -> str:
+    """把本项目的 sigma 风格翻成 A1111 的叫法。"""
+    text = str(style or "").strip()
+    if not text or text in ("默认", "默认（模型自带）"):
+        return "Automatic"
+    return text
+
+
 def a1111_parameters(meta: dict) -> str:
     """拼 A1111 兼容串，便于 WebUI / Civitai 读取。"""
     parts = [
@@ -305,7 +393,7 @@ def a1111_parameters(meta: dict) -> str:
         f"Negative prompt: {meta.get('negative_final') or meta.get('negative', '')}",
         (f"Steps: {meta.get('steps', '')}, "
          f"Sampler: {meta.get('sampler', '')}, "
-         f"Schedule type: {meta.get('scheduler', '')}, "
+         f"Schedule type: {_a1111_schedule(meta.get('scheduler'))}, "
          f"CFG scale: {meta.get('cfg', '')}, "
          f"Seed: {meta.get('seed', '')}, "
          f"Size: {meta.get('size', '')}, "

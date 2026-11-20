@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from PyQt6.QtCore import QEvent, QObject, pyqtSignal
+from PyQt6.QtCore import QEvent, QLibraryInfo, QObject, QTranslator, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QAbstractButton, QApplication, QComboBox, QDoubleSpinBox, QGroupBox,
@@ -28,6 +28,13 @@ SUPPORTED_LANGUAGES = {
 }
 LANGUAGE_ORDER = ("zh", "ja", "en")
 
+# PyQt6 自带的 qtbase 翻译仍保留这两条英文；集中补齐，支持三语言往返。
+# 格式：Qt 英文原文 -> (中文, 日本語)，快捷键标记予以保留。
+QT_STANDARD_TRANSLATIONS = {
+    "&Look in:": ("查找范围(&L)：", "参照位置(&L):"),
+    "Files of &type:": ("文件类型(&T)：", "ファイルの種類(&T):"),
+}
+
 
 class UiLanguageManager(QObject):
     """管理界面语言，并将静态文本就地翻译为中文/日文/英文。"""
@@ -38,6 +45,7 @@ class UiLanguageManager(QObject):
         super().__init__()
         self._language = "zh"
         self._app: Optional[QApplication] = None
+        self._qt_translator: Optional[QTranslator] = None
         self._reverse = {"en": {}, "ja": {}}
         for source, pair in TRANSLATIONS.items():
             for lang, translated in zip(("en", "ja"), pair):
@@ -58,21 +66,55 @@ class UiLanguageManager(QObject):
         if language == self._language:
             return False
         self._language = language
+        self._sync_qt_translator()
         logger.info(f"界面语言切换为: {SUPPORTED_LANGUAGES[language]}")
         self.language_changed.emit(language)
         self.translate_all_windows()
         return True
 
     def install(self, app: QApplication) -> None:
-        """监听新窗口 Show 事件，使后打开的对话框也使用当前语言。"""
+        """监听新窗口 Show 事件，并同步 Qt 自带控件的界面翻译。"""
         if app is None or self._app is app:
             return
         if self._app is not None:
             self._app.removeEventFilter(self)
         self._app = app
         app.installEventFilter(self)
+        self._sync_qt_translator()
+
+    def _sync_qt_translator(self) -> None:
+        """让 Qt 标准编辑菜单等系统文案与应用语言保持一致。"""
+        app = self._app or QApplication.instance()
+        if app is None:
+            return
+        if self._qt_translator is not None:
+            app.removeTranslator(self._qt_translator)
+            self._qt_translator.deleteLater()
+            self._qt_translator = None
+        if self._language == "en":
+            return
+
+        translator = QTranslator(self)
+        locale = "zh_CN" if self._language == "zh" else "ja"
+        directory = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+        if not translator.load(f"qtbase_{locale}", directory):
+            logger.warning("无法加载 Qt %s 界面翻译", SUPPORTED_LANGUAGES[self._language])
+            translator.deleteLater()
+            return
+        app.installTranslator(translator)
+        # 必须持有引用；局部变量被回收后，Qt 菜单会退回默认英文。
+        self._qt_translator = translator
 
     def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.LanguageChange
+                and isinstance(obj, QLabel)):
+            core = obj.text().strip()
+            if any(core == source or core in pair
+                   for source, pair in QT_STANDARD_TRANSLATIONS.items()):
+                # 消耗这两个漏译标签的事件，防止 QFileDialog 随后把它们
+                # 重新写成英文；其他标签仍由 Qt 原生翻译机制处理。
+                obj.setText(self._translated(obj.text()))
+                return True
         if (event.type() == QEvent.Type.Show
                 and isinstance(obj, QWidget) and obj.isWindow()):
             self.translate_widget_tree(obj)
@@ -121,8 +163,13 @@ class UiLanguageManager(QObject):
             return text
         leading = text[:len(text) - len(text.lstrip())]
         trailing = text[len(text.rstrip()):]
-        core = text.strip()
-        return leading + self.tr(core) + trailing
+        core = self.tr(text.strip())
+        for source, pair in QT_STANDARD_TRANSLATIONS.items():
+            if core == source or core in pair:
+                core = source if self._language == "en" else (
+                    pair[0] if self._language == "zh" else pair[1])
+                break
+        return leading + core + trailing
 
     def translate_widget_tree(self, root: QWidget) -> None:
         """就地翻译 root 及其子控件；未知文本和用户正文不做任何改动。"""

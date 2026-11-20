@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Optional
-from PyQt6.QtCore import QEvent 
+from PyQt6.QtCore import QEvent
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
@@ -14,36 +15,27 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QLineEdit, QTextEdit, QScrollArea, QFrame,
     QFileDialog, QMessageBox, QSlider, QGroupBox, QComboBox,
     QSizePolicy, QListWidget, QListWidgetItem, QCheckBox,
-    QDoubleSpinBox, QSpinBox,
+    QDoubleSpinBox, QSpinBox, QInputDialog,
 )
 from PyQt6.QtCore import QObject
 from utils.character_library import CharacterLibrary, Character
 from utils.scene_library import SceneLibrary
 from utils.batch_runner import BatchRunner
-from ui.i18n import ui_i18n
 logger = logging.getLogger(__name__)
 
-# ── 主题色兼容层：design_tokens 可能是 dict 也可能是对象 ──
-try:
-    from ui.design_tokens import COLORS as _TOKENS
-except Exception:
-    _TOKENS = {}
+# ── 主题色：统一从 theme.PALETTE 取（全项目单一令牌源）──
+from ui.theme import PALETTE as _P
+from ui.i18n import ui_i18n
 
-
-def C(key: str, fallback: str) -> str:
-    if isinstance(_TOKENS, dict):
-        return _TOKENS.get(key, fallback)
-    return getattr(_TOKENS, key, fallback) or fallback
-
-BG      = C("mantle",   "#181825")
-SURF0   = C("surface0", "#313244")
-SURF1   = C("surface1", "#45475a")
-TEXT    = C("text",     "#cdd6f4")
-SUB     = C("subtext0", "#a6adc8")
-BLUE    = C("blue",     "#89b4fa")
-GREEN   = C("green",    "#a6e3a1")
-RED     = C("red",      "#f38ba8")
-YELLOW  = C("yellow",   "#f9e2af")
+BG      = _P["bg"]
+SURF0   = _P["bg_panel"]
+SURF1   = _P["bg_soft"]
+TEXT    = _P["fg"]
+SUB     = _P["fg_mute"]
+BLUE    = _P["accent"]
+GREEN   = _P["success"]
+RED     = _P["danger"]
+YELLOW  = _P["warning"]
 
 CARD_W, CARD_H = 180, 292
 GRID_GAP = 12
@@ -70,9 +62,9 @@ class CharacterCard(QFrame):   # ← 改名：原本错写成 CharactersPage
     def _status_text(self) -> str:
         c = self.character
         bits = []
-        bits.append("🖼✓" if c.ref_image_path and Path(c.ref_image_path).exists() else "🖼✗")
-        bits.append("LoRA✓" if c.lora_path else "LoRA✗")
-        bits.append("CN✓" if c.controlnet_type else "CN✗")
+        bits.append("图 ✓" if c.ref_image_path and Path(c.ref_image_path).exists() else "图 —")
+        bits.append("LoRA ✓" if c.lora_path else "LoRA —")
+        bits.append("CN ✓" if c.controlnet_type else "CN —")
         return "  ".join(bits)
 
     def _tags_text(self) -> str:
@@ -144,8 +136,8 @@ class CharacterCard(QFrame):   # ← 改名：原本错写成 CharactersPage
         row = QHBoxLayout()
         row.setSpacing(4)
         row.addStretch()
-        btn_del = QPushButton("🗑")
-        btn_del.setFixedSize(32, 24)
+        btn_del = QPushButton("删除")
+        btn_del.setFixedSize(44, 24)
         btn_del.setToolTip("删除角色")
         btn_del.clicked.connect(lambda: self.delete_request.emit(self.character.uuid))
         row.addWidget(btn_del)
@@ -248,7 +240,7 @@ class CharacterEditor(QWidget):
         v.addWidget(g1)
 
         # —— 批量出图 ——
-        self.btn_batch = QPushButton("🎬 批量出图")
+        self.btn_batch = QPushButton("批量出图")
         self.btn_batch.setEnabled(False)
         self.btn_batch.clicked.connect(self.batch_request.emit)
         v.addWidget(self.btn_batch)
@@ -277,7 +269,7 @@ class CharacterEditor(QWidget):
         self.lbl_lora.setStyleSheet(f"color:{SUB};")
         self.lbl_lora.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         r.addWidget(self.lbl_lora, 1)
-        b = QPushButton("📁"); b.setFixedWidth(36)
+        b = QPushButton("浏览…"); b.setFixedWidth(52)
         b.clicked.connect(self.browse_lora); r.addWidget(b)
         l2.addLayout(r)
 
@@ -303,7 +295,7 @@ class CharacterEditor(QWidget):
         self.lbl_cn.setStyleSheet(f"color:{SUB};")
         self.lbl_cn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         r.addWidget(self.lbl_cn, 1)
-        b = QPushButton("📁"); b.setFixedWidth(36)
+        b = QPushButton("浏览…"); b.setFixedWidth(52)
         b.clicked.connect(self.browse_cn); r.addWidget(b)
         l4.addLayout(r)
 
@@ -498,7 +490,6 @@ class CharacterEditor(QWidget):
         self._refresh_ref_list()
         self.ref_list.setCurrentRow(row)
 
-
     def browse_lora(self):
         if self.char is None:
             self.new_character()
@@ -522,7 +513,7 @@ class CharacterEditor(QWidget):
 #  角色库页面（Page 协议）
 # ═══════════════════════════════════════════════════════════
 class CharactersPage(QObject): 
-    page_id, title, icon = "characters", "角色库", "🧍"
+    page_id, title, icon = "characters", "角色库", ""
 
     def __init__(self):
         super().__init__()
@@ -587,7 +578,7 @@ class CharactersPage(QObject):
         hb = QHBoxLayout(bar)
         hb.setContentsMargins(12, 8, 12, 8)
 
-        t = QLabel("🎭 角色库")
+        t = QLabel("角色库")
         t.setStyleSheet(f"color:{TEXT}; font-size:17px; font-weight:bold;")
         hb.addWidget(t)
         self.lbl_count = QLabel("0 个角色")
@@ -596,7 +587,7 @@ class CharactersPage(QObject):
         hb.addStretch()
 
         self.in_search = QLineEdit()
-        self.in_search.setPlaceholderText("🔍 搜索名称 / 提示词 / 标签")
+        self.in_search.setPlaceholderText("搜索名称 / 提示词 / 标签")
         self.in_search.setFixedWidth(220)
         self.in_search.textChanged.connect(lambda _: self.refresh())
         hb.addWidget(self.in_search)
@@ -631,9 +622,9 @@ class CharactersPage(QObject):
         srow = QHBoxLayout()
         srow.setContentsMargins(10, 6, 10, 10)
         srow.addStretch()
-        self.btn_save = QPushButton("💾 保存角色")
+        self.btn_save = QPushButton("保存角色")
         self.btn_save.setStyleSheet(
-            f"QPushButton {{ background:{GREEN}; color:#11111b; font-weight:bold;"
+            f"QPushButton {{ background:{GREEN}; color:{_P['bg']}; font-weight:bold;"
             f" padding:8px 18px; border-radius:4px; }}"
         )
         self.btn_save.clicked.connect(self.save_current)
@@ -666,10 +657,10 @@ class CharactersPage(QObject):
             f"color:{SUB}; background:{BG}; border-radius:4px; padding:8px; font-size:12px;")
         v.addWidget(self.lbl_sel)
 
-        self.btn_apply = QPushButton("🎨 应用到画布")
+        self.btn_apply = QPushButton("应用到画布")
         self.btn_apply.setEnabled(False)
         self.btn_apply.setStyleSheet(
-            f"QPushButton {{ background:{BLUE}; color:#11111b; font-weight:bold;"
+            f"QPushButton {{ background:{BLUE}; color:{_P['bg']}; font-weight:bold;"
             f" padding:9px 12px; border-radius:4px; }}"
             f"QPushButton:disabled {{ background:{SURF1}; color:{SUB}; }}"
         )
@@ -677,19 +668,19 @@ class CharactersPage(QObject):
         v.addWidget(self.btn_apply)
 
         r = QHBoxLayout()
-        b = QPushButton("➕ 新建")
+        b = QPushButton("新建")
         b.clicked.connect(self.new_character)
         r.addWidget(b)
-        bc = QPushButton("⧉ 复制")
+        bc = QPushButton("复制")
         bc.clicked.connect(self.duplicate_selected)
         r.addWidget(bc)
         v.addLayout(r)
 
         r = QHBoxLayout()
-        bi = QPushButton("📥 导入")
+        bi = QPushButton("导入")
         bi.clicked.connect(self.import_dialog)
         r.addWidget(bi)
-        be = QPushButton("📤 导出")
+        be = QPushButton("导出")
         be.clicked.connect(self.export_dialog)
         r.addWidget(be)
         v.addLayout(r)
@@ -731,7 +722,7 @@ class CharactersPage(QObject):
             self._render_character_count()
 
         if not chars:
-            ph = QLabel("暂无角色，点击右侧 [➕ 新建角色] 开始创建")
+            ph = QLabel("暂无角色，点击右侧「新建角色」开始创建")
             ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
             ph.setStyleSheet(f"color:{SUB}; font-size:13px; padding:48px;")
             self.grid.addWidget(ph, 0, 0, 1, 4)
@@ -804,9 +795,9 @@ class CharactersPage(QObject):
         if hasattr(self, "lbl_sel"):
             if char:
                 bits = [f"<b>{char.name}</b>"]
-                bits.append("参考图 ✅" if char.ref_image_path else "参考图 ❌")
-                bits.append("LoRA ✅" if char.lora_path else "LoRA ❌")
-                bits.append("ControlNet ✅" if char.controlnet_type else "ControlNet ❌")
+                bits.append("参考图 ✓" if char.ref_image_path else "参考图 —")
+                bits.append("LoRA ✓" if char.lora_path else "LoRA —")
+                bits.append("ControlNet ✓" if char.controlnet_type else "ControlNet —")
                 self.lbl_sel.setText("<br>".join(bits))
             else:
                 self.lbl_sel.setText("未选择角色")
@@ -859,8 +850,8 @@ class CharactersPage(QObject):
             self.refresh()
             self._select(dup.uuid)
             if self._shell is not None and hasattr(self._shell, "lbl_status"):
-                self._shell.lbl_status.setText(f"⧉ 已复制角色: {dup.name}")
-                self._shell.lbl_status.setStyleSheet(f"color:{GREEN}; font-size:13px;")
+                self._shell.lbl_status.setText(f"已复制角色: {dup.name}")
+                self._shell.lbl_status.setStyleSheet(f"color:{GREEN};")
 
     def save_current(self):
         char = self.editor.collect()
@@ -878,8 +869,8 @@ class CharactersPage(QObject):
             self._select(char.uuid)
             self.refresh()
             if self._shell is not None and hasattr(self._shell, "lbl_status"):
-                self._shell.lbl_status.setText(f"✅ 角色已保存: {char.name}")
-                self._shell.lbl_status.setStyleSheet(f"color:{GREEN}; font-size:13px;")
+                self._shell.lbl_status.setText(f"角色已保存: {char.name}")
+                self._shell.lbl_status.setStyleSheet(f"color:{GREEN};")
 
     def import_dialog(self):
         p, _ = QFileDialog.getOpenFileName(
@@ -952,6 +943,243 @@ class CharactersPage(QObject):
         self.refresh()
         self._select(char.uuid)
         _apply_character_to_shell(self._shell, char, self._ws)
+
+    def create_character_from_shell(self, shell, parent=None) -> Optional[Character]:
+        """「存为角色」入口：抓取 shell 当前参数 → 建卡入库 → 载入编辑器。
+
+        抓取内容：正/负提示词、LoRA（槽 1 文件+权重）、IP-Adapter 强度、
+        ControlNet（类型/强度/姿态图）、当前参考图、基础采样参数（gen_params）。
+        参考图会拷贝进库目录，避免引用画廊/临时路径后变孤儿卡。
+        """
+        parent = parent or self._ws
+        if shell is None:
+            QMessageBox.warning(parent, "提示", "主窗口不可用，无法读取参数")
+            return None
+        captured = capture_shell_params(shell)
+        if not captured["prompt"]:
+            QMessageBox.warning(parent, "提示", "正向提示词为空，无法建立角色卡")
+            return None
+
+        name, ok = QInputDialog.getText(
+            parent, "存为角色",
+            "角色名称（已按当前提示词预填，可修改）:",
+            text=_guess_character_name(captured["prompt"]))
+        if not ok or not name.strip():
+            return None
+        name = name.strip()
+
+        char = Character(name=name)
+        char.base_prompt = captured["prompt"]
+        char.negative_prompt = captured["negative"]
+        char.lora_path = captured["lora_path"]
+        char.lora_weight = captured["lora_weight"]
+        if captured["ip_adapter_scale"] is not None:
+            char.ip_adapter_scale = captured["ip_adapter_scale"]
+        char.controlnet_type = captured["controlnet_type"]
+        char.controlnet_scale = captured["controlnet_scale"]
+        char.gen_params = captured["gen_params"] or {}
+
+        src = captured["ref_image"]
+        if src:
+            try:
+                dest = self.library.library_dir / f"{char.uuid}_ref_0{Path(src).suffix}"
+                shutil.copy2(src, dest)
+                char.ref_image_path = str(dest)
+                char.reference_images = [{"path": str(dest), "pose": "front"}]
+            except Exception as e:
+                logger.warning(f"参考图拷贝进库失败，退回记录原路径: {e}")
+                char.ref_image_path = src
+                char.reference_images = [{"path": src, "pose": "front"}]
+
+        # 特征预提取（Qwen 不可用/失败时静默跳过，不影响建卡）
+        try:
+            shell._character_library = self.library
+            from utils.character_features import preextract_character_features
+            preextract_character_features(shell, char)
+        except Exception as e:
+            logger.warning(f"角色特征预提取跳过: {e}")
+
+        if not self.library.save_character(char):
+            QMessageBox.critical(parent, "错误", "角色保存失败，详见日志")
+            return None
+
+        self.refresh()
+        self._on_card_selected(char.uuid)
+
+        bits = ["提示词"]
+        if char.lora_path:
+            bits.append(f"LoRA {captured['lora_name']}:{char.lora_weight:.2f}")
+        if char.controlnet_type:
+            bits.append(f"ControlNet {char.controlnet_type}")
+        if char.gen_params:
+            bits.append("采样参数 " + str(len(char.gen_params)) + " 项")
+        if char.ref_image_path:
+            bits.append("参考图")
+
+        msg = f"已创建角色「{name}」（{'、'.join(bits)}）"
+        if hasattr(shell, "lbl_status"):
+            shell.lbl_status.setText(msg)
+            shell.lbl_status.setStyleSheet(f"color:{GREEN};")
+        logger.info(msg)
+        return char
+
+
+# ═══════════════════════════════════════════════════════════
+#  「存为角色」— 从当前界面参数一键建卡
+# ═══════════════════════════════════════════════════════════
+def _read_widget_value(w):
+    """容错读控件当前值（FloatSlider / SpinBox / Slider / ComboBox）。"""
+    if w is None:
+        return None
+    try:
+        if hasattr(w, "get_value"):
+            return w.get_value()
+        if hasattr(w, "value"):
+            return w.value()
+        if hasattr(w, "currentText"):
+            return w.currentText()
+    except Exception:
+        pass
+    return None
+
+
+def _read_scale_0_1(w):
+    """读 0–1 强度控件。
+
+    QSlider(0–200) 除以 100；FloatSlider / QDoubleSpinBox 原样读。
+    与 _apply_character_to_shell 的写入端（maximum()>2 时 ×100）互为逆操作。
+    """
+    v = _read_widget_value(w)
+    if v is None:
+        return None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    try:
+        from PyQt6.QtWidgets import QSlider
+        if isinstance(w, QSlider) and w.maximum() > 2:
+            return round(v / 100.0, 2)
+    except Exception:
+        pass
+    return round(v, 2)
+
+
+def _resolve_lora_path(lora_name: str) -> str:
+    """LoRA 下拉框显示名 → 磁盘全路径（与 app_events.load_lora_info 同一搜索顺序）。"""
+    import os
+    from utils import paths as _paths
+    if not lora_name or lora_name.strip() in ("", "无", "None"):
+        return ""
+    for sub in ("sdxl", "sd1.5", ""):
+        p = os.path.join(_paths.LORA_DIR, sub, lora_name)
+        if os.path.exists(p):
+            return p
+    return ""
+
+
+def _guess_character_name(prompt: str) -> str:
+    """从提示词猜默认角色名：取前 3 个有信息量的标签。"""
+    tokens = [t.strip() for t in (prompt or "").split(",") if t.strip()]
+    skip = {"1girl", "1boy", "solo", "masterpiece", "best_quality", "best quality",
+            "8k", "4k", "2k", "1k", "ultra_detailed", "highres", "absurdres"}
+    picked = [t for t in tokens if t.lower() not in skip]
+    name = ", ".join(picked[:3]) if picked else ", ".join(tokens[:2])
+    return name[:24] or "新角色"
+
+
+def capture_shell_params(shell) -> dict:
+    """从主窗口 shell 抓取建卡所需的全部当前参数。全部容错读取，缺控件不炸。"""
+    captured = {
+        "prompt": "",
+        "negative": "",
+        "lora_path": "",
+        "lora_name": "",
+        "lora_weight": 0.75,
+        "ip_adapter_scale": None,
+        "controlnet_type": "",
+        "controlnet_scale": 1.0,
+        "controlnet_image": "",
+        "ref_image": "",
+        "gen_params": {},
+    }
+    if shell is None:
+        return captured
+
+    try:
+        box = getattr(shell, "txt_prompt", None)
+        captured["prompt"] = box.toPlainText().strip() if box is not None else ""
+    except Exception:
+        pass
+    try:
+        box = getattr(shell, "txt_neg", None) or getattr(shell, "txt_negative", None)
+        captured["negative"] = box.toPlainText().strip() if box is not None else ""
+    except Exception:
+        pass
+
+    combos = getattr(shell, "combo_loras", None) or []
+    scales = getattr(shell, "scale_loras", None) or []
+    if combos:
+        name = combos[0].currentText().strip()
+        if name and name not in ("无", "None"):
+            captured["lora_name"] = name
+            captured["lora_path"] = _resolve_lora_path(name)
+            if scales:
+                w = _read_scale_0_1(scales[0])
+                if w is not None:
+                    captured["lora_weight"] = w
+
+    chk_ipa = getattr(shell, "chk_use_ipa", None)
+    try:
+        if chk_ipa is not None and chk_ipa.isChecked():
+            for attr in ("spin_ipa_scale", "slider_ipa_scale",
+                         "ipa_scale_slider", "ip_adapter_scale"):
+                v = _read_scale_0_1(getattr(shell, attr, None))
+                if v is not None:
+                    captured["ip_adapter_scale"] = v
+                    break
+    except Exception:
+        pass
+
+    chk_pose = getattr(shell, "chk_use_pose", None)
+    try:
+        if chk_pose is not None and chk_pose.isChecked():
+            cn_combo = getattr(shell, "combo_cn_type", None)
+            if cn_combo is not None:
+                captured["controlnet_type"] = cn_combo.currentText().strip()
+            v = _read_scale_0_1(getattr(shell, "scale_cn_strength", None)
+                                or getattr(shell, "scale_cn_weight", None)
+                                or getattr(shell, "controlnet_scale", None))
+            if v is not None:
+                captured["controlnet_scale"] = v
+            for attr in ("pose_image_path", "controlnet_image_path", "cn_image_path"):
+                p = getattr(shell, attr, None)
+                if p and isinstance(p, str) and Path(p).exists():
+                    captured["controlnet_image"] = p
+                    break
+    except Exception:
+        pass
+
+    for attr in ("ipa_image_path", "ref_image_path"):
+        p = getattr(shell, attr, None)
+        if p and isinstance(p, str) and Path(p).exists():
+            captured["ref_image"] = p
+            break
+
+    gen = captured["gen_params"]
+    for attr, key in (("combo_model", "model"), ("spin_steps", "steps"),
+                      ("combo_sampler", "sampler"), ("combo_res", "resolution"),
+                      ("spin_seed", "seed")):
+        v = _read_widget_value(getattr(shell, attr, None))
+        if v not in (None, ""):
+            gen[key] = v
+    cfg = _read_scale_0_1(getattr(shell, "scale_cfg", None))
+    if cfg is not None:
+        gen["cfg"] = cfg
+    strength = _read_scale_0_1(getattr(shell, "scale_strength", None))
+    if strength is not None:
+        gen["strength"] = strength
+    return captured
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1151,10 +1379,44 @@ def _apply_character_to_shell(shell, char: Character, parent):
         else:
             skipped.append("负面提示词（未找到控件）")
 
-    msg = f"✅ 已应用角色「{char.name}」"
+    # 建卡时记录的完整生成参数 → 还原基础采样参数（旧卡无此字段则整段跳过）
+    gen = getattr(char, "gen_params", None) or {}
+    if gen:
+        restored = []
+
+        def _restore_gen(key, attr):
+            w = getattr(shell, attr, None)
+            v = gen.get(key)
+            if w is None or v in (None, ""):
+                return False
+            try:
+                from PyQt6.QtWidgets import QComboBox, QSlider
+                if isinstance(w, QComboBox):
+                    idx = w.findText(str(v))
+                    if idx < 0:
+                        return False
+                    w.setCurrentIndex(idx)
+                    return True
+                if isinstance(w, QSlider) and w.maximum() > 2 and float(v) <= 2:
+                    w.setValue(int(round(float(v) * 100)))
+                    return True
+                w.setValue(v)
+                return True
+            except Exception:
+                return False
+
+        for key, attr in (("steps", "spin_steps"), ("cfg", "scale_cfg"),
+                          ("sampler", "combo_sampler"), ("resolution", "combo_res"),
+                          ("seed", "spin_seed"), ("strength", "scale_strength")):
+            if _restore_gen(key, attr):
+                restored.append(f"{key}={gen[key]}")
+        if restored:
+            applied.append("采样参数: " + " ".join(restored))
+
+    msg = f"已应用角色「{char.name}」"
     if hasattr(shell, "lbl_status"):
         shell.lbl_status.setText(msg)
-        shell.lbl_status.setStyleSheet(f"color:{GREEN}; font-size:13px;")
+        shell.lbl_status.setStyleSheet(f"color:{GREEN};")
 
     lines = [msg, ""]
     if applied:

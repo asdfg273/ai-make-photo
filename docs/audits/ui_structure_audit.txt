@@ -395,7 +395,9 @@
       host.lbl_preview      GpuCanvas 预览画布（:29-32）
       host.compare_canvas   CompareCanvas 修前/修后滑条（:36）
       host.preview_stack    QStackedWidget（0=普通预览, 1=对比）（:37-41）
-      host.btn_open_editor  "🖌️ 编辑"          :52  → open_gallery_to_edit   :68
+      host.btn_open_editor  "编辑"              :52  → open_editor             :71
+        （改: 直接编辑预览区当前这张图，不再先弹文件夹选图；
+          host.btn_edit 别名指向同一按钮 :55，生成中禁用才生效）
       host.btn_save_as      "💾 另存为"        :53  → save_current_image_as  :69
       host.btn_send_img2img "🔄 转图生图"      :54  → send_preview_to_img2img :70
       host.btn_send_inpaint "🎭 转重绘"        :55  → send_preview_to_inpaint :71
@@ -1426,3 +1428,3111 @@
 ================================================================================
   文档结束。本文件为本次审计的唯一新增文件，未修改任何其他文件。
 ================================================================================
+
+================================================================================
+10. 附：稳定性 / 可维护性复核（第二轮，逐条实测）
+================================================================================
+
+说明：第 9 章之前是"UI 改造体检"；本章是随后一轮针对**稳定性与可维护性**的复核。
+      用户给的清单里有 4 条经实测**不成立**（10.2），另有 3 条实际比清单说的更严重
+      （10.3）。标 [已修] 的表示这一轮已经改完并跑过回归，不要再做一遍。
+
+--------------------------------------------------------------------------------
+10.1 已修（本轮已改代码，回归通过）
+--------------------------------------------------------------------------------
+
+  [已修-1] SD3「假 inpaint」——能力表说谎，调用即 TypeError
+     现象：core/loaders/single_file.py 给 sd3 的 inpaint 槽位填的是
+           D.StableDiffusion3Pipeline（txt2img 类；diffusers 根本没有
+           StableDiffusion3InpaintPipeline），而 workflow/adapters.py 的
+           SD3Adapter 没声明 inpaint=None，AdapterCaps.inpaint 默认 True。
+           于是"能力表说支持 / 管线也建得起来"，但 __call__ 没有
+           image / mask_image / strength 参数，一用就崩。
+     修法：① SD3Adapter 显式 inpaint=False + 写明原因；
+           ② single_file.py 的 sd3 第三槽位改 None；
+           ③ core/loaders/base.py derive_from_components 遇到 None 跳过；
+           ④ utils/app_generation.py 的 inpaint 分支前置守卫，抛
+              "当前架构「sd3」没有 inpaint（局部重绘）管线，请改用
+                「区域提示词 / 局部重绘」或换 SD1.5 / SDXL"。
+     备注：core/arch/registry.py 的 sd3 早就写着 _TXT2IMG_ONLY，
+           与 adapters 的 SD3Adapter 是**两套说法**——adapters.py 自己的
+           docstring 就警告过这件事。现在两边一致了。
+
+  [已修-2] 元数据回填有 3 个实现，且同一个信号被连了 3 次
+     现象：read_png_info(只回填 prompt/neg)、_on_apply_gallery_params
+           (全字段，含 width/height)、apply_meta_params(不含 width/height)
+           三份；apply_params_signal 被 main.py:155、ui/ui_builder.py:1588、
+           ui/pages/gallery_page.py:58 三处连接 → 一次点击跑两个实现。
+     修法：apply_meta_params 成为唯一实现（含 width/height/cfg_scale 映射与
+           _safe_set_*），_on_apply_gallery_params 只做委托。
+     额外修：v6 的真实分辨率来自 combo_res（不是 spin_width/spin_height），
+           所以新增 _apply_meta_resolution()：把 832x1216 这类非预设尺寸
+           补进 combo_res 再选中，以前会被静默丢掉。
+
+  [已修-3] 15 处静默 `except Exception: pass` 全部改成带日志
+     位置：main.py:433/447、ui/param_snapshot.py:271/296、
+           ui/ui_builder.py:2301/2329、utils/app_generation.py（11 处，
+           含 FreeU 关闭、显存清理、临时文件清理、完成信号、IPA 卸载、
+           预览/画廊信号）。
+     说明：这类吞异常是"功能没反应也查不到原因"的根源，现在至少 logger.debug
+           有据可查。**重构时不要退回去。**
+
+  [已修-4] HF_ENDPOINT 硬编码
+     main.py 原来无条件 `os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"`，
+     海外用户反而更慢且不可改。改成 setdefault + 注释说明如何直连
+     （$env:HF_ENDPOINT="https://huggingface.co"）。
+
+  [已修-5] GPT-SoVITS 日语 TTS 整条链路不可用（报错在 gradio，看着与 TTS 无关）
+     现象：huggingface_hub 1.0 移除了 HfFolder，而 GPT-SoVITS 自带的旧版
+           gradio 4.44.1 在 gradio/oauth.py:13 仍 `from huggingface_hub import
+           HfFolder, whoami` → import GPT_SoVITS.inference_webui 直接
+           ImportError。tests/test_sovits_infer.py 与 test_sovits_wrap.py 因此
+           双双失败。
+     修法：新增 utils/hf_compat.py 的 ensure_hf_folder()（只在缺属性时补一个
+           只读写 token 文件的最小实现）；utils/sovits_tts.py 的 _load() 里
+           调用；测试里按文件路径加载（不能用 `from utils.hf_compat`，
+           因为 GPT-SoVITS 根目录在 sys.path[0]，它自带的 utils.py 会遮蔽
+           本项目的 utils 包）。
+     验证：test_sovits_import / test_sovits_infer / test_sovits_wrap 全部 exit 0，
+           并真的合成出 wav（32000Hz / 4.82s）。
+     提醒：**不要**为了修这个去降级 huggingface_hub —— transformers 5.x 与
+           diffusers 0.40 都依赖 1.x，降级会打断出图主链路。
+
+  [已修-6] 跑测试会改坏用户真实的 app_config.json
+     现象：closeEvent() 会把配置写回 AppConfig.config_file；更隐蔽的是被测的
+           宿主方法自己会 config.save()（例如 clear_ipa_refs / _toggle_ipa_refs），
+           所以"只把 AIDesktopApp() 与 close() 包进 isolated_config()"挡不住。
+           实测跑一轮测试后 use_hires 从 True 变成 False。
+     修法：tests/_bootstrap.py 新增 isolate_config_globally()（整进程把
+           config_file 指到 tests/_tmp_test_config_*.json，atexit 清理）；
+           给 6 个遗留测试（gallery_unified / real_startup / settings /
+           ui_contract / ui_i18n / v6_features）和 test_ipa_refs_ui 都接上。
+     验证：全量 23 个测试跑完，app_config.json 的 sha256 前后一致，use_hires 保持 True。
+
+  [已修-7] tests/artifacts/tmp/staged_preflight_node_i18n/ 是**整个项目的镜像副本**
+     8.58 MB / 161 个 .py，是一次性脚本 stage_preflight_node_i18n.py 的产物。
+     它把所有"代码统计"都污染了（hasattr 虚高、except Exception 翻倍）。
+     已连同一个 stage / check 脚本一起删除。
+     教训：验收脚本不要再把整仓库 copy 到 tests/ 下。
+
+--------------------------------------------------------------------------------
+10.2 清单里**不成立**的条目（别照着改）
+--------------------------------------------------------------------------------
+
+  ✗ "print() 有 334 处，含 🟢 step 2 / step 14 这类调试残留"
+    实测：生产代码（main.py + core/ utils/ ui/ workflow/ nodes/ photo/
+          photo_turn/ loaders/ postprocess/，共 131 个 .py / 52048 行）里
+          **只有 4 处 print**：core/model_diagnostics.py 3 处、
+          utils/app_generation.py 1 处，且没有 emoji。
+          所谓"🟢 step 2 / step 14"其实是 logger.debug：
+          utils/app_generation.py:284 step 14、:329 step 2、:644 step 9 ——
+          debug 级别默认不进日志文件，**写法本身是对的**。
+          334 这个数字是把 tests/、scripts/ 和那份镜像副本一起算进去了。
+
+  ✗ "根目录 结构.txt 里还列着已删的 core/downup.py、utils/translator.py、video/"
+    实测：根目录**没有** 结构.txt。只有 photo_turn/结构图.txt（6342B，只讲
+          photo_turn）。downup.py / translator.py 确实已删，而**任何 md/txt
+          都没有提到它们** → 没有过时文档需要同步。
+
+  ✗ "测试形同虚设，只有 7 个手写脚本"
+    实测：tests/ 下 23 个 test_*.py，本轮全量 **23/23 exit 0**（见 10.5）。
+
+  ✗ "'[0.0, 0.0]' 会被当成 falsy 导致判断失效"
+    实测：不成立。非空 list 恒为真值；`if not x` 对 [0.0, 0.0] 是 False。
+
+  部分不准：
+  ~ "closeEvent 只等视频/增强 2 秒，生成线程完全不等"
+    实测：main.py:607-613 等 _video_thread / _enhance_thread 各 2000ms；
+          main.py:615-631 **确实等生成线程**：弹窗确认 → cancel_flag = True →
+          t.join(timeout=10)，超时只 warning 然后进程退出（daemon 被杀）。
+          隐患真实存在，但机制不是"完全不等"。
+
+  ~ "配置有 5 份：app_config.json / .bak / config.json / weight.json / data/app_config.json"
+    实测：只有 3 个 —— app_config.json(1783B)、config.json(44B)、
+          weight.json(196B)。没有 .bak，没有 data/app_config.json。
+
+--------------------------------------------------------------------------------
+10.3 成立、而且比清单说的更严重（改造时优先处理）
+--------------------------------------------------------------------------------
+
+  ! hasattr(self, ...) 共 **264 处**（清单说 165）
+      分布：utils/app_events.py 56、main.py 44、ui/video_panel_mixin.py 40、
+            ui/ui_builder.py 32、utils/app_generation.py 31、ui/shell.py 28。
+      含义：任何控件改名都不会报错，只是静默失效 → 这正是重构最大的坑。
+      建议：重构时用 ui/contracts.py 的 6 张表 + check_contract 兜住，
+            新代码不要再写 hasattr。
+
+  ! except Exception 共 **728 处**（清单说 248，差 3 倍）
+      分布：utils/app_generation.py 76、utils/app_events.py 63、
+            core/model_manager.py 61、core/regional.py 36、main.py 31、
+            workflow/resource_store.py 31。
+      建议：本轮已把 15 处"静默 pass"改成有日志；剩下的大多至少记了日志，
+            但**没有区分"可恢复的错误"与"应该冒泡的错误"**，属于长期债。
+
+  ! 巨型文件（实测行数）
+      utils/app_generation.py  约 2700 行 / 70 个方法
+      ui/ui_builder.py          2650 行 / 64 个方法 / 160 个控件
+      utils/app_events.py       1733 行 / 66 个方法
+      → 这三个是重构的主要工作量来源，拆的时候先按"页面"切，不要按"控件"切。
+
+  ! 线程安全：ModelManager 单例 self.ai **全项目零锁保护**
+      22 处 threading.Thread(daemon=True)，全项目只有 11 处锁，且都不覆盖
+      ModelManager。生成线程、视频线程、TTS 线程、预览线程可能同时碰
+      同一个 pipeline。当前靠"按钮禁用 + cancel_flag"软约束。
+      建议：至少给 load_model / apply_loras / pipeline 访问加一把 RLock，
+           或明确约定"同一时刻只允许一个 generation owner"。
+
+  ! 同一个 Qt 信号被多处 connect（见 [已修-2]）
+      已修 apply_params_signal 这一例，但重构时要留意同类：
+      connect 是叠加的，连两次就执行两次，不会有任何提示。
+
+--------------------------------------------------------------------------------
+10.4 重构顺手做（低风险、明确可验证）
+--------------------------------------------------------------------------------
+
+  - ui/video_panel_mixin.py:210 有自认死分支：
+        # TODO: lbl_bg_music_path 控件从未创建,此分支永远为空
+    直接删，或真的把控件建出来。
+
+  - 控件别名两套名：ui_builder.py:80-81
+        self.btn_gen = self.btn_generate
+        self.btn_stop = self.btn_interrupt
+    真身在 ui/core_panel.py:340/347 与 ui/ui_builder.py:1841/1855。
+    旧名 btn_gen/btn_stop 仍被 utils/app_generation.py 的 124/125/224/225/
+    2084/2434 使用。重构时统一成一个名字，别把别名带进新代码。
+
+  - core/model_manager.py:326-331 的 os.walk 兜底：遍历整个仓库找模型，
+    在模型多的大目录下会明显拖慢启动。建议改成只查 models/ 下已知子目录。
+
+  - 两套能力真相：core/arch/registry.py（arch 级）与 workflow/adapters.py
+    （适配器级）。sd3 的 inpaint 已经同步，但**结构上仍可能再次分叉**。
+    建议让 registry 的 flags 由 capabilities_for() 生成（单一真相）。
+
+  - 主题四套色系并存 + ui/ 里 449 处硬编码 #rrggbb（第 8 章已详述）。
+
+  - tests/test_ui_contract.py 的期望噪音要保留说明：stderr 里那一串
+    "❌ 契约自检失败（关键）" 来自故意造的最小假宿主，判断标准只有退出码。
+
+--------------------------------------------------------------------------------
+10.5 回归基线（改完 UI 之后照这个跑）
+--------------------------------------------------------------------------------
+
+  命令（项目根目录，用 venv 解释器）：
+    venv\Scripts\python.exe tests\test_<name>.py
+
+  本轮全量实测：**23 / 23 exit 0**
+    test_builder_aux        test_loaders          test_real_startup
+    test_character_scene    test_lora_plumbing    test_regional
+    test_collapsible        test_nav              test_settings
+    test_gallery_unified    test_real_startup     test_sovits_import
+    test_inpaint_flow       test_ipa_multi        test_sovits_infer
+    test_ipa_plumbing       test_ipa_refs_ui      test_sovits_wrap
+    test_theme              test_translate        test_tts
+    test_ui_contract        test_ui_i18n          test_v6_features
+    （共 23 个；test_real_startup 只列一次）
+
+  另外两个静态闸门：
+    venv\Scripts\ruff.exe check --select F main.py core utils ui workflow nodes
+    venv\Scripts\python.exe _check_all.py      ← 语法 0 失败 / 疑似未定义名 0
+
+  **配置隔离是硬要求**：任何新建窗口的测试，开头必须有
+    import _bootstrap
+    _bootstrap.isolate_config_globally()
+  否则 closeEvent / config.save() 会覆盖用户真实 app_config.json
+  （本轮已实测到 use_hires 被改坏过一次，见 [已修-6]）。
+
+  判定口径：只看退出码。stderr 里的"信号未连接（宿主缺方法）"是
+  _wire 的正常降级告警，不代表失败（但也说明宿主方法确实缺）。
+
+================================================================================
+  第 10 章结束。以上数字均为本轮实测，可复现。
+================================================================================
+
+================================================================================
+  第 11 章  最近 6 个功能提交的运行时核查（新功能自身的安静失效）
+================================================================================
+本轮做的事：不看静态风格，只按"用户会真的按下按钮"的路径跑真实运行时探针
+（offscreen AIDesktopApp + 真控件 + 真配置文件隔离），核查最近 6 个功能提交：
+  795601e 推理加速与素材管理    75d4b58 角色多图一致性 + LoRA 触发词
+  ce7e97d 视频背景配乐          85cdedd 批量结果归档与精修
+  5d5d864 断点续跑              206a07e 逐张任务清单
+
+11.1 已修（3 个真 bug + 1 个真实控件名笔误 + 1 个新功能缺口）
+--------------------------------------------------------------------------------
+[1] 生成队列丢全部滑杆参数（最严重）
+    文件：utils/generation_queue_controller.py  _restore_generation_snapshot()
+    现象：排队第 2 张及以后，CFG / 重绘强度 / ControlNet 强度 / ADetailer 强度 /
+          手部融合 / 高清重绘幅度**全部沿用界面上当下那一组值**，且不报错。
+    根因：FloatSlider 是 QWidget 子类，**不是 QSlider**；它只有
+          float_value() / setValue(float)，没有 set_value()。还原分支只写了
+          `elif hasattr(widget, "set_value")` → 这些控件被静默跳过。
+    实测：快照里 CFG=9.5，排队任务派发后仍是 2.5；
+          不可恢复 = ['scale_cfg','scale_str','scale_strength','scale_cn_strength',
+                      'scale_adetailer_strength','scale_ad_hand_blend',
+                      'scale_hires_denoise']。
+    修法：在 QSlider 分支之后补
+          `elif hasattr(widget, "float_value") and hasattr(widget, "setValue"):
+               widget.setValue(float(value))`
+    修后实测：cfg=9.5 / hand=0.62 / hires=0.41 / steps=28 全部回到快照值。
+
+[2] 手部强度从来没进快照
+    文件：utils/generation_queue_controller.py  _SNAPSHOT_CONTROLS
+    真实控件名是 scale_ad_hand（ui/param_snapshot.py / ui/preset_manager.py 都用它），
+    列表里写的却是 scale_ad_hand_strength → getattr 拿不到，静默漏采。已改。
+
+[3] 区域提示词 / 多参考图不进快照（同类功能的另一半）
+    文件：同上，新增 _SNAPSHOT_CONFIG = ("use_regions","regions","use_ipa_refs","ipa_refs")
+    根因：这两样**存在 config 里**（regions() / ipa_refs() 都读 self.config），
+          不是宿主属性，所以 _SNAPSHOT_PATHS 那条路抓不到。
+    后果：排两张图、中途改了区域（或多参考图），先排的那张会被"后来的设置"重跑。
+    修法：快照多带一份 config 子字典，还原时写回 config 并调用
+          _refresh_regions_summary / _refresh_ipa_refs_summary 刷新摘要标签。
+    实测：capture 时 regions=[{name:A}] → 中途改成 B → restore 后回到 A，摘要刷新 1 次。
+
+[4] 步间缓存还原会删掉别人的 forward 补丁
+    文件：utils/step_cache.py  _StepCache.restore()
+    原实现：`del self.model.__dict__["forward"]`
+    问题：只在"没人比我们更早包装 forward"时才等价于还原。utils/video_gen.py:623
+          也给同一个 unet 打 forward 补丁 → `del` 会把**别人的补丁一起删掉**，
+          退回类上的原始 forward（关掉步间缓存后视频插帧等补丁悄悄失效）。
+    修法：直接 `self.model.forward = self._original`（栈式还原），
+          并把 _previous_input/_previous_output 置空释放那份整块 UNet 输出。
+
+[5] LoRA 触发词旁文件用相对路径
+    文件：utils/lora_triggers.py  _sidecar_candidates()
+    原实现：Path("loras") —— 只在"当前工作目录正好是项目根"时命中。
+    后果：换 CWD（测试、快捷方式启动、从别处调用）就**静默读不到触发词**：
+          LoRA 挂了，触发词没进提示词，出图只是"没效果"。
+    修法：新增 _lora_roots()，首选 utils.paths.LORA_DIR（绝对路径），相对路径仅作兜底。
+    实测：chdir 到 %TEMP% 后仍能读到 'mycharacter, red dress'。
+
+11.2 新增永久回归测试
+--------------------------------------------------------------------------------
+tests/test_generation_queue_snapshot.py（5 项，全 PASS，无头不跑 GPU）
+  1 test_float_sliders_are_restored            —— 锁 [1]
+  2 test_snapshot_control_names_are_real       —— 锁 [2]
+  3 test_config_backed_features_are_restored   —— 锁 [3]
+  4 test_step_cache_restore_keeps_outer_patch  —— 锁 [4]
+  5 test_lora_trigger_sidecar_uses_absolute_root —— 锁 [5]
+为什么必须存在：原有 test_inference_productivity 只测队列 FIFO/暂停/取消，
+**没有一个用例真的"存进快照再还原出来"**，所以上面 5 条全都没被发现。
+
+11.3 核查过但**不是** bug（避免重复怀疑）
+--------------------------------------------------------------------------------
+· utils/gallery_search.py 5 项全 PASS（词项匹配 / 余弦排序 / 向量落盘 /
+  索引损坏自愈 / search_text）
+· utils/batch_jobs.py 状态机全 PASS（begin / unfinished / running→pending 恢复）
+· utils/model_previews.py 2 项 PASS；utils/model_scanner.py 确实产出 "preview"
+· ui/settings_dialog.py accept() 确实保存全部 7 个新配置键并 cfg.save()
+· 13 个新模块全部有生产调用点，没有孤儿模块
+· config_manager 54 个键里只有 default_lora_weight 全项目仅出现 1 次（声明未用，无害）
+· ui/video_panel_mixin.py:210 的 lbl_bg_music_path 死分支已被 BGM 提交修掉
+· 「无 uuid 角色互相覆盖」实际不可达：Character.__post_init__ 会自动补 uuid4()
+· BatchResultView.send_requested 在 ui/scene_batch_dialog.py:200 有正确接线
+
+11.4 顺带清掉的污染
+--------------------------------------------------------------------------------
+tests/artifacts/tmp/inference_staged（10.0MB / 351 文件）与
+tests/artifacts/tmp/inference_staged_v2（8.7MB / 287 文件）
+是功能提交留下的**整项目镜像副本**，会让任何静态计数（hasattr / except Exception /
+文件行数）翻倍。git ls-files tests/artifacts = 0，已删除。
+（同类镜像副本在上一轮也清过一次：staged_preflight_node_i18n。）
+
+11.5 未验证 / 有意的边界
+--------------------------------------------------------------------------------
+· core/dit_optimization.py（FP8 / NVFP4 权重量化）本机没有 torchao/modelopt，
+  只能验到"缺依赖时报错清楚"；DiT 分块 offload 只对 flux/sd3 生效，而 Flux
+  引擎按要求未接通，没有权重可跑 → 这条路径本轮**未做实机验证**。
+· 队列 job 的 `finish_current("cancelled" if cancel_flag else "done")`：生成线程
+  内部抛异常而 cancel_flag 为 False 时，任务会被标成 "done"（实际失败）。
+  不影响后续派发（下一项照常开始），只是状态文案不准 → 已记录，未改。
+
+================================================================================
+  第 11 章结束。回归基线：tests/test_*.py 共 31 个，全部 exit=0。
+================================================================================
+
+================================================================================
+  第 12 章  主界面「编辑」按钮改为编辑预览区当前图
+================================================================================
+
+12.1 需求（用户原话）
+--------------------------------------------------------------------------------
+「主界面的编辑按钮目前是打开输出文件夹然后选择图片进行编辑，
+ 修改为打开现在正在预览的图片进行编辑」
+
+12.2 改动前 / 改动后
+--------------------------------------------------------------------------------
+改动前
+  ui/pages/txt2img_page.py:68   _wire(host, host.btn_open_editor.clicked,
+                                      "open_gallery_to_edit")
+  ui/ui_builder.py:1566         self.btn_open_editor.clicked.connect(
+                                      self.open_gallery_to_edit)
+  utils/app_events.py           open_gallery_to_edit()
+                                  → QFileDialog.getOpenFileName(...)  ← 先弹文件夹
+                                  → 自带一份 on_editor_saved（和 open_editor 重复）
+
+改动后
+  ui/pages/txt2img_page.py:71   _wire(host, host.btn_open_editor.clicked, "open_editor")
+  ui/ui_builder.py:1569         self.btn_open_editor.clicked.connect(self.open_editor)
+  utils/app_events.py:1057      open_editor()
+                                  → _preview_image_path(): current_generated_path
+                                    → last_generated_path（都校验 isfile + 转绝对路径）
+                                  → ProImageEditor(self, target_path, ...)
+                                  → 预览区没图时才 QMessageBox.question 问一句，
+                                    选「是」再走 open_gallery_to_edit 兜底
+
+关键点：「编辑预览区那张」这个实现**本来就有**（open_editor，画廊右键「载入预览/
+发送到编辑」和「发送到修脸」都在用），只是按钮没接它。所以这次不是新写编辑器，
+而是把入口接对、并把重复的保存回调收成一份。
+
+12.3 顺带修掉的两个真问题
+--------------------------------------------------------------------------------
+[1] open_gallery_to_edit 自带第二份 on_editor_saved（约 80 行），与 open_editor 的
+    回调各写一遍：改一处漏一处。现在它只做「选文件 → show_preview → open_editor」，
+    保存/遮罩/归档/关 ControlNet/刷新预览只有 open_editor 一份实现。
+    （同类事故上一轮已经发生过：元数据回填曾有三份实现，行为不一致。）
+[2] btn_edit 别名从未赋值（只在 6 处被 hasattr 检查：main.py:508、ui/shell.py:793、
+    ui/ui_builder.py:2356、utils/app_generation.py:126/226、utils/app_events.py:952），
+    所以「生成中禁用编辑按钮」全部落空。现在
+    ui/pages/txt2img_page.py:55 `host.btn_edit = host.btn_open_editor`、
+    ui/ui_builder.py:1568 `self.btn_edit = self.btn_open_editor`。
+
+12.4 无图时的行为（明确设计，不是退化）
+--------------------------------------------------------------------------------
+预览区一张图都没有时，不再静默无反应，也不再直接弹文件夹：
+  · 状态栏红字：预览区还没有图片：请先生成一张，或在画廊里选一张
+  · 再问一句「现在就从磁盘里选一张图片来编辑吗？」默认按钮是「否」
+  · 选「是」→ 老的文件选择流程（open_gallery_to_edit）仍然可用
+这样"编辑一张外部图片"的能力没丢，但默认路径不再打扰用户。
+
+12.5 新增永久回归 tests/test_edit_button.py（6 项，全部 PASS）
+--------------------------------------------------------------------------------
+  1 test_button_edits_preview_image_without_file_dialog
+      点按钮后 QFileDialog.getOpenFileName **一次都没被调用**，
+      且交给 ProImageEditor 的就是 current_generated_path 那张
+  2 test_falls_back_to_last_generated_path
+      current_generated_path 指向不存在的文件 → 退回 last_generated_path
+  3 test_no_preview_asks_first_and_respects_no
+      无图 → 确实问了；选「否」→ 既不打开编辑器也不弹文件对话框
+  4 test_no_preview_yes_opens_picker_and_edits_picked_file
+      选「是」→ 弹选择框，选完后编辑的就是刚选中的那张
+  5 test_btn_edit_alias_points_at_editor_button
+      btn_edit is btn_open_editor，且 setEnabled 对同一个按钮生效
+  6 test_txt2img_page_wires_open_editor
+      源码级锁死：txt2img_page 接 "open_editor"、不出现 "open_gallery_to_edit"；
+      ui_builder 里是 btn_open_editor.clicked.connect(self.open_editor)
+实现手法：替身 ProImageEditor 记录入参 + 替换 QFileDialog.getOpenFileName 计数，
+不需要真的起修图器窗口，也不需要 GPU。
+
+12.6 回归
+--------------------------------------------------------------------------------
+test_edit_button / test_ui_contract / test_nav / test_real_startup / test_v6_features /
+test_gallery_unified / test_settings / test_ui_i18n / test_inpaint_flow / test_ipa_refs_ui
+全部 exit=0；ruff --select F 干净；_check_all.py 196 文件 0 语法 / 0 未定义名。
+
+================================================================================
+  第 12 章结束。
+
+================================================================================
+  第 13 章  Anima（Cosmos DiT 2B）离线加载修复
+================================================================================
+
+13.1 用户报告的现象
+--------------------------------------------------------------------------------
+加载 Anima 底模（pornmasterAnima_preview3V1.safetensors，3.90GB / 685 keys）时：
+
+  core/model_manager.py:423  result = get_loader(det.arch_id).load(model_path, ctx)
+  core/loaders/anima.py:128  pipe = ModularPipeline.from_pretrained(self.BASE_REPO)
+      → HEAD https://hf-mirror.com/circlestone-labs/Anima-Base-v1.0-Diffusers/
+                                   resolve/main/modular_config.json
+      → '[Errno 11001] getaddrinfo failed'          （本机离线）
+      → 'Retrying in 1s [Retry 1/5]' ×5
+      → RuntimeError: Cannot send a request, as the client has been closed.
+  core/model_manager.py:520  raise Exception(f"模型加载失败: {str(e)}") from e
+      → '模型加载失败: Cannot send a request, as the client has been closed.'
+
+架构检测本身是成功的（anima | llm_adapter + adaln_modulation_cross_attn），
+所以问题不在"认不出模型"，而在"装配管线"这一步。
+
+13.2 根因
+--------------------------------------------------------------------------------
+1) Anima 的装配必须依赖一个**基座仓** circlestone-labs/Anima-Base-v1.0-Diffusers
+   —— 用户的检查点里只有 transformer + llm_adapter（685 键），
+   text_encoder(Qwen3-0.6B) / VAE / tokenizer / 调度器配置都不在里面。
+2) 旧代码用 **repo id** 调 from_pretrained，即使本机缓存里已经有整个仓，
+   huggingface_hub 仍会先发一次 HEAD 请求校验——离线时就卡在这里。
+3) 失败链被两层掩盖：huggingface_hub 重试 5 次后抛的是 httpx 的
+   "client has been closed"，与本机"没有网"这个真实原因毫无关系；
+   model_manager 再把它包成"模型加载失败: ..."，用户完全看不出该做什么。
+
+13.3 修复（core/loaders/anima.py）
+--------------------------------------------------------------------------------
+新增基座定位，**优先本地、永不联网下载**（符合"模型由用户自行下载"的项目约定）：
+
+  _BASE_SEARCH   = ("anima", "puton")        # models/anima/ 与投递箱
+  _BASE_MARKERS  = ("modular_model_index.json", "modular_config.json",
+                    "model_index.json")
+  _REQUIRED_PARTS = ("transformer", "text_encoder", "vae")
+
+  resolve_base() 的判定顺序：
+    1) local_base_dirs()    models/anima、models/puton 的根目录与下一层子目录，
+                            只要出现 marker 就认（**目录名任意**，不要求与仓名相同）
+    2) cached_base_dirs()   snapshot_download(BASE_REPO, local_files_only=True)
+                            —— 这一层加了 local_files_only，永远不碰网络
+    3) 都没有               raise RuntimeError(_missing_base_message(...))
+
+  build() 改成：
+    base_dir, how = self.resolve_base()
+    pipe = ModularPipeline.from_pretrained(base_dir)      # 本地路径，不可能联网
+    pipe.load_components(dtype=torch.bfloat16)            # 失败时补一句"目录不完整/版本不兼容"
+
+_missing_base_message() 会明确写出：缺的是哪个仓、约 1.7GB、
+需要哪些组件（Qwen3-0.6B 文本编码器 / LLM adapter / Qwen VAE）、
+目录里应该看到 modular_model_index.json、
+两个可选放置路径（models/anima/<基座目录>/ 或 models/puton/）、
+以及"缓存下到一半（0 字节）要删掉重新准备"。
+
+13.4 顺带修掉的崩溃点（utils/vram_manager.py）
+--------------------------------------------------------------------------------
+diffusers.ModularPipeline 的 MRO 是
+  (ModularPipeline, ConfigMixin, PushToHubMixin, object)
+——它**没有** enable_model_cpu_offload / enable_sequential_cpu_offload /
+enable_xformers_memory_efficient_attention（已实测 getattr 全为 None）。
+而 apply_optimal_strategy 的 4 个分支里是直接 call 的，只要走到就 AttributeError。
+而"主干体积测不到 → 走预算兜底"那条分支的注释里写的正是 Anima 这种管线，
+等于把地雷留在了它自己预期会走的路上。
+
+修法：加 has_offload 能力判断 + 内部 helper _offload_else_full(level, label, tiling)，
+不能 offload 时退回 pipe.to("cuda:0") 并如实警告：
+  "⚠️ <类名> 不支持 CPU offload（如 ModularPipeline），只能全 GPU 运行；
+     显存不够时请降低分辨率或步数"
+
+AnimaLoader.apply_vram() 也补了一行显存实况日志（空闲/总量），
+剩余 < 1500MB 时提示可能要高降分辨率——因为这个架构没有 offload 兜底。
+
+13.5 连带改动
+--------------------------------------------------------------------------------
+· core/arch/signatures.py:_detect_dir —— 目录检测的候选文件加上 modular_config.json，
+  且 _class_name 不认识但文件是 modular_config.json 时判为 anima（本项目只有 Anima 用
+  模块化管线）。这样用户把基座目录丢进 models/puton/ 也能被投递箱归位到 models/anima/。
+· utils/model_inbox.py 的 README（磁盘上 models/puton/README.txt）补了 Anima 基座说明。
+· core/model_manager.py:367 的提示语 "需额外下载:" → "需额外准备（自行下载）:"。
+· README.md 模型放置表补两行：Anima 底模 → models/anima/*.safetensors；
+  Anima 基座组件 → models/anima/<基座目录>/。
+
+13.6 真机离线验证（HF_HUB_OFFLINE=1 + TRANSFORMERS_OFFLINE=1）
+--------------------------------------------------------------------------------
+用用户本机真实检查点与真实缓存跑通全链路（脚本 _tmp_anima_real.py，已删除）：
+
+  detect              anima | keys=685 | 3.90GB
+  resolve_base        OK  0.354s → ...\hub\models--circlestone-labs--
+                      Anima-Base-v1.0-Diffusers\snapshots\073c3a9db359...  [HF 缓存]
+  _base_problem       ''（组件齐全）
+  build               OK 48.7s → AnimaModularPipeline
+  apply_vram          OK
+  显存（装完之后）     free=1567MB / total=8123MB
+  出图                512×512，4 步，197.8s（约 30s/步），peak_alloc=5709MB
+  产物                output/_tmp_anima_offline.png（389KB，肉眼确认是猫，不是噪声）
+
+缓存实况：该快照里 transformer(3.91GB)/text_encoder(1.19GB)/text_conditioner(269MB)/
+vae(254MB)/tokenizer 都是指向 blobs 的符号链接；modular_config.json 在 .no_exist
+（HF 上 404），真正的入口文件是 modular_model_index.json（2414B）。
+**判空必须用 os.path.getsize**：PowerShell 的 Length 对符号链接显示 0。
+
+13.7 回归
+--------------------------------------------------------------------------------
+新增 tests/test_anima_base_resolution.py（10 项，永久回归）：
+  test_local_base_dir_in_models_anima / test_local_base_dir_in_puton /
+  test_base_dir_name_is_irrelevant / test_cached_snapshot_is_used_offline /
+  test_missing_base_raises_actionable_message / test_missing_base_never_touches_network /
+  test_incomplete_cache_reports_zero_byte_components /
+  test_detect_dir_recognizes_modular_config /
+  test_inbox_moves_base_dir_into_models_anima /
+  test_vram_strategy_survives_pipe_without_offload_hooks
+
+13.8 未验证的边界
+--------------------------------------------------------------------------------
+· 1024×1024 未实测：该架构不能 offload，权重常驻 5.6GB，512² 装完后只剩 1.5GB，
+  1024² 大概率显存不够；建议先按 512~768 用。
+· 30s/步 是否受同时运行的其它进程影响未隔离测试。
+· Anima 目前 registry 里关掉了 LoRA / compel（supports_lora=False,
+  supports_compel=False），本次也没有动它。
+· 基座组件 1.7GB 仍需用户自行准备；**没有**加扩展市场下载入口
+  （是否加属于产品政策，等确认）。
+
+================================================================================
+  第 13 章结束
+
+
+================================================================================
+  第 14 章  分块高清（Anima 大图拼接）接入主界面
+================================================================================
+
+14.1 缘起
+--------------------------------------------------------------------------------
+第 13 章把 Anima 接通后留下一个硬限制：ModularPipeline 不支持 CPU offload，
+权重只能常驻（约 5.6GB），512x512 装完只剩 1567MB。
+直接跑 1024x1024 实测峰值 9679MB > 8123MB 物理上限 —— 换句话说
+「8GB 卡想用 Anima 出大图」在原来的代码里是无解的。
+
+同一时间发现另一个问题：主界面「高清方式」下拉（自动 / 整图(快) / 分块(省显存)）
+是个**死选项** —— 它只被 workflow/builder.py 读，主界面生成流程里从来没看过它，
+用户选「分块」也照样整图 img2img。
+
+于是本章做两件事：
+  ① 把 utils/tiled_hires.py 做成可复用的"放大→逐块 img2img→羽化拼回"实现；
+  ② 让主界面阶段 2 真正按「高清方式」分流，并给 Anima 打开 img2img。
+
+14.2 架构决策：一条管线同时当 txt2img / img2img
+--------------------------------------------------------------------------------
+diffusers 的 SD15/SDXL 是"两个独立管线对象"（txt2img 一个、img2img 一个）；
+而 Anima 的 ModularPipeline 是**同一个对象按传入参数选 block**：
+给了 image= 就走 vae_encoder → denoise → decode，没给就走 text_encoder → denoise → decode。
+
+因此 core/loaders/anima.py 的 build() 结尾改成：
+    return LoadResult(txt2img=pipe, img2img=pipe)
+把同一个对象挂在两个属性上。安全性已核查：
+  · core/model_manager.py:532-553 的 _iter_unets / _iter_pipes 用 id() 去重，
+    不会因为两个属性指向同一对象而重复 offload / 重复量化；
+  · 其余遍历点（1689-1700 IPA 组件同步、1955-1975 / 2083-2096 set_ip_adapter_scale、
+    2111-2122 备份 image_processor）都有 `p is None` / `p is primary` 守卫或 getattr 判空；
+  · load_model 只是两条赋值：self.txt2img_pipe = result.txt2img;
+    self.img2img_pipe = result.img2img。
+
+**必须记住的一点**：ModularPipeline 的 img2img 一定要显式传 height/width，
+不传就按默认 1024 出图 —— 分块时会变成"每块都在跑整图"。
+
+14.3 utils/tiled_hires.py（新模块）
+--------------------------------------------------------------------------------
+关键常量：
+  SIZE_MULTIPLE = 8           # VAE 的 8 倍下采样，尺寸/块都要对齐
+  MIN_EFFECTIVE_STEPS = 3     # 每块至少 3 步"生效"去噪
+  TILED_MAX_DENOISE = 0.25    # 分块重绘的强度上限
+  AUTO_TILED_BELOW_GB = 10.0  # 「自动」档在 <10GB 时选分块
+
+函数：
+  resolve_mode(ui_text="", cfg_mode="auto", total_gb=None) -> "latent" | "tiled"
+  plan_target_size(image, scale, multiple=8) -> (w, h)      # 向下对齐
+  boost_steps(steps, denoise, minimum=MIN_EFFECTIVE_STEPS) -> int
+  tiled_img2img(pipe, image, *, scale=2.0, tile_size=640, overlap=64,
+                denoise=0.35, call_kwargs=None, seed=-1, method="Lanczos",
+                blend="羽化", color_correct=True, feather=None, max_tiles=0,
+                max_denoise=TILED_MAX_DENOISE, pass_size=None, device="cuda",
+                call=None, progress=None, status=None, check_cancel=None,
+                after_tile=None) -> (PIL.Image, meta)
+
+meta 键与工作流节点保持一致（tile_scale / tile_method / tile_blend /
+tile_denoise / tile_denoise_requested / tile_color_correct / tile_seed /
+tile_size / tile_overlap / tile_overlap_effective / tile_feather /
+tile_count / tile_total / tile_steps / tile_effective_steps /
+tile_pass_size / tiled_hires / hires_size / tile_no_tiling）。
+
+三个"改之前先看一眼"的坑：
+  1. 每块必须显式传 height/width（Anima）；但 SD1.5/SDXL 的 img2img
+     __call__ 里根本没有这两个参数（尺寸跟着 image 走），硬传会 TypeError。
+     → pass_size=None 时按 inspect.signature 自动判断（有 **kwargs 也算吃），
+       Anima 由调用方强制 True。
+  2. 强度上限 0.25：每块只看到自己那 640px，强度一大就各画各的。
+  3. 生效步数 = steps x strength（向下取整）。4 步 x 0.35 只有 1 步生效，
+     等于"一步定生死"，必然整块重画 → 抬总步数到 3/strength，强度本身不动。
+
+14.4 主界面接入（utils/app_generation.py）
+--------------------------------------------------------------------------------
+阶段 2 的分支顺序（约 1770-1800 行）：
+  use_ipa 有值            → 跳过（IP-Adapter 与 hi-res 一起跑会互相打架）
+  img2img_pipe 为 None    → 跳过
+  _hires_mode_resolved() == "tiled" → 走分块（状态栏"阶段 2: Hires.fix（分块）"）
+  prompt_mode 不是 compel/None     → 跳过，并提示"如需放大请把「高清方式」设为「分块」"
+  否则                    → 原整图 img2img 路径不变
+
+新增两个 GenerationMixin 方法（插在 _gt_safe_pipe_call 之前）：
+  _hires_mode_resolved() -> str
+      读 combo_hires_mode 的文本 + config.hires_mode + 显卡总显存，交给
+      tiled_hires.resolve_mode 决定，返回 "latent" / "tiled"。
+      「自动」档还会再收一道：只有**不能 CPU offload** 的管线才真的走分块
+      （判据是 `hasattr(i2i, "enable_model_cpu_offload")`）。原因是
+      SD1.5/SDXL 能 offload，1024² 整图重绘更快、也没有块边界；而 Anima 的
+      ModularPipeline 权重必须常驻，整图 2x 实测峰值 9679MB 直接爆。
+      要 2K/4K 请手动选「分块 (省显存)」—— 这条也写进了界面提示与 README。
+  _gt_tiled_hires(image, ctx, kwargs) -> PIL.Image
+      scale 取 combo_hires_scale、denoise 取 scale_hires_denoise、
+      method 取 combo_hires_upscaler、tile_size/overlap 取 config；
+      调用器是 call=lambda **kw: self._gt_safe_pipe_call(i2i, ctx, **kw)，
+      所以 modular 架构的 PipelineState 转换仍然只有一份实现。
+      取消 → 保留基础图；其它异常 → 记日志 + 状态栏说明 + 保留基础图（不交出残图）。
+
+元数据口径（重要）：**不要**把 ctx['width']/['height'] 改成放大后的尺寸。
+build_metadata 用 ctx 写 width/height/size，hires_size 由倍率推算 —— 改了会变成二次放大。
+分块信息单独放 ctx['tile_meta']，由 build_metadata 写 hires_mode=tiled 与 tile_* 字段。
+
+14.5 真机数据（RTX 5060 Laptop 8GB / Anima 3.90GB 微调 / 离线）
+--------------------------------------------------------------------------------
+第一次跑（denoise=0.35、4 步、640 块、4 块）：
+  4 块 640²、实际重叠 (256,256)、14.8s、输出 1024² ——
+  **一只猫被画成三只，块边界显形**。不是管线问题，是"每块重新构图"。
+
+单块矩阵（640² 裁剪块，MAD 相对输入裁剪）：
+  steps=4  strength=0.35  → 生效 1 步  4.6s  MAD 23.74
+  steps=8  strength=0.20  → 生效 2 步  2.1s  MAD  9.11
+  steps=12 strength=0.20  → 生效 2 步  2.7s  MAD  9.33
+  steps=20 strength=0.15  → 生效 3 步  2.7s  MAD  6.72
+  steps=20 strength=0.25  → 生效 5 步  3.8s  MAD  9.99
+
+整图 4 块拼接的参数矩阵（steps=20，接缝度量 = 相邻行均值突变的最大值，中位数 0.32）：
+  denoise 0.35 / feather 24   21.3s  接缝 1.03  MAD 11.24
+  denoise 0.35 / feather 128  19.9s  接缝 1.07  MAD 11.79
+  denoise 0.15 / feather 24   11.2s  接缝 0.91  MAD  5.73
+  denoise 0.15 / feather 128  11.2s  接缝 0.94  MAD  5.97
+  denoise 0.15 / feather 96   11.1s  接缝 0.94  MAD  5.88
+→ 羽化宽度对"接缝突变"几乎没有影响（0.91~1.07 对中位 0.32，属轻微），
+  **决定成败的是 denoise**；所以采用"强度上限 0.25 + 步数补足"，
+  而不是靠加宽羽化。
+
+最终（上限 + 步数补足 + 羽化按实际重叠）：
+  12.7s、1024×1024、4 块、实际重叠 (256,256)、羽化 128px、
+  强度 0.25（请求 0.35 被夹住）、12 步（生效 3 步）、
+  画面为**单猫、构图与底图一致**。
+  产物：output/_tmp_anima_tiled_flow.png → docs/images/anima_tiled_1024.png
+
+  残留：平色区（墙面/窗框）在块边界处仍有极轻微的色调差异，
+  数值上接缝突变 ≤0.9（中位 0.33），肉眼需要盯着看才察觉。
+
+14.6 节点侧同步修掉的三处（nodes/tile_nodes.py）
+--------------------------------------------------------------------------------
+  a) **提示词被丢掉**：节点无条件 `kw.pop("prompt")` / `kw.pop("negative_prompt")`。
+     只有 Compel 架构才有 prompt_embeds；Anima / SD3 这类非 Compel 架构
+     只会用文本提示词 → 等于空提示词重绘。
+     改成：仅当 kw 里确实有 prompt_embeds 时才丢文本形式。
+  b) **每块尺寸没传**：原来无条件 pop 掉 width/height（对 SD1.5/SDXL 是对的，
+     对 Anima 是灾难）。改成与主界面同一套判断：arch == "anima" 或管线签名
+     接受 width/height 才传，否则不传。
+  c) **强度/步数**：与主界面共用 tiled_hires.TILED_MAX_DENOISE / boost_steps，
+     不再各写一套；meta 增加 tile_denoise_requested / tile_steps /
+     tile_feather / tile_pass_size。
+  另外融合的羽化宽度改按 tiling.effective_overlap(plan) 算（原来用请求 overlap/2）。
+
+14.7 回归（tests/test_tiled_hires.py，16 项，永久）
+--------------------------------------------------------------------------------
+  test_resolve_mode_maps_ui_and_config
+  test_plan_target_size_aligns_to_multiple_of_8
+  test_every_tile_gets_explicit_size_and_returns_full_canvas
+  test_tile_seeds_are_reproducible_and_increment
+  test_zero_denoise_is_pure_upscale_without_diffusion
+  test_max_tiles_guard_raises_before_running
+  test_progress_and_status_callbacks_fire
+  test_effective_steps_are_boosted_but_strength_is_kept
+  test_denoise_above_cap_is_clamped_and_reported
+  test_pipe_without_width_height_does_not_get_them
+  test_flow_lets_sd15_autodetect_and_forces_size_for_anima
+  test_anima_loader_shares_one_pipeline_for_txt2img_and_img2img
+  test_stage2_hires_uses_hires_mode_dropdown
+  test_anima_capabilities_do_not_claim_inpaint
+  test_node_tiled_hires_feeds_prompt_and_size_for_anima
+  test_node_tiled_hires_keeps_sd15_contract
+
+夹具 RecordingPipe 记录每次调用的 kwargs 并按请求尺寸返回图；
+Sd15LikePipe 用显式签名（无 width/height、无 **kwargs）复现 SD1.5 的接口契约。
+
+14.8 能力表修正（顺手）
+--------------------------------------------------------------------------------
+workflow/adapters.py 的 AnimaAdapter 增加 inpaint=False。
+理由：AnimaAutoBlocks 的 block 输入只有 latents / 尺寸 / strength，没有 mask；
+它和 SD3 是同一类问题（能力表说支持、跑到调用才 TypeError）。
+要做局部重绘请走「区域提示词 / 局部重绘」的蒙版贴回路线。
+
+14.9 未验证的边界（诚实清单）
+--------------------------------------------------------------------------------
+· SD1.5 / SDXL 的分块高清**没有真机跑过**：本机只有 Anima 与 SDXL 底模，
+  而 8GB 上 SDXL 整图 img2img 本身就吃紧，本次只验证了接口契约
+  （假管线 + 源码级断言：不传 width/height、走 prompt_embeds）。
+· Anima 直接生成 1024² 仍会换页（9679MB），分块是唯一可行路径；
+  如需 2048² 请叠 TiledUpscale（纯放大，不吃显存）。
+· 分块耗时与块数线性相关，与最终尺寸无关；块尺寸受 tiling.adaptive_tile_size
+  与显存策略夹取，实际值会记在元数据 tile_size 里。
+· 接缝的"主观感受"没有客观阈值：数值上 ≤0.9 的突变在平色区依然可见，
+  想进一步消除只能降 denoise（0.15 时 MAD 5.7、几乎察觉不到）。
+· 队列（GenerationQueue）里的任务走的是同一套阶段 2，因此也受益；
+  但没有专门为队列补"分块 + 快照还原"组合的测试。
+
+================================================================================
+  第 14 章结束
+
+
+================================================================================
+第 15 章  分块高清的强度可调 + 无 inpaint 架构的修脸（用户真机反馈）
+================================================================================
+
+15.1 用户反馈原文要点
+--------------------------------------------------------------------------------
+真机日志（768x1024 → 1536x2048，12 块，507.08s，峰值 8.41GB）后面跟了两句话：
+
+  「但是实际上，画面中有脸部与手，同时分块重绘强度我自己是没有得选的，提示多余」
+
+拆成两个独立缺陷：
+
+  A. 日志里两次 `⚠️ inpaint_pipe 不存在，跳过 ADetailer`（脸部 0.00s、手部 0.11s）
+     —— 画面里明明有脸有手，但 Anima 没有 inpaint 管线，修脸/修手整段静默失效。
+  B. `scale_hires_denoise` 默认就是 0.45，被强制夹到 0.25，用户既没有选择权，
+     又要吃一条几百字的警告。
+
+15.2 A：ADetailer 的图生图兜底
+--------------------------------------------------------------------------------
+改之前 utils/image_processor.py 的 process_adetailer 只有一条路：
+
+    if inpaint_pipe is None:
+        logger.warning("⚠️ inpaint_pipe 不存在，跳过 ADetailer")
+        return base_image
+
+Anima 的 LoadResult 只有一条 ModularPipeline（txt2img=img2img），inpaint 恒为
+None，所以这段永远走到，脸和手从来没被修过。
+
+现在：
+
+    pipe = inpaint_pipe; no_mask = False
+    if pipe is None:
+        if img2img_pipe is None: 明确警告 + 返回原图
+        else: pipe = img2img_pipe; no_mask = True（日志："改用「裁切 + 图生图」局部精修"）
+
+细节：
+  - `if not no_mask: call_kwargs["mask_image"] = local_mask_render`
+    —— img2img 管线不认识 mask_image，传了只是噪音。
+  - 尺寸按 16 对齐（见 15.4）。
+  - Anima 的参数必须搬进 PipelineState 才能调，所以新增
+    `GenerationMixin._adetailer_call(pipe, call_kwargs)`：
+        ctx = {en_prompts:[prompt], en_neg, steps, cfg}
+        kw  = self._adapt_call(pipe, ctx, kw)     # modular → PipelineState
+        return pipe(**kw)                          # 非 modular 原样直连
+    **不走 Compel**，SD1.5/SDXL 的现有行为一位不变。
+  - 调用点：`apply_adetailer`、阶段 3（脸部）、阶段 4（手部）都传
+    `img2img_pipe=getattr(self.ai,"img2img_pipe",None)` 与 `call=self._adetailer_call`。
+  - core/regional.py 与 nodes/detailer_nodes.py 同样带上 i2i 兜底，
+    node 的 UnsupportedFeatureError 文案改成"既没有 inpaint 也没有 img2img"。
+  - 能力表：AnimaAdapter.adetailer=True、inpaint 仍为 False。
+    能力表说什么，代码就必须真能做到。
+
+15.3 B：分块强度做成真控件
+--------------------------------------------------------------------------------
+新增（主界面「Hires.fix」分组）：
+
+  host.scale_hires_tile_denoise = FloatSlider(0.10, 0.35, 0.05, 0.25)
+
+  - tooltip 写明 0.15 = 几乎只加细节 / 0.25 = 推荐 / 0.35 = 明显重画；
+  - 与整图的「降噪强度」（scale_hires_denoise，0.1~0.9）互不影响；
+  - config 新增 `hires_tile_denoise: float = 0.25`；
+  - 存储链路全部补上：main.py closeEvent 保存、apply_config_to_ui 回填、
+    ui/param_snapshot.py（读/写/别名表）、
+    utils/generation_queue_controller.py `_SNAPSHOT_CONTROLS`、
+    ui/contracts.py GLOBAL_WIDGETS（含之前漏登记的 combo_hires_mode /
+    combo_hires_order）。
+  - `_gt_tiled_hires` 读它，读不到才退回 scale_hires_denoise（老界面兼容）。
+
+夹取提示同时降级：
+
+  改前 logger.warning("⚠️ 分块重绘强度 0.45 超过上限 0.25，已按 0.25 执行 —— ...
+        强度太大会各画各的（实测 0.35 就出现主体重复与可见块边界）。确实要重构图
+        请先整图重绘，或显式传 max_denoise=1.0")   ← 用户无法采纳的长篇劝告
+  改后 logger.info("🧩 分块强度 0.45 按上限 0.25 执行（分块时每块只看到局部，
+        强度太大各块会各画各的）")                  ← 只说结果
+
+15.4 顺手挖出来的真 bug：16 对齐
+--------------------------------------------------------------------------------
+真机第一次跑兜底就崩：
+
+  RuntimeError: shape '[1, 17, 1, 1, 32, 2, 29, 2]' is invalid for input of size 64192
+  Error in block: (denoise, AnimaAutoCoreDenoiseStep) → transformer.patch_embed
+
+二分定位（_tmp_probe_sizes.py / _tmp_probe_bisect.py）：
+  256x256 OK / 480x512 OK / 512x512 OK / 448x512 OK / 464x496 OK / 320x352 OK
+  472x512 FAIL（= crop 180..340 宽 160 + padding → 472）
+
+472 / 8 = 59（整除），472 / 16 = 29.5（不整除）。
+Anima = VAE /8 × transformer patch /2 → **必须 16 的倍数**。
+旧代码 round_to_8 只保证 8 的倍数，所以 472 会让 patch 网格 29.5 → 29，
+patch_embed 的 reshape 元素数对不上。
+
+修法：
+  - utils/image_processor.py：`round_to_n(value, n)`；需要显式尺寸的管线
+    （有 width/height 形参或 blocks.sub_blocks）按 16 对齐，其余仍按 8；
+  - utils/tiled_hires.py：`SIZE_MULTIPLE = 8 → 16`（对 SD/SDXL 同样安全，
+    因为 16 是 8 的倍数），分块铺排的裁剪尺寸随之全部 16 对齐。
+
+15.5 关于"接受 width/height"的判定（两次修正）
+--------------------------------------------------------------------------------
+第一版 `_accepts_kw` 用"有 **kwargs 就算接受"→ 恒 True（diffusers 管线全都带
+**kwargs），SD1.5 也会被塞 width/height（那是**静默忽略**，不会 TypeError，
+但当时的注释写错了）。
+
+实测签名（inspect.signature(pipe.__call__).parameters）：
+
+  StableDiffusionImg2ImgPipeline      width=False height=False strength=True
+  StableDiffusionXLImg2ImgPipeline    width=False height=False strength=True
+  StableDiffusionInpaintPipeline      width=True  height=True
+  StableDiffusionXLInpaintPipeline    width=True  height=True
+  StableDiffusion3Img2ImgPipeline     width=True  height=True
+  AnimaModularPipeline                width/height 走 **kwargs → PipelineState
+
+定稿判定 `_needs_explicit_size(pipe)`：
+  - 有 blocks.sub_blocks（ModularPipeline）→ True
+  - 显式声明了 width 且 height → True（SD3 img2img / inpaint）
+  - 除 **kwargs 外没有任何显式形参（纯包装器）→ True
+  - 其余（SD1.5/SDXL img2img）→ False
+
+15.6 回归
+--------------------------------------------------------------------------------
+tests/test_tiled_hires.py：19 项（新增 test_tile_denoise_has_its_own_control、
+test_clamp_message_is_short_info；test_plan_target_size_aligns_to_multiple_of_16
+增加"每块裁剪尺寸必须能被 16 整除"）
+tests/test_adetailer_fallback.py：7 项（新增文件）
+
+真机验证（Anima 3.90GB + docs/images/anima_offline_verify.png 512²）：
+  - _adetailer_call(480x512) → 返回 (480, 512)，无 RuntimeError；
+  - process_adetailer 全链路：检测框 (180,150,340,320) → 裁切 → 480x512
+    图生图精修 → 贴回 512x512，日志
+    `🩹 [ADetailer] 局部图生图精修 1/1，尺寸 480x512`，产物
+    output/_tmp_adetailer_spy.png 中框内毛发明显变锐、框外像素不变。
+
+15.7 未验证 / 已知边界
+--------------------------------------------------------------------------------
+- SD1.5/SDXL 的「图生图兜底」只有单元测试（假管线）覆盖，没有真机跑过：
+  这两个架构本来就有 inpaint，实际不会走进兜底分支。
+- ADetailer 兜底仍是"裁切块整体重绘后贴回"，不是真正的蒙版 inpaint，
+  框内会被整体轻改；强度建议 0.25~0.35。
+- 分块强度上限 0.35 是实测经验的边界（0.35 已出现主体重复与块边界），
+  不是理论值。
+
+
+================================================================================
+第十六章 二轮审计（9 条）核实与修复 —— 静默失效、两套实现、工程卫生
+================================================================================
+
+背景：用户在真机跑完 Anima 分块出图后给了 9 条清单。本章按"是否成立"分类，
+每条都写清证据（文件:行号 / 实测数字），不成立的也留下否证。
+
+16.1 属实并已修
+--------------------------------------------------------------------------------
+[1] `_gt_setup_ipa` 有一条永远不可达的分支
+    现象：勾了 IP-Adapter 却没选参考图时，那条"已开启但未加载参考图，自动跳过"
+    永远不会弹，静默跳过。
+    根因：`utils/app_generation.py` 原 924 行先 `use_ipa = False`，928 行的
+    `if use_ipa and not ipa_image_path:` 判断恒假。
+    修法：合并成一段 —— 先 status_signal + logger.info 说明，再 `use_ipa = False`；
+    删掉恒假分支。
+
+[3] 步间缓存对 SD1.5/SD2/SD3 从未启用（用户看到的"开了也不省"）
+    用户原描述是"CFG>1 时每步调两次 UNet，缓存比较的是上一步 cond 与本步
+    uncond"——**这个机制描述不成立**：
+      · diffusers `pipeline_stable_diffusion.py:1037`、
+        `pipeline_stable_diffusion_xl.py:1202` 都是
+        `latent_model_input = torch.cat([latents] * 2)`，
+        **每步只调一次 UNet（batch=2）**，不存在 cond/uncond 两次调用。
+    但结论方向是对的，真正的原因在别处：`configure_step_cache` 按架构白名单
+    选模块（flux→transformer / sdxl→unet），其余架构直接 `return None`。
+    于是勾了「启用步间缓存」、界面显示已启用，实际一步没省。
+    修法：改为按模块存在性选 `transformer` 或 `unet`（`arch_id` 只用于日志）；
+    `step_cache_stats()` 增加 `calls` / `reuse_ratio` / `threshold`；
+    新增 `step_cache_summary()`，每张图成功后写日志，命中 0 步时明说
+    "把阈值调大才会真的省时间"；设置页勾选框文案改为
+    「启用步间缓存（任何 UNet / DiT 架构）」。
+    实测（SD1.5 `models/sd15/meinamix_v12Final.safetensors`，512x512，CFG 6.0）：
+      8 步相邻距离  [0.0585, 0.0347, 0.1061, 0.1661, 0.2808, 0.3336, 0.4112, 0.6793]
+      20 步相邻距离 多在 0.10 附近（末步 0.1849）
+      th=0.18 → computed 9 / reused 12 / calls 21（57%），20 步 1.3s
+      th=0.60 → computed 7 / reused 14（67%），20 步 1.1s
+      不开缓存 → 20 步 2.8s
+    结论：命中率不低（57~67%），此前是"根本没为这些架构启用"。
+
+[4] 队列跑完把界面停在最后一张的参数上
+    现象：排 3 张跑完，界面是最后一张的参数，排队前自己调好的设置没了，无提示。
+    根因：`_generation_queue_tick` 每派发一张都要把任务快照写进控件
+    （否则第二张会串味），但队列结束时没有回滚。
+    修法：`utils/generation_queue_controller.py` 新增三个状态
+    `_generation_queue_user_snapshot` / `_generation_queue_last_snapshot` /
+    `_generation_queue_dispatched`；首次派发前存一份用户界面；队列排空时调
+    `_restore_queue_resting_state()`。
+    守卫：仅当"当前界面 == 最后一张任务快照"（说明没人动过）才还原，否则
+    `logger.info("队列结束：界面在排队期间被改动过，保留用户当前设置")`；
+    只有 `dispatched >= 2` 才提示"队列已完成，界面已恢复到排队前的设置"。
+    回归：`tests/test_generation_queue_snapshot.py` 新增
+    `test_queue_restores_ui_after_drain`、`test_queue_keeps_user_edits_made_while_running`。
+
+[5] `audio_output` 契约告警是离屏环境下的假警报
+    核实：`ui/pages/video_page.py:625-631` 真的建了 `host.audio_output =
+    QAudioOutput()`，只有 `QT_QPA_PLATFORM=offscreen` 时故意设 None
+    （否则音频后端会挂住进程）。所以 `check_contract` 返回
+    `minor=['audio_output']` 只在测试/离屏出现，真机没有。
+    修法：`ui/contracts.py` 新增 `OFFSCREEN_OPTIONAL = {"audio_output"}` 与
+    `_is_expected_none(name, host)`（仅当离屏且 `host._audio_output_skipped`）；
+    `video_page` 在 offscreen 分支置该标记。
+
+[6] 测试产物被版本库跟踪，每跑一次测试就脏工作树
+    核实：`tests/smoke_photo_turn.py:19` 写 `tests/_smoke_out.png`，该文件在
+    `git ls-files` 里。
+    修法：产物与临时源图改写到 `tests/artifacts/tmp/`（自动 makedirs，该目录
+    已在 .gitignore 里）；`git rm --cached tests/_smoke_out.png` 并删盘。
+
+[7] 运行时清单未忽略
+    核实：`data/jobs.json` 未被跟踪也没被忽略 → 每次批量跑完都是未跟踪变更。
+    修法：`.gitignore` 增加「运行时产物」段：`data/jobs.json`、`data/jobs_*.json`
+    （另把两个测试产物名也列上，防回退）。
+    `data/characters/` **故意没加** —— 那是用户资产，该不该入库由用户决定。
+
+[8] 参考图 enabled 过滤散在 4 处、两种写法
+    位置：`utils/app_events.py` 的 `_enabled_ipa_refs()` / `:803` / `:831`、
+    `nodes/sampling_nodes.py:145`。dict 用 `.get("enabled", True)`、对象用
+    `getattr(r, "enabled", True)`，漏一处就是"界面上停用了，生成时仍生效"。
+    修法：`core/ipa_multi.py` 新增 `enabled_refs(refs)`（两种形态通吃，缺省算
+    启用），上述 4 处全部改调它。
+
+16.2 不成立
+--------------------------------------------------------------------------------
+[2] "`_ipa_signature` 不含文件内容，覆盖同名参考图会用到旧 CLIP 特征"
+    不成立。`core/model_manager.py:1878` 的
+    `_ipa_signature = tuple(zip(variants, names, sources, subs))` 只用来决定
+    **是否重装适配器权重**（`load_ip_adapter`）；参考图内容在每次采样时以
+    `ip_adapter_image` 现算 CLIP 特征，与这个签名无关。把 ref.jpg 覆盖成另一张
+    再生成，用的是新图特征。
+
+[5] 的"控件不存在"部分
+    不成立：控件存在，只是离屏下故意为 None（见 16.1[5]）。
+
+16.3 结构风险：多参考图 IPA 两套构造逻辑（已收敛）
+--------------------------------------------------------------------------------
+[9] 主界面与工作流各写一遍七步流程，只靠注释"做法完全一致"
+    这是本仓库反复踩的同一个坑（output_dir 解析、LoRA 读数、超分签名都因
+    "两处各写一遍"漂移过）。处理：把七步里的纯逻辑抽进 `core/ipa_multi.py`：
+
+      · `enabled_refs(refs)`                 唯一的启用过滤
+      · `collect_reference_images(refs, *, on_missing, log)`
+            权重≤0 留 1x1 占位图（长度必须等于适配器数量）、读不到时
+            degrade（权重归零）或 raise（节点语义）、按掩码抠图
+      · `plan_masks(refs, w, h, *, pipe, device)`  按管线真实 vae_scale 算掩码
+      · `vae_scale_factor(pipe)`             唯一实现
+            （`nodes/sampling_nodes._vae_scale_factor` 改成转发）
+
+    两条路剩下的差异只有失败策略（主界面 degrade / 工作流 raise）与提示措辞，
+    这两点本来就该不同。护栏：`tests/test_ipa_multi.py` 的
+    `test_both_paths_use_the_shared_helpers` 做源码级断言 —— 任一文件里再出现
+    `Image.new("RGB", (1, 1)` 或自己写 enabled 过滤就失败。
+
+16.4 回归
+--------------------------------------------------------------------------------
+- 全量测试 35/35 exit=0（1032.4s）；`test_ipa_multi` 27/27、
+  `test_generation_queue_snapshot` 7/7、`test_inference_productivity` 通过。
+- `ruff check --select F` 对改动文件 All checks passed。
+- `_check_all.py`：语法失败 0 / 疑似未定义名 0。
+- 跑完全套 `app_config.json` 未被改动（`use_hires=true`、`hires_denoise=0.45`）。
+
+16.5 未修 / 待用户决定
+--------------------------------------------------------------------------------
+- `data/characters/` 是否入库（角色库是用户资产，风险判断交给用户）。
+- 真机测试期间出现两次 `0xC0000005` 原生崩溃：一次在加载 SDXL 6.7GB 单文件
+  （当时仅剩 2177 MiB 空闲显存），另一次在 transformers 加载 Qwen2-VL-2B
+  （`Loading weights: 30%`）。后者在最小脚本（无 UI、无项目代码）里可复现；
+  同一份代码随后又正常加载成功（`low_cpu_mem_usage=True/False` 都过，2.21B 参数），
+  说明是瞬态而非稳定代码缺陷。归因未确定，记录在此以免下次误判成"新引入的 bug"。
+
+
+第十七章  IPA 单实现落地 + 步间缓存做成可验证的
+================================================================================
+
+17.1 用户指令（原文）
+--------------------------------------------------------------------------------
+一段：「把 IPA 的两条路径合成一条。_apply_ipa_refs_if_enabled 和
+apply_ip_adapter_kwargs 七步重复。抽成 core/ipa_multi.build_runtime(refs, ai) ->
+{images, scales, masks, info}，两条路各留一个薄封装。这个项目在 output_dir、
+LoRA/CN/IPA 读数、超分签名上都已经因为 "两套实现" 吃过亏，这次别等它漂移。」
+
+另一段：「第三优先：把 "加速" 做成可验证的。step_cache 在 CFG 下无效 —— 要么按
+uncond/cond 分别缓存（调用序号奇偶做 key），要么只对 guidance≤1 的架构
+（Flux/Anima）启用；UI 上直接显示 reused/computed 命中率，"已启用但 0 命中"
+要能一眼看出来。」
+
+17.2 为什么必须真的合成一条
+--------------------------------------------------------------------------------
+这两条路原本各自完整地做了七件事：
+  1. 过滤 enabled 参考图        5. 装 N 个适配器（load_ip_adapter）
+  2. 读已装档位                6. 算尺度（scales）
+  3. 角色 → 档位降级            7. 算注意力掩码（vae_scale_factor / 尺寸）
+  4. 收参考图（含 1x1 占位）
+
+上一轮只把 1/2/4/7 抽成了共享助手（enabled_refs / collect_reference_images /
+plan_masks / vae_scale_factor），3 与 5 仍然各写一遍 —— 也就是说"降级规则"
+和"安装参数"还是两份实现，正是用户警告的那种半收敛状态。
+
+17.3 build_runtime 设计
+--------------------------------------------------------------------------------
+core/ipa_multi.py 新增：
+
+  @dataclass IpaRuntime:
+      ok, refs, images, scales, masks, variants, encoder_dir,
+      placeholders, warnings, error, plan, info
+      summary()   -> describe_references(self.refs)
+      to_dict()
+
+  runtime_info(rt) -> dict      产出 9 个元数据键
+      ip_adapter_enabled / refs / roles / variants / weights /
+      masked_refs / placeholder_refs / encoder / summary
+
+  build_runtime(refs, ai, *, width=0, height=0, pipe=None,
+                on_missing="degrade", log=None, device="cpu") -> IpaRuntime
+
+流程：coerce_references(enabled_refs(refs)) → ai.installed_ipa_variants() →
+resolve_role_plan(items, installed)（降级写进 rt.warnings）→
+collect_reference_images(resolved, on_missing=..., log=...) →
+ai.prepare_ip_adapter_multi(resolved) → 填 scales/variants/encoder_dir →
+width and height 时 plan_masks(...) → rt.info = runtime_info(rt) → rt.ok = True。
+
+失败策略由调用方选择，这正是两个入口的真实差异：
+  · 主界面 on_missing="degrade"：缺图就把该图权重置 0（不中断整次生成），
+    装适配器失败则 rt.error 非空、调用方打日志返回 None；
+  · 工作流 on_missing="raise"：端口连线本来就该有图，直接抛可读的中文错误。
+
+17.4 step_cache 在 CFG 下的真实形态
+--------------------------------------------------------------------------------
+两种管线前向次数不同（diffusers 0.40 实测）：
+  · 批量 CFG：latent_model_input = torch.cat([latents] * 2)
+      → pipeline_stable_diffusion.py:1037 / pipeline_stable_diffusion_xl.py:1202
+      → 每步 **1 次** UNet 前向，batch=2
+  · 有些管线 uncond / cond 各前向一次
+      → 每步 **2 次** 前向
+
+旧实现只有一条 lane：相邻两次调用的输入分别是 cond 与 uncond，
+相对 L1 距离永远很大 → 阈值再大也命中不了，而界面显示"已启用"。这就是
+"勾了加速一点没快"的机制。
+
+17.5 分道实现（utils/step_cache.py 重写）
+--------------------------------------------------------------------------------
+  SPLIT_AFTER_COMPUTES = 6          连续 6 步 0 命中就怀疑每步两次前向
+  lane = {"prev_in", "prev_out", "acc", "skips"}
+  _lane() = self._lanes[(self._calls % 2) if self.split else 0]
+  _maybe_split(): not split and not reused and computed >= 6
+                  → split=True、重置两条 lane、写 info 日志
+  reset(): 清零计数；若"上次分道后 0 命中"→ 退回单 lane（不一直背着）
+  step_cache_stats() 增 split / last_distance
+  step_cache_summary() 命中时追加"分道模式"
+  step_cache_status_text()：四态文案
+      未启用 / 已启用，本次启动还没有采样数据 /
+      已启用但 0 步命中（N 步全部重算，阈值 x）—— 把阈值调大才会真的省时间 /
+      复用 r / c 步（p%），阈值 x[，分道模式]
+
+奇偶分道之所以成立：批量 CFG 每步只有 1 次前向，奇偶交替仍然落在同一条 lane 里
+（单数步 / 双数步的输入是相邻采样步，本来就相似），因此不会把原本能命中的
+管线拆坏 —— tests/test_step_cache_split.py 的第 1 项就是锁这个。
+
+17.6 设置页把命中率摆出来
+--------------------------------------------------------------------------------
+ui/settings_dialog.py「推理性能」Tab 新增"当前命中率:"一行：
+  lbl_step_cache_stats  (QLabel, wordWrap)
+  btn_step_cache_refresh ("刷新命中率"，clicked -> _refresh_step_cache_stats)
+建 tab 时先刷一次；四色区分：未启用 #7f849c / 无采样 #f9e2af /
+有调用但 0 命中 #f38ba8 / 有命中 #a6e3a1。
+
+另外，不用打开设置页也能看见：每张图生成完，若状态是"已启用但 0 步命中"，
+界面日志会直接多出一行黄色提示（utils/app_generation.py，`append_log`）；
+有命中时只写日志文件，不刷屏。
+
+17.7 回归
+--------------------------------------------------------------------------------
+  tests/test_ipa_multi.py            32 项 PASS（含 5 项 build_runtime 用例，
+                                     以及"两边源码只许出现 build_runtime"）
+  tests/test_step_cache_split.py     5 项 PASS（新建）
+  tests/test_generation_queue_snapshot.py  7 项 PASS（这条顺带修了一处：
+                                     restore 后断言改成按 lane 检查 prev_in/prev_out）
+  tests/test_inference_productivity   rc=0（旧的 reused==1 断言仍成立）
+  tests/test_ipa_plumbing             rc=0
+  tests/test_ipa_refs_ui              rc=0
+  tests/test_settings / test_ui_contract  rc=0
+
+  全量：36 个测试 exit=0，613.1s（新增 test_step_cache_split 之后）。
+  ruff --select F 对 8 个改动文件 All checks passed；
+  _check_all.py 206 文件 / 语法失败 0 / 疑似未定义名 0。
+
+17.8 未验证边界（诚实记录）
+--------------------------------------------------------------------------------
+  · 真实的"每步两次前向"管线（例如某些 SD3 配置）没有在真机上跑到命中，
+    分道的正确性由 tests/test_step_cache_split.py 的合成用例保证；
+  · 没有按 guidance≤1 单独限制 —— 分道是自动的，不需要用户先知道自己是哪种管线；
+  · 主界面 on_missing="degrade" 的真实缺图场景只做了单元测试（假 ai），
+    没有故意删一张参考图跑整次生成。
+
+================================================================================
+第 18 章  采样器扩充、ComfyUI 互通、任意 Python 节点（2026-11-06）
+================================================================================
+
+18.1 用户指令原文
+--------------------------------------------------------------------------------
+「再扩采样器 / 参数、做 ComfyUI 格式兼容、开放任意 Python 节点」
+
+三件事互相独立，但都指向同一个老毛病：**同一个概念在两处各写一遍**。
+本次的原则是"先建唯一实现，再让界面/节点/配置/快照都去取它"，而不是给每处
+再补一份分支。
+
+18.2 采样器：16 种 × 4 风格，名字只有 `core/samplers.py` 一份
+--------------------------------------------------------------------------------
+`SAMPLERS` 是 `SamplerDef(name, cls, aliases, extra, uses_eta, note, comfy,
+requires)` 的元组，16 条：Euler a / Euler / DPM++ 2M / DPM++ 2M SDE /
+DPM++ 3M SDE / DPM++ SDE / DPM++ 2S a / DPM2 / DPM2 a / Heun / LMS / UniPC /
+DEIS / DDIM / PNDM / LCM。sigma 风格 4 种：默认 / Karras / Exponential / Beta。
+
+改之前 `core/model_manager.py` 是 4 个 if 分支：
+
+    if "欧拉A" in sampler_name or ...: 
+        scheduler = EulerAncestralDiscreteScheduler.from_config(...)
+    elif "DPM++ 2M" in sampler_name:
+        ... use_karras_sigmas=True   # 无条件 karras
+
+两个实际缺陷：
+1. 不在 4 个名字里的采样器（UniPC / DDIM / LCM …）**静默落到 Euler a**；
+2. "DPM++ 2M" 永远带 karras，用户没法关。
+
+现在：
+- `build_scheduler(base_config, name, sigma, **overrides)` 返回 scheduler 实例，
+  未知名字返回 None（调用方给可操作报错），`requires` 缺失依赖时抛
+  RuntimeError 并给出 pip 命令；
+- 风格开关按 `inspect.signature(cls.__init__)` 过滤，DDIM 这类没有
+  `use_karras_sigmas` 的不会 TypeError；
+- `"DPM++ 2M Karras"` 这种 A1111 老写法仍能解析（后缀拆成风格）；
+- **A1111 的 "SGM Uniform" 故意不提供**：diffusers 没有等价开关，宁可没有，
+  也不要一个点了没反应的选项。
+
+18.3 `switch_sampler` 重写时踩到的两个坑
+--------------------------------------------------------------------------------
+坑 1（基线污染）：原来 `from_config(self.txt2img_pipe.scheduler.config)` 是
+从**当前** scheduler 取配置。切过一次 karras 之后，config 里就带着
+`use_karras_sigmas=True`，再切到别的采样器仍然带 karras。
+修法：第一次切换时把 `dict(self.txt2img_pipe.scheduler.config)` 存进
+`self._scheduler_base_cfg` 当基线，`load_model()` 换管线后置 None。
+
+坑 2（风格继承）：`style = sigma if sigma is not None else self._sigma_style`
+会让"只传名字"的调用继承上一次的风格 —— 用户在下拉框里选了"默认"，
+实际还是 karras。修法：`style = sigma`，None 交给 `build_scheduler` 归一为
+"默认"；`_sigma_style` 只用于显示。
+
+真机验证（SD1.5 / `models/sd15/meinamix_v12Final.safetensors`）：
+
+    UniPC + Karras            -> UniPCMultistepScheduler  karras=True
+    DPM++ 2M（不传风格）       -> DPMSolverMultistep       karras=False
+    DPM++ 2M + Karras         -> DPMSolverMultistep       karras=True
+    Euler a                   -> EulerAncestralDiscrete
+    DPM++ 2M SDE + Karras     -> DPMSolverMultistep（SDE 变体走 extra）
+    DDIM + Karras             -> DDIMScheduler（不支持的开关被过滤）
+    LCM                       -> LCMScheduler
+    384x384 / 4 步实跑成功
+
+18.4 事故记录：patch 脚本把 `core/model_manager.py` 截断成 0 字节
+--------------------------------------------------------------------------------
+写 `switch_sampler` 补丁时，脚本里手滑写成：
+
+    io.open(PATH, "w", encoding="utf-8", newline="\\n")   # 字面反斜杠
+
+`io.open` 先以 "w" 打开（**文件立刻被截断为 0 字节**），然后才校验
+`newline` 参数并抛 `ValueError: illegal newline value`。
+结果：2784 行 / 129KB 的 `core/model_manager.py` 变成空文件。
+
+恢复过程（可复用）：
+1. `git checkout -- core/model_manager.py` → 回到 HEAD（92086 B）；
+2. 当天为排查别的问题导出过 `tests/artifacts/tmp/model_manager_current.diff`，
+   `git apply --3way` 该补丁 → "Applied patch to 'core/model_manager.py'
+   cleanly"，文件回到 129646 B / 2784 行，本会话所有改动（capabilities、
+   `_normalize_lora_list`、`installed_ipa_variants`、
+   `prepare_ip_adapter_multi`、`unload_ip_adapter` 的 image_processor 保护）
+   全部回来；
+3. 逐项脚本核对（`_tmp_verify_mm.py`）确认方法都在；
+4. 唯一丢失的一行文案「需额外准备（自行下载）」手工补回。
+
+**教训（写进规程）**：改源码必须"读 → 改临时文件 → `os.replace`"，并且在
+写之前断言每个锚点都**恰好命中一次**；绝不用 `open(target, "w")` 去承接
+可能失败的参数。
+
+18.5 ComfyUI 互通（`workflow/comfy_compat.py`）
+--------------------------------------------------------------------------------
+支持两种输入：
+- API 格式 `{"3": {"class_type": "KSampler", "inputs": {...}}}`；
+- 界面格式 `{"nodes": [...], "links": [[id, src, sslot, dst, dslot, type]]}`，
+  把 `widgets_values` 按下标表还原成参数。
+
+映射表覆盖 14 类 ComfyUI 节点（CheckpointLoader / VAELoader / LoraLoader /
+CLIPTextEncode / KSampler(+Advanced) / VAEDecode / VAEEncode / SaveImage /
+PreviewImage / LoadImage / ImageScale(+By) / ControlNetApply(+Advanced) /
+IPAdapterApply）。
+
+设计要点：
+- **文本节点按接线判正负**：ComfyUI 里两个 `CLIPTextEncode` 长得一样，
+  接到 `positive` 的就是正面、接到 `negative` 的是负面；两边都没接时按正面
+  处理并留一条 warning。
+- **折叠而不是丢弃**：`EmptyLatentImage` 的宽高折进 Sampler 参数；
+  `CLIPSetLastLayer.stop_at_clip_layer` 折成上游 LoadCheckpoint 的
+  `clip_skip`。Reroute / PrimitiveNode 透明穿透（深度上限 16 防环）。
+- **认不出来的节点全部列出来**（id + class_type），导入后弹窗，
+  绝不静默少节点 —— 少一个节点还能跑，但跑出来的图与 ComfyUI 不一致才是最坏的。
+- **导出**只导能完整表达的节点，同样列出省略项；txt2img 的 Sampler 会自动
+  补一个 `EmptyLatentImage` 接 `latent_image`，保证往返（导出→导入）参数等价。
+- 采样器名与 sigma 名双向映射走 `core/samplers.py` 的
+  `to_comfy` / `sigma_to_comfy`（`dpmpp_2m ↔ DPM++ 2M`、`karras ↔ Karras`），
+  comfy 的 `euler` 映射到本项目 `Euler`，**不会**误映射成 `Euler a`。
+
+写测试时抓到的 4 个真 bug（都在折叠逻辑上）：
+1. `_resolve_link` 里用 `if sid in _FOLD` —— `_FOLD` 是按**类名**建的字典，
+   拿节点 id 去查永远 False，折叠一次都没生效；
+2. `_apply_fold` 用 `if key in target.params` 判断参数可用性，而刚建出来的
+   节点 `params` 是空的 → 折叠写不进去；改用 `_known_params(type)`；
+3. 导出时 `NegativeTextEncode` 没有反向映射 → 被当成不支持；
+4. 导出把 Sampler 的 `width/height` 丢了（Sampler 没有这两个输入）→
+   补 `EmptyLatentImage` 合成。
+
+编辑器接线：工具条新增「导入 ComfyUI」「导出 ComfyUI」两个动作，
+方法 `on_import_comfy` / `on_export_comfy`；界面里**不许出现 `class_type`**，
+映射只有 `comfy_compat` 一份（有源码级测试盯着）。
+
+18.6 任意 Python 节点（默认关闭，三道闸）
+--------------------------------------------------------------------------------
+`nodes/python_nodes.py`，节点类型 `PythonScript`，分类「高级」，节点库里标红
+（`RISKY_NODE_TYPES = {"PythonScript"}`），`cacheable=False`。
+
+三道闸：
+1. 配置 `allow_python_nodes` 默认 **False**；关闭时 `run_python_script()`
+   直接抛中文错误并告诉你怎么打开；设置页从关到开会弹确认框（默认 No）。
+2. 单次执行超时默认 30s；超时返回 `TimeoutError("...（线程是 daemon，会继续
+   在后台跑到自然结束）")`——Python 没有安全的强杀手段，所以是"放弃等待"
+   而不是"杀死"。
+3. `allow_imports=False` 时只放行纯计算模块白名单（math / random / json /
+   re / time / datetime / itertools / functools / collections / statistics /
+   decimal / fractions / string / textwrap / typing / dataclasses / hashlib /
+   base64 / struct / copy / operator / bisect / heapq），
+   `os` / `sys` / `subprocess` / `requests` 一律拒绝并提示勾选。
+
+它走注册表，所以界面自动出现、预检与资源声明照常、不会被步间缓存混淆；
+**它不是沙箱**，开了 `allow_imports` 就是真能读写文件、发网络请求。
+
+写测试时抓到的真 bug（第一版）：用 `contextlib.redirect_stdout` 收 stdout。
+它是**全局**替换 `sys.stdout`，超时后用户代码仍留在后台线程里跑，
+整个进程的 stdout 一直被挂在那块缓冲区上——表现是"测试后面所有 print 都消失、
+rc 却是 0"。改成往命名空间里注入 `print=_collector_print(buf)`，完全不碰全局。
+
+18.7 回归
+--------------------------------------------------------------------------------
+- 新增 `tests/test_samplers.py`（11 项）、`tests/test_comfy_compat.py`（14 项，
+  含编辑器接线与节点库标红）、`tests/test_python_nodes.py`（11 项）。
+- `tests/test_generation_queue_snapshot.py` 的 step_cache 断言从
+  `_previous_input/_previous_output` 改到 per-lane（step_cache 重写后是 lane 结构）。
+- ruff `--select F` 全绿；`_check_all.py` 0 语法 / 0 未定义名。
+- 节点总数 33 → **34**（新增 `PythonScript`）。
+
+18.8 未验证边界（诚实清单）
+--------------------------------------------------------------------------------
+1. **ComfyUI 只在自造样本上验证**：没有拿真实 ComfyUI 导出的、含自定义节点
+   的复杂工作流跑过；`widgets_values` 下标表是按常见节点手写的，不同
+   ComfyUI 版本/自定义节点可能错位（错位时的表现是参数不对，不会崩）。
+2. **导出不保证 100% 语义等价**：`KSamplerAdvanced` 的 start/end_at_step、
+   部分 conditioner 组合无法表达，已在报告里列出。
+3. **Any Python 节点没有做进程级隔离**：超时是"放弃等待"，不是杀进程；
+   恶意代码可以留着线程继续跑。
+4. 采样器只验证了 SD1.5 真机；SDXL / Anima 走的是同一条 `switch_sampler`
+   路径，但 Anima 的模块化管线对 scheduler 的接受面没有逐个试。
+5. DPM++ SDE 因本机缺 `torchsde` 从未成功构造（代码路径有单测覆盖）。
+
+================================================================================
+第 19 章  MOSS-Image 架构支持 + 「翻译成英文再生成」开关
+================================================================================
+
+19.1 用户指令原文（本轮唯一需求）
+
+    「添加模型类别mossimage支持，添加是否翻译按钮，现在的逻辑是不翻译为英文就
+      不投递给模型，同时文字提醒用户现在有的模型支持中文文本理解」
+
+    拆成三件：
+    A) 新增模型类别 mossimage；
+    B) 新增「是否翻译」开关，关掉时把原文直接投递给模型；
+    C) 文字提醒：有些模型原生懂中文。
+
+19.2 MOSS-Image 事实核对（来源：官方 README_ZH.md，2026-10-16）
+
+    核对方式：web_fetch 官方仓库 README 中文版，只采用文档里写明的数字。
+
+    · 规格：OpenMOSS（上海创智学院 + 复旦）5B DiT 文生图，arXiv 2610.23374；
+      卖点是中英文字准确渲染、layout JSON 布局控制、最长 4K token 提示词。
+    · 官方只有文生图。layout JSON 可做受控排版，但没有 img2img / inpaint。
+    · 加载：DiffusionPipeline.from_pretrained(repo,
+        custom_pipeline="pipeline_moss_image", trust_remote_code=True,
+        torch_dtype={"default": bfloat16, "vae": float32})
+      之后 pipe.scheduler = type(pipe.scheduler).from_config(pipe.scheduler.config)。
+    · 采样默认：Flow-matching Euler、50 步、CFG 3.0、shift 5、
+      uncond_skip_layers=[22]（负向分支跳过第 22 层）。
+    · 显存：1024²/50 步 PyTorch 峰值 3.65 GiB 分配 / 3.85 GiB 保留，
+      系统内存峰值 14 GiB —— 这是「权重放 CPU、按需流式加载」的 minimal 档跑出来的。
+    · 权重：HF OpenMOSS-Team/MOSS-Image-Base / -SFT；ModelScope 同名镜像；
+      ComfyUI 生态另有 Comfy-Org/MOSS-Image 的**单文件**版本。
+    · 许可证：README 只写「推理代码 Apache-2.0」，**权重许可证未在 README 声明**。
+      本项目对许可敏感， поэтому文档里只写「以 HF 模型卡为准」，不替它断言可商用。
+
+19.3 架构层决策
+
+    决策一：只支持 diffusers 目录，不猜单文件。
+      理由：单文件里没有 pipeline 类名，只能靠键名猜 —— 这正是本项目在
+      Anima/SD3 上已经吃过的「两套能力真相」问题的来源。加载器收到文件路径时
+      直接抛 RuntimeError，并说明「ComfyUI 单文件版本本程序不支持」。
+
+    决策二：优先用目录里的本地 pipeline_moss_image.py，不执行远程仓库代码。
+      理由：trust_remote_code=True 会 download 并执行仓库里的 Python。
+      官方目录形式的权重本身就带这个文件，所以走 custom_pipeline=<本地路径>，
+      既省一次网络往返，也不需要信任远端代码。
+
+    决策三：能力表如实标 False（img2img / inpaint / hires / adetailer / lora /
+      controlnet / ip_adapter / compel / scheduler_switch / clip_skip 全关）。
+      理由：宁可界面上少几个按钮，也不要出现「点了才发现 TypeError」的假功能 ——
+      SD3 假 inpaint 就是前车之鉴（见第 13 章 13.4 / 第 15 章）。
+
+    决策四：新增 Capabilities.supports_zh_prompt（默认 False）。
+      理由：「这个模型的文本编码器懂不懂中文」现在是生成流程与界面共用的一个事实，
+      必须只有一份。放在 Capabilities 上，架构表、workflow 能力表、界面提示三处
+      都从它派生。
+
+19.4 加载器 core/loaders/moss.py（新增）
+
+    · 定位：REPO=OpenMOSS-Team/MOSS-Image-Base，PIPELINE_FILE=pipeline_moss_image.py。
+    · 目录判定：有 model_index.json 或 modular_model_index.json 即候选；
+      _dir_problem() 给出可操作原因（缺 marker / marker 0 字节 / 组件缺失或为空）。
+      注意用 os.path.getsize 判 0 字节 —— HF 缓存里是符号链接，
+      PowerShell 的 Length 对符号链接显示 0，不能用来判空。
+    · 查找顺序：models/mossimage（根与下一层）→ models/puton（同）→
+      HF 缓存 snapshot_download(local_files_only=True)（永不联网）→ 抛中文错误。
+    · 装配：custom_pipeline=<目录里的 pipeline_moss_image.py>；dtype 用
+      {"default": bfloat16, "vae": float32}；成功后重置 scheduler；
+      return LoadResult(txt2img=pipe)（没有 img2img，这是事实不是偷懒）。
+    · 显存：交给 vram_manager，_ACT_NEEDS 加 mossimage=(3.0, 1.4) GiB。
+
+19.5 现有管线里被这次需求照出来的四处硬编码
+
+    · core/model_manager.py：候选路径只用 os.path.isfile 判存在，
+      目录一律不认 → 新增 _is_model_entry()，并让 os.walk 兜底也识别目录。
+    · utils/model_scanner.py：scan_models() 里 `if not os.path.isfile: continue`
+      → 目录模型永远不会出现在下拉框里 → 新增 _is_diffusers_dir() 分支，
+      体积用 _dir_size_gb() 只累加大权重文件（上限 64MB 起步，避免数万个小文件）。
+    · utils/vram_manager.py：_ACT_NEEDS 没有 mossimage → 加上。
+    · workflow/adapters.py：_ADAPTERS 没有 mossimage，且能力表没有
+      「懂中文」这个概念 → 新增 MossAdapter 与 zh_prompt 字段。
+
+19.6 「翻译成英文再生成」开关（用户诉求 B + C）
+
+    改动前的真实行为：只要输入里有中文就一律 translator.translate() 成英文；
+    翻译失败/被跳过时，中文原样进了 CLIP —— 出图与提示词无关，用户不知道为什么。
+
+    改动后：
+    · utils/app_generation.py 新增 _translate_or_raw(text, mode) 与
+      _arch_supports_zh()，**所有生成路径只走这一个实现**（主流程、高清放大）。
+    · 开关状态进 ctx（translate_prompt / zh_prompt_native），并写进 PNG 元数据，
+      回查时能看出这张图当年翻没翻、当时模型懂不懂中文。
+    · prompt_budget 的诊断提示分三档：关掉翻译且含中文时，按模型是否懂中文给
+      「已按你的设置不翻译」或「注意：该编码器可能读不懂中文」。
+    · 界面：ui/core_panel.py 的提示词区加 chk_translate_prompt（默认勾选）与
+      lbl_prompt_lang_hint；四档文案随「模型下拉框选中项」实时变化
+      （中文模型+开 #f9e2af / 中文模型+关 #a6e3a1 / 英文模型+开 #7f849c /
+       英文模型+关 #f38ba8）；状态栏同时给一句结论。
+    · 一致性：ui/contracts.py 登记两个新控件；param_snapshot 与队列快照都带上
+      chk_translate_prompt；apply_config_to_ui 用 blockSignals 回填，避免回填时
+      触发 save()。
+
+19.7 元数据
+
+    build_metadata() 新增两键：translate_prompt、zh_prompt_native。
+    理由：同一个提示词，翻与不翻出来的图完全不同，事后必须能分辨。
+
+19.8 回归与验证
+
+    · 新增 tests/test_moss_image.py（12 项）：架构与能力一致性、profile 是 raw 原文、
+      加载器注册且拒绝单文件、目录按管线文件识别、扫描器列出目录、
+      ModelManager 接受目录、uncond_skip_layers 只给 moss 注入、
+      翻译开关的源码级接线与真实行为、中文能力驱动界面提示、配置往返。
+    · 探针（HF_HUB_OFFLINE=1）实测：假目录能一路走到「管线装配失败」而不是
+      「未找到模型」，说明目录解析链路已通；真 GUI 离屏下开关、提示、配置回写均正确。
+    · ruff --select F 与 _check_all.py 全通过。
+
+19.9 未验证边界（诚实记录）
+
+    · 本机没有任何 MOSS-Image 权重，**没有真机出过图**。目录解析、装配调用、
+      参数注入都验证了，但「50 步真能出图」只能等有权重的人验证。
+    · 8GB 卡上的 offload 表现未验证：官方 3.65 GiB 是 minimal 档（权重在内存）
+      的结果，本项目的 vram_manager 走 enable_model_cpu_offload，两条路径不同。
+    · 权重许可证未在 README 声明，文档只写「以 HF 模型卡为准」。
+
+--------------------------------------------------------------------------------
+19.10 实测拉取 MOSS-Image + 两处事实修正（2026-11-09）
+--------------------------------------------------------------------------------
+
+    A) 网络实测（本机，同一时刻）
+
+       · huggingface.co：resolve 链接会 302 到 Xet CDN
+         （us.aws.cdn.hf.co），直连被断流 ——
+         SSLError: UNEXPECTED_EOF_WHILE_READING，0 字节。
+       · hf-mirror.com：单连接 0.10 MB/s（60MB 用了 630.9s）；
+         4 个连接并发实测 per-connection 0.34 / 0.53 / 0.48 / 0.43 MB/s，
+         合计 1.78 MB/s。
+
+    B) huggingface_hub 1.24 走镜像会直接失败
+
+       hf_hub_download(repo, file, endpoint="https://hf-mirror.com")
+         → FileMetadataError: Distant resource does not seem to be on
+           huggingface.co ... → LocalEntryNotFoundError
+       原因：镜像只做 HTTP 代理，HEAD 响应缺 x-repo-commit / ETag，
+       huggingface_hub 1.24 的前置校验不认。
+       实测解决办法：用 requests 直连 <endpoint>/<repo>/resolve/main/<file>，
+       自己做 Range 断点续传（写 .part，完成后 os.replace，并校验字节数）。
+       本次 160 KiB 的元数据文件、25 GiB 的全量下载都走这条路径。
+
+    C) 事实修正一：体积
+
+       README 原先写「bf16 约 10GB」，来源是官方 GitHub README 的口径。
+       实际 HF 仓库 37 个文件合计 **25.36 GiB**：
+         transformer 3 分片 9.7GB + text_encoder 4 分片 16GB +
+         vae 0.24GB + tokenizer 19MB + 其余配置若干。
+       registry 的 extra_download_size 已改为「约 25GB（bf16：transformer
+       9.7GB + 文本编码器 16GB）」，README 5.7 与放置表同步。
+
+    D) 事实修正二：许可证
+
+       之前只看了 GitHub 上的 README_ZH.md（只写推理代码 Apache-2.0），
+       于是写成「权重许可证未声明」。实际权重仓库根目录自带 LICENSE，
+       内容是标准 Apache-2.0；README「License and acknowledgements」写明
+       「The model weights and bundled inference code are released under the
+       Apache License, Version 2.0」；HF 模型卡元数据是 license: apache-2.0。
+       → 权重与推理代码都可商用。文档已改成这一结论，并提醒官方致谢提到
+         Qwen 与 FLUX，商用前建议确认上游组件许可。
+
+    E) 投递箱分类实测（8 项全 PASS）
+
+       步骤：把 12 个小文件（model_index.json、各组件 config.json、两个
+       index.json、pipeline_moss_image.py、LICENSE、README，合计 160 KiB）
+       放进 models/puton/MOSS-Image-Base（模拟用户丢进去的目录）→
+
+       1. scan() 判定 arch=mossimage、kind=model、
+          target=models/mossimage/MOSS-Image-Base（status=kept 表示待归位）
+       2. run() 真的移动，并打印
+          「✅ 已自动归位 1 个文件 · MOSS-Image-Base
+             → models/mossimage/MOSS-Image-Base（MOSS-Image (5B DiT)）」
+       3. detect() evidence =
+          「model_index.json: _class_name=MOSSImagePipeline + 自定义管线文件
+            → mossimage」
+       4. 再扫一次投递箱，不会重复归位
+       5. MossImageLoader.local_dirs() 命中该目录
+       6. _dir_problem() 如实报「组件缺失或为空: transformer(0 字节),
+          vae(0 字节)」—— 权重没下完时不会假装能跑
+       7. scan_models("mossimage") 列出
+          {name: MOSS-Image-Base, is_dir: True, size_gb: 0.0}
+
+       结论：分类/归位链路对「目录形式的架构」是可行的，而且用的是同一条
+       _classify() → _target_for() 路径，没有为 mossimage 写特例。
+
+    F) 仍在进行
+
+       25.35 GiB 全量下载（跳过 assets/）已在后台跑：4 并发、Range 续传、
+       单文件 5 次重试、落盘 models/mossimage/MOSS-Image-Base，按实测
+       1.8 MB/s 预计 4~6 小时。下载完成后再做一次真机出图验证。
+
+19.11 真机实测（RTX 5060 Laptop 8GB，2026-11-09）
+
+权重来源与体量
+- 25 个文件 / 25.35 GiB，用 requests + Range 续传 + 4 并发从 hf-mirror 拉完，
+  166.2 分钟、0 失败；分片与 index 记录逐一对齐，无 .part 残留。
+- transformer 3 分片 9.69GB、text_encoder 4 分片 16.0GB、vae 238MB、tokenizer 19.1MB。
+
+两个体积 bug（实测才暴露）
+- utils/model_scanner._dir_size_gb 原本累加到 4GB 就提前返回
+  （limit = limit_mb * 1024**2 * 64），25GB 的模型在界面上显示成 4.63GB。
+  改成 max_files=4000 兜底，现在报 25.33。
+- core/arch/signatures._detect_dir 从来没设 size_gb，目录型权重恒为 0
+  → 显存策略会以为"这个模型不占权重"。新增 _dir_weight_gb() 并三处填上。
+
+低显存路径（core/loaders/moss.py）
+- 不用通用 enable_model_cpu_offload()：它会把 16GB 文本编码器搬上 8GB 卡 → 必炸。
+- 实测布局：DiT 9.47GB 留在 CPU + block 级 offload（每组 1~4 块，每块约 231MB）；
+  文本编码器 15.63GB 永远留 CPU；VAE 0.23GB 上卡 + tiling/slicing。
+- full_fits 门槛：总显存 >= DiT + 3.5GB 时直接全上卡（24GB 以上的卡）。
+- 每步都要把 9.47GB 从内存搬一遍 —— 这就是它比 SDXL 慢的根因（不是算力不够）。
+
+三个只有真机能抓到的坑
+- trust_remote_code 是强制的：diffusers 只要看到目录里有自定义管线代码就要求它，
+  传本地绝对路径也一样（ValueError: ... contains custom code in
+  pipeline_moss_image.py which must be executed）。所以 README 里原先写的
+  "刻意没走 trust_remote_code" 是错的，已改正：仍然用**本地**文件（不联网），
+  但必须允许执行它，并在日志里明说。
+- encode_prompt 设备不匹配：官方实现把 token 输入 .to(self._execution_device)
+  （显卡），文本编码器却在 CPU：
+  RuntimeError: Expected all tensors to be on the same device, but got index is on
+  cuda:0, different from other tensors on cpu (when checking argument in method
+  wrapper_CUDA__index_select)
+  修法：_encode_prompt_on_encoder_device() + _patch_prompt_encoding()，
+  输入留在编码器所在设备，结果由管线自己搬到显卡。
+- _is_flow_matching_pipe 按类名判断会漏：MOSS 的调度器叫 MOSSImageScheduler，
+  类名里没有 "FlowMatch"，但它是 FlowMatchEulerDiscreteScheduler 的子类。
+  漏判 → switch_sampler 会把它换成 DPM++，采样直接废掉。改成类名 + isinstance，
+  并在 switch_sampler 里加 caps.scheduler_switch 守卫。
+
+实测速度（稳态，num_blocks_per_group=4）
+- 512²/3 步 34.1s（11.37s/步，首图预热占大头），峰值 1.59GB
+- 768²/25 步 105.2s（4.21s/步），峰值 2.05GB
+- 1024²/50 步 289.1s = 4.8 分钟（5.78s/步），峰值 3.29GB
+- 文本编码在 CPU 上约 15 秒/条；加载 19~30 秒（权重 mmap，RSS 18.2GB）
+- 结论：8GB 卡能出 1024²，速度约 5.8 秒/步，比同机 SDXL（1024²/30 步 ≈90 秒）
+  慢 3~4 倍，与预估一致。1280² 以上未测（显存与时间都吃紧）。
+
+诚实的边界
+- 只验证了 512²/768²/1024² 与 50 步以内；1456²/4K 未测。
+- fp8 量化（torchao）未装、未验证 —— 若装上，DiT 可 4.85GB 常驻、免掉每步搬权重，
+  预计 1024² 能压到 2~3 分钟，但这只是估算。
+- 中文文字渲染（MOSS 的卖点）没有专门测；本次只测了"中文提示词 → 正确画面"。
+- 机器上另外还有别的进程占用显存时，峰值 3.29GB 仍可能不够（VAE 解码那一下最陡）。
+
+19.12 端到端跑通后暴露的三处问题（MOSS-Image 首次真机出图）
+
+19.12.1 起因
+
+在 8GB 卡上把 MOSS-Image 真的跑出第一张图之后，主界面链路上还剩三个
+只有"真跑一次"才会浮出来的问题。它们都不是 MOSS 专属逻辑，而是
+"这个项目只支持过 SD 系管线"留下的假设。
+
+19.12.2 问题一：主循环无条件传 step 回调 → MOSS 直接 TypeError
+
+`utils/app_generation.py` 的主循环一直传
+`callback_on_step_end` / `callback_on_step_end_tensor_inputs`，
+diffusers 的 SD 系管线都收，而 `MOSSImagePipeline.__call__` 的签名里
+没有这两个参数 —— 传了就是 `TypeError: unexpected keyword argument`。
+这个问题在任何"非 SD 系"架构上都会复现（Anima 走 modular 的 `state=`
+分支，恰好绕过了）。
+
+修法（`_gt_safe_pipe_call` 之前）：
+
+1. `@staticmethod _pipe_accepts(pipe, *names)` —— 用
+   `inspect.signature(pipe.__call__)` 判断；带 `**kwargs` 的当作全收。
+2. `_prepare_pipe_kwargs(self, pipe, call_kwargs, ctx)`：
+   - 不收 step 回调 → 丢掉这两个键，并调 `_attach_step_progress()`；
+   - 其余不认识的键逐个 `logger.warning("管线不接受参数 %s，已省略")` 后丢弃。
+   "宁可少传，也不要 TypeError 让整张图失败。"
+3. `_attach_step_progress(self, pipe, ctx)`：包一层 `pipe.scheduler.step`，
+   每步 `progress_signal.emit()`，并在每一步开头检查 `self.cancel_flag`
+   → `raise InterruptedError("用户中断")`。5 分钟一张图至少能看进度、能取消。
+
+19.12.3 问题二：目录型权重的 Model hash 恒为 unknown
+
+第一次出图的日志里：
+
+    WARNING - utils.image_metadata - ⚠️ 计算文件哈希失败
+    ...\models\mossimage\MOSS-Image-Base: [Errno 13] Permission denied
+
+`file_sha256()` 是为"模型 = 一个文件"写的，对目录调 `open()` 当然是
+Permission denied（Windows 上是 EACCES）。于是元数据里
+`Model hash: unknown` —— 复现作品时等于没记录。
+
+修法：`utils/image_metadata.py` 新增 `_dir_sha256(path)`，只遍历
+`(相对路径, 大小)` 排序后取 sha256，**不读权重内容**（25GB 读一遍要几分钟），
+返回 `"dir:" + hexdigest[:32]`；`file_sha256()` 开头
+`if os.path.isdir(path): return _dir_sha256(path)`。
+
+实测该模型得到 `dir:ece48557c414527d34382b064369b87f`，
+PNG 文本块里是 `Model hash: dir:ece485`。换分片、改体积都会变，
+同一份权重则稳定。
+
+19.12.4 问题三：提示词区的语言提醒不跟着模型变
+
+`main.py:_on_model_type_changed` 会重建模型下拉框，重建后索引仍是 0，
+`currentIndexChanged` 因此**不发信号** → `_refresh_prompt_lang_hint()`
+不被调用 → 选中 MOSS 后文案还停在"当前模型用 CLIP 编码器"，
+切回 SD15 后又停在"✅ 原生支持中文"。两个方向都错。
+
+修法：`main.py:_on_model_changed` 末尾用
+`getattr(self, "_refresh_prompt_lang_hint", None)` 取到就调用（try/except），
+不硬引用 —— MiniApp 测试桩不该因为这个抛 AttributeError。
+
+另外 `utils/app_events.py:_selected_arch_supports_zh()` 之前只看
+`combo_model.currentData()["type"]`，而扫描器对目录型权重只给 `path`；
+改为 type 为空时按 path 调 `core.arch.signatures.detect()`（结果缓存）。
+
+19.12.5 真机端到端结果（2026-11-10 09:44）
+
+- 界面选 `MOSS-Image-Base [25.33GB]` → 中文提示词 → 512²/4 步
+- `开始 → 结束` 91.4 秒，产物 `photo/20261110_094408_MOSS-Image-Base_01.png`（244KB）
+- PNG 文本块：
+  `一只橘白相间的猫蹲在木质窗台上，午后阳光从左上方照进来 | Negative prompt: `
+  `| Steps: 4, Sampler: Euler a, Schedule type: MOSSImageScheduler,`
+  `CFG scale: 3.0, Seed: 489831022, Size: 512x512, Model hash: dir:ece485,`
+  `Model: MOSS-Image-Base, Clip skip: 0`
+- 三件事同时被证明：① 中文原文**没有被翻译**就投递给了模型（翻译开关关闭）；
+  ② `Schedule type` 仍是 `MOSSImageScheduler`（没被 `switch_sampler` 换成 DPM++）；
+  ③ 目录型权重的哈希进了元数据。
+- 4 步是"跑得快"的档位，画面明显糊；50 步的 1024² 样张见
+  `docs/images/moss_1024_5060.png`。
+
+19.12.6 新增回归（`tests/test_moss_image.py` 16 → 20 项）
+
+- `test_pipe_kwargs_are_trimmed_to_real_signature`：假管线照抄 MOSS 签名，
+  断言两个回调键被丢、`uncond_skip_layers` 保留、调度器钩子已挂；
+  钩子调用后进度 25%、`cancel_flag` 置位时抛 `InterruptedError`；
+  支持回调的管线（`**kwargs`）则原样保留。
+- `test_safe_call_goes_through_prepare_pipe_kwargs`：源码级断言裁剪在真正
+  调用之前。**坑**：`_gt_safe_pipe_call` 里有两个 `pipe(**call_kwargs)`，
+  第一个是 modular 分支的早退（Anima），所以要用 `rindex` 而不是 `index`，
+  我第一版用 `index` 直接失败。
+- `test_dir_hash_works_for_directory_weights`：目录哈希前缀 `dir:`、长度 36、
+  内容不变时稳定、加文件后变化、单文件仍按内容哈希。
+- `test_model_change_refreshes_prompt_hint`：源码级断言
+  `_on_model_changed` 里出现 `_refresh_prompt_lang_hint` 与 `getattr` 写法。
+
+19.12.7 这一节想留下的教训
+
+"支持一种新架构"从来不只是写个 loader。这个项目里凡是"只有 SD 系才成立"
+的假设（step 回调、模型=文件、模型类型从下拉框数据里读）都会在新架构上
+塌一次，而且**都不会报错**，只是功能静默失效。所以要新增架构时，
+先把这几处假设过一遍：
+`_gt_safe_pipe_call` 的 kwargs、`image_metadata` 的哈希、`model_scanner`
+的路径、`_selected_arch_supports_zh` 的数据来源。
+
+19.13 「专用显存吃不满、共享显存很高」的真相（2026-11-10）
+------------------------------------------------------------
+用户贴任务管理器截图：专用 GPU 内存 3.1/8.0GB、共享 GPU 内存 13.3/15.9GB、
+内存 31.4/31.7GB（99%）、GPU 利用率 100%。结论是"调度出问题了"。
+
+(a) 现象本身不是 bug。
+    DiT 权重 9.47GB > 整卡 7.93GB，所以它从来就没整块进过显存：
+    显存里只有 VAE(0.23GB) + 当前 offload 的那一两组 block(每组约 231MB) + 激活(约 1~2GB)
+    ≈ 3.1GB，与"专用 3.1GB"完全对得上。权重常驻在内存里，WDDM 把这块计入
+    "共享 GPU 内存"，所以那一栏很高 —— 不代表每步真的搬 13GB 过 PCIe
+    （每步实际只搬当前组的 block，H2D 实测 20.9GB/s）。
+
+(b) 真正的 bug：用户是用**系统 Python** 启动的。
+    PID 40220 = `"D:\python\python.exe" main.py`，而项目依赖装在 venv 里：
+        venv            diffusers 0.40.0  transformers 5.16.1  (有 hooks/ModularPipeline/量化)
+        D:\python       diffusers 0.32.2  transformers 4.49.0  (三个都缺)
+    diffusers 0.32 没有 `hooks.apply_group_offloading`、
+    没有 `PipelineQuantizationConfig`、没有 `ModularPipeline`，于是：
+      · MOSS/Flux 的低显存路径（本项目实现）**一行都没执行**，落到通用
+        `enable_model_cpu_offload()` —— 那条路径会把 16GB 文本编码器也往卡上搬，
+        正是"专用吃不满、内存被打爆"的另一半原因；
+      · Anima 直接加载不了；8bit/FP8 一档都用不了。
+    这类失败不报警、只是"功能变弱"，用户无从判断。
+
+(c) 因此新增 `utils/runtime_check.py` + `main.py:_check_runtime_env()`：
+    启动 1.6s 后自检三个能力（ModularPipeline / hooks.apply_group_offloading /
+    PipelineQuantizationConfig），缺了就在状态栏红字 + 弹窗逐条说明，并直接给出
+    "请改用 venv\\Scripts\\python.exe main.py"。实测：
+        venv       -> ok=True  diffusers 0.40.0 venv=True   （静默通过）
+        D:\python  -> ok=False diffusers 0.32.2 venv=False  （三条缺失 + 解释器）
+
+(d) 新增 8bit 量化档（bitsandbytes 0.49.2 已装在 venv）：
+    core/dit_optimization.py 的 QUANTIZATION_MODES 从 ("off","fp8","nvfp4") 扩为
+    ("off","bnb8","fp8","nvfp4")，新增 `_bnb8_config()`：
+        PipelineQuantizationConfig(quant_backend="bitsandbytes_8bit",
+                                   quant_kwargs={"load_in_8bit": True},
+                                   components_to_quantize=["transformer"])
+    实测（venv / diffusers 0.40）构造成功，`quant_backend=bitsandbytes_8bit`；
+    fp8/nvfp4 仍是"缺 torchao / modelopt"的中文报错，不再静默。
+    `quantized_weight_ratio("bnb8")=0.55` → DiT 9.47GB × 0.55 ≈ **5.2GB 可常驻显存**。
+
+(e) core/loaders/moss.py 跟着改两处：
+    · build() 读 `dit_quantization`，非 off 就 `kwargs["quantization_config"] = qcfg`
+      （失败只 warning + 按原精度加载，不让量化问题挡住出图）；
+    · apply_vram() 按**量化后**的体积判断 `full_fits = 显卡 >= dit_eff_gb + 3.5`，
+      够了就整块上卡（专用显存才真的吃满），不够才退回 block offload，并在日志里
+      直接告诉用户"想快就把 DiT 量化改成 8bit"。
+
+(f) 设置页：推理性能 → 「Flux / SD3 / MOSS-Image 低显存推理」→ DiT 量化新增
+    「8bit（bitsandbytes，8GB 显示卡推荐）」，tooltip 写清"9.7GB 装不下 → 每步搬权重
+    慢 2~3 倍 → 8bit 后约 5.2GB 可常驻"。
+
+(g) 回归：tests/test_moss_image.py 追加 7 项（量化档位与比例、bnb8 配置可构造、
+    加载器真的传了 quantization_config 且按量化后体积决策、设置页有 8bit 档、
+    运行环境自检通过、缺失时文案含 venv 指引、main.py 启动时排了自检）→ 27/27 PASS。
+    受影响的 test_settings / test_ui_contract / test_samplers /
+    test_inference_productivity / test_real_startup 全 rc=0。
+
+(h) 未验证（诚实边界）：8bit 的**真机跑图**没做 —— 当时可用内存只剩 2.54GB
+    （用户主程序 PID 40220 还开着，占 8.65GB），而加载 MOSS 需要约 18GB 常驻内存。
+    等关掉主程序后应补一次实测：确认 DiT 5.2GB 常驻、每步不再搬权重、
+    1024²·50 步是否落到 2~3 分钟、以及画质与 bf16 的差异（8bit 通常肉眼无差别，
+    但本项目不替用户下结论）。
+
+19.14 8bit 量化对 MOSS-Image 走不通（实测，2026-11-10）
+--------------------------------------------------------
+上一节（19.13）把 8bit 当成"让 DiT 常驻显存"的解法。用户要求验证后实测，
+结论是**对 MOSS-Image 不可行**，已在代码里明确拒绝并写明原因。
+
+(a) 量化本身是成功的。
+    `PipelineQuantizationConfig(quant_backend="bitsandbytes_8bit",
+     quant_kwargs={"load_in_8bit": True}, components_to_quantize=["transformer"])`
+    能让 `MOSSImageTransformer` 加载为 Int8Params：
+        DiT 参数 9.47GB -> **4.73GB**；`.to("cuda:0")` 0.5s，
+        `memory_allocated()` = 4.99GB，`mem_get_info` free 1.65GB / 7.93GB。
+    也就是说"装进 8GB 卡"这一半是成立的。
+
+(b) 但一出图就崩：
+        NotImplementedError: "silu_cuda" not implemented for 'Char'
+    栈顶在 `pipeline_moss_image.py:239`
+        time = self.time_embedding(embedding.to(self.time_embedding[0].weight.dtype))
+    —— 模型自带代码用 `weight.dtype` **推导计算精度**，权重变 int8 后
+    这行把**激活**也 cast 成 int8，接着 `nn.SiLU` 直接拒绝。
+
+(c) 这种"从权重推精度"的写法在那个文件里共 9 处：
+    120（_TextBlock.proj）、141（_Block：`dtype = self.proj['q'].weight.dtype`）、
+    239/240/241（time_embedding、shared_block_modulation、video_head_modulation）、
+    248（video_embedder）、256（final_norm_video）、258（final_linear_video）。
+    要让它支持量化，得重写这 4 个类的 forward —— 那已经是在改模型自带的代码，
+    不是"支持一个架构"，风险与维护成本都不该由本项目默默承担。
+
+(d) 因此改成**明确拒绝**：
+    core/loaders/moss.py build() 里，`dit_quantization != "off"` 时打一条
+    warning 并把 quant_mode 归零（不传 quantization_config）：
+        ⚠️ MOSS-Image 不支持 DiT 量化（bnb8），已按原精度 bf16 加载 ——
+           它的自定义 transformer 用 weight.dtype 推计算精度，量化后激活会被
+           当成 int8，出图直接报 silu_cuda 未实现。8bit 对 Flux / SD3 仍然有效。
+    apply_vram() 同步改成**只按 bf16 体积**判断（不再用 quantized_weight_ratio，
+    否则会误判"装得下"而 OOM）。
+
+(e) 实测拒绝路径仍然正常出图：
+        load OK 15.8s；日志出现上面那条 warning；DiT dtype = {bfloat16}（无 int8）；
+        _dit_group_offloaded=True；VAE=cuda:0、TE=cpu；
+        512²/2 步 34.3s 出图成功（2 步只适合验证链路，不是画质样张）。
+
+(f) 8bit 仍保留在设置里，作用对象是 **Flux / SD3**（diffusers 标准 transformer，
+    没有"从权重推精度"的写法）。设置页 tooltip 与 README §5.7 都写明
+    "MOSS-Image 选了也会按原精度加载"。
+
+(g) 回归：`tests/test_moss_image.py` 里原来的
+    `test_moss_loader_uses_quantization_option` 换成
+    `test_moss_loader_refuses_quantization_with_reason`（断言日志文案、
+    `quant_mode = "off"`、注释里有 `silu_cuda`、apply_vram 不再出现
+    `quantization_config`）→ 27/27 PASS。
+
+(h) 给用户的实际结论：
+    8GB 卡跑 MOSS-Image **只能**用 bf16 + block offload；
+    提速只能靠降分辨率（1024²/50 步 289s vs 768²/25 步 105s）与降步数；
+    `dit_offload_blocks` 调 1/2/4/8 实测无差别（14.5~16.4s/步，噪声内）。
+
+================================================================================
+第 19 章附录 19.15 - MOSS-Image 加速三件套（A 引导 / B 提示词缓存 / C 8bit 常驻）
+================================================================================
+
+19.15.1 用户诉求
+----------------
+用户（m08963）：「还是要试试c，因为内存要不够了，如果我在生图过程中用vscode之类的
+程序会内存不足，同时放在显存中也保护了内存条与通道，然后ab可以先做了」
+即 A（分辨率/步数引导）、B（提示词向量缓存）、C（8bit 常驻显存，理由从"提速"
+改成"省内存"）三件一起做。
+
+19.15.2 A：分辨率/步数引导
+--------------------------
+utils/app_events.py::_refresh_moss_speed_hint(lbl, text, color, zh)，由
+_refresh_prompt_lang_hint() 末尾调用；仅当 combo_model.currentData()["type"] ==
+"mossimage" 时追加：
+  "MOSS-Image 是 5B DiT：768x768 / 25~30 步约 1.5 分钟，1024x1024 要约 5 分钟（8GB 卡）"
+依据是真机实测：768^2/25 步 105.2s、1024^2/50 步 289.1s。
+
+19.15.3 B：提示词向量缓存
+-------------------------
+core/loaders/moss.py::_PROMPT_CACHE_SIZE = 4；
+_encode_prompt_on_encoder_device 开头以 (prompts_tuple, max_sequence_length) 为 key，
+命中则 LRU 后移 + 计数 + 日志「命中提示词向量缓存（省下一次文本编码，约 15 秒）」
+并返回 CPU 张量（管线 __call__ 的 prepare() 会搬到显卡，故不占显存）。
+可行性依据来自官方代码：prepare() 内部就做 embeds.to(device)（pipeline_moss_image.py
+L382），所以 encode_prompt 返回 CPU 张量完全合法。
+收益：文本编码实测 14.96s（26 token），抽卡/批量时每张图省约 15 秒。
+
+19.15.4 C：8bit 常驻显存 —— 代码齐全，本机不可用
+-----------------------------------------------
+core/moss_accel.py（新文件）：
+  PATCH_VERSION = 1；PATCHED_CLASSES = ("MOSSImageTransformer", "_TextBlock",
+  "_TextProjection")；_HELPER_SRC 生成 def _moss_ctype(module)（非浮点权重的 dtype
+  一律返回 torch.bfloat16）；_REPLACEMENTS 为 8 条 .weight.dtype -> _moss_ctype(...)
+  的精确字符串对；patch_source() 任一替换命中数 != 1 就整体放弃（绝不生成"改了一半"
+  的代码），已修补过则拒绝；build_module() 从模型目录读 pipeline_moss_image.py 编译成
+  模块 moss_image_patched；apply(pipe, module) 遍历 pipe.transformer.modules() 按类名
+  重绑 forward，并同步 _old_forward（bnb 量化钩子缓存的是绑定方法，不改它会继续跑旧
+  代码）；bnb8_available() 用 8x8 Linear8bitLt 做冒烟自检。
+
+为什么必须"事后改活的类"：diffusers 的 custom_pipeline 只替换管线类，组件
+（transformer/text_encoder/vae）仍按 model_index.json 里
+"transformer": ["pipeline_moss_image", "MOSSImageTransformer"] 从模型目录的同名文件
+加载（venv/Lib/site-packages/diffusers/pipelines/pipeline_loading_utils.py:461-493 与
+utils/dynamic_modules_utils.py:185-215）。所以补丁不能只塞给 custom_pipeline。
+
+实测（_tmp_accel_check.py，离线）：
+  原文件 8 处 .weight.dtype -> 补丁后 0 处；_moss_ctype( 出现 9 次；
+  build_module 成功，三个类都把 forward 放进了 __dict__；
+  二次打补丁被拒（"这份管线文件已经被修补过了"）；
+  故意改坏一处锚点 -> "第 3 处替换命中 0 次"，整体放弃。
+
+加载器接入（core/loaders/moss.py）：
+  accel_on = bool((ctx.optimization or {}).get("moss_accel", False))
+  开启且 quant_mode == "off" 时：bnb8_available() 自检 -> build_module() ->
+  kwargs["quantization_config"] = quantization_config("bnb8") -> 加载后
+  moss_accel.apply()。任一环节不满足都只 warning 并退回 bf16（功能/画质不受影响）。
+  _apply_accel_vram()：int8_gb = dit_gb（量化后 element_size 已是 1；早期版本又乘了
+  0.51 把 4.7GB 算成 2.4GB，已修）、先 empty_cache() 再 mem_get_info、扣掉已驻留显卡
+  的部分、needed = max(0, int8_gb - already_gb) + 1.6，不够就抛带数字的中文错误。
+
+实测失败证据（三条，全部落在 bitsandbytes 内部）：
+  1) bf16 输入 -> NotImplementedError: "addmm_cuda" not implemented for 'Char'
+     栈：bitsandbytes/nn/modules.py:1106 -> autograd/_functions.py:156 ->
+     backends/default/ops.py:95 output = output.addmm(subA, subB)
+     （threshold > 0 的 mixed-int8 路线掉进 Python 兜底实现）
+  2) 把 269 个层的 state.threshold 改成 0（改走 int8_scaled_mm）->
+     RuntimeError: expected scalar type Float but found Char
+  3) torch_dtype=torch.float16 + bnb8 -> 同样的 addmm_cuda not implemented for 'Char'
+  对照：独立冒烟（8x8 bf16 / 2048^2 / 3072x8192 bf16 / 同尺寸 fp16 / thr=0）五例全 OK
+  -> bnb 本身可用，问题出在"模型自带代码把激活带成 int8 + 内核分派"的组合。
+
+结论与取舍：
+  * 不开放界面开关（ui/settings_dialog.py 的复选框加了又删，只留注释说明），
+    避免普通用户点一下就崩。
+  * config 里保留 moss_accel / moss_accel_asked 两个键，手写 true 仍可试；
+    加载时若启用会额外打一条"实验特性，报错就改回 false"的提示。
+  * 一次性引导弹窗（_maybe_offer_moss_accel）整段删除 —— 既然本机跑不通，
+    弹窗只会制造失败体验。
+
+19.15.5 顺带纠正的两个说法
+--------------------------
+  * "TE 转 fp16 能省内存" --- 证伪：bf16 与 fp16 都是 2 字节，15.63GB -> 15.63GB。
+  * "MOSS 加载后必然占 18GB 内存" --- 修正：apply_group_offload 之后加载完 RSS
+    只有约 0.5GB（权重 mmap 懒加载），采样过程中约 8.5GB（512^2/4 步实测）。
+
+19.15.6 回归
+------------
+tests/test_moss_image.py 新增 6 项（prompt_embeddings_are_cached、
+prompt_cache_is_lru_bounded、moss_speed_hint_is_shown、
+moss_accel_patch_is_exact_and_safe、moss_accel_gate_never_breaks_loading、
+moss_accel_is_not_exposed_in_settings）-> 全套 33/33 PASS。
+
+================================================================================
+第 19 章附录 19.16 - int8 权重量化：真机跑通，内存峰值 23.8GB -> 11.0GB
+================================================================================
+
+19.16.1 缘起
+------------
+用户（m09262）在听完"bnb 8bit 不可用"后说「试试」——目标是继续走"让 DiT 住进显存、
+把内存让出来"这条路。先后否掉两条：
+
+  * 真 fp8（torch._scaled_mm）：本机 torch 2.11+cu128 / sm_120 上直接
+    `RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling
+    cublasLtMatmulAlgoGetHeuristic`；
+  * Comfy-Org 的预量化件（int8_convrot / w4a8_gptq）：是 ComfyUI 单文件格式，
+    diffusers 读不了，本项目加载器只收 diffusers 目录。
+
+19.16.2 最终方案：自己量化权重（纯 torch）
+------------------------------------------
+core/moss_int8.py（新文件）：
+  * quantize_weight(weight, chunk_rows=2048)：按行分块算 per-output-channel scale
+    再量化到 int8。**必须分块** —— 一次性 `weight.float()` 对 4.85B 参数就是 19GB，
+    实测量化阶段就把进程顶到 18.7GB。
+  * Int8WeightLinear.make(linear)：加 weight_q(int8) / weight_scale(bf16) 两个
+    Parameter，把 `weight` 换成 property（返回 `weight_q.to(bf16) * scale`），
+    然后 **`linear._parameters.pop("weight")`** —— 不做这一步实测体积翻倍成 14.2GB
+    （原 bf16 与 int8 两份同时留着），apply_vram 直接判定"显存不够"。
+  * quantized_linear_forward：优先 W8A8 —— 激活按行量化 + `torch._int_mm`（int32
+    累加）+ 反缩放回 bf16；异常/尺寸不合法则退回"逐层反量化 + bf16 matmul"。
+  * w8a8_available()：冒烟 `_int_mm`。注意 `_int_mm` 要求行数 > 16（第一版用 16 行，
+    报 `self.size(0) needs to be greater than 16, but got 16`，于是静默退回慢路径）。
+  * _trim_working_set()：量化每 64 层调一次 Windows `EmptyWorkingSet`，否则整份
+    25GB 文件读进工作集，内存峰值顶到 24GB。
+
+19.16.3 关键测量（1024²，20 步，同提示词同 seed=1234）
+------------------------------------------------------
+| 配置 | 耗时 | s/步 | 显存峰值 | 采样后 RSS | 峰值工作集 |
+|------|------|------|----------|-----------|-----------|
+| bf16 + 分块 offload | 130.0s | 6.50 | 3.29GB | 11.76GB | **23.76GB** |
+| int8 只压 DiT | **109.6s** | **5.48** | 7.81GB | 18.63GB | 17.41GB |
+| int8 + 文本编码器 | 154.1s | 7.70 | 7.81GB | **10.96GB** | **10.97GB** |
+
+结论：
+  * int8 只压 DiT 最快（比 offload 快 16%），因为省掉了每步的 PCIe 搬权重；
+  * 真正吃内存的是**文本编码器 16GB**（不是 DiT）—— 只压 DiT 时采样后 RSS 仍是
+    18.6GB；把文本编码器也压到 6.86GB 后，峰值工作集从 17.4GB 掉到 **11.0GB**；
+  * 代价是文本编码变慢：一次编码从约 15s 变成约 58s（20 步的差值 +44s）；
+  * 画质：三档同 seed 出的图肉眼看不出差别（1024² 橘白猫窗台）。
+
+19.16.4 接线
+------------
+  * core/config_manager.py：`moss_quant: str = "off"`（off / int8 / int8te）
+  * utils/app_generation.py：`inference_options["moss_quant"] = str(cfg.moss_quant)`
+  * core/loaders/moss.py::build()：int8 时量化 transformer；int8te 时再量化
+    text_encoder；任一失败只 warning 并退回 bf16。
+  * core/loaders/moss.py::_apply_int8_vram()：DiT 上卡（4.7GB）+ VAE 上卡 + 文本
+    编码器留 CPU + `EmptyWorkingSet` 交还工作集；显存不足时给带数字的中文报错
+    （"需要约 6.3GB，当前可用 X"）。
+  * ui/settings_dialog.py：推理性能页 `combo_moss_quant`（三档，默认关闭），
+    `accept()` 写 `cfg.moss_quant`。
+
+19.16.5 回归
+------------
+tests/test_moss_image.py 新增 4 项（int8_quantize_keeps_bfloat16_weight_view、
+int8_w8a8_and_dequant_agree、int8_quantization_is_wired、
+int8_vram_path_has_guard）-> 37/37 PASS。
+
+19.16.6 设置页开关与端到端验证（补）
+------------------------------------
+* ui/settings_dialog.py 新增 combo_moss_quant（三档，对应 config.moss_quant），
+  accept() 里落盘；离屏实测：`items == [off, int8, int8te]`、读回 `off`、
+  选 int8te 后 `AppConfig.load().moss_quant == "int8te"`。
+* 主界面端到端（offscreen + 隔离配置 + HF_HUB_OFFLINE=1，512²/2 步）：
+  - `moss_int8_stats = {count: 269, before_mb: 9693.0, after_mb: 4846.5, w8a8: True}`
+  - `moss_int8_te_stats = {count: 358, before_mb: 14056.6, after_mb: 7028.3, w8a8: True}`
+  - 生成 131~174s（含量化 40s 左右）、出图正常、元数据 `Model hash: dir:ece485`。
+* **顺手修掉的一个真问题**：MOSS-Image 的官方 CFG 是 3.0，而主界面滑杆默认 7.0
+  → 每张图都按 7.0 跑（过曝）。新增 `_apply_arch_guidance_default()`：
+  读 `build_arch_profile(arch).default_guidance`，只在"偏离超过 max(1.0, rec*0.5)"
+  时把滑杆拉回推荐值，写日志 + 状态栏"已把 CFG 调到 3.0"，并且**把 ctx["cfg"] 一起改**
+  —— 否则 ctx 是加载前快照的，这一张仍用旧值（第一版就是这样，元数据仍显示 7.0）。
+  回归：`test_arch_recommended_cfg_is_applied`（38 项全 PASS）。
+
+================================================================================
+第 20 章 - 两条 P1：Python 节点的"第三道闸"名不副实 + IPA 签名不含文件身份
+================================================================================
+
+20.1 Python 节点：`allow_imports=False` 挡不住 open / eval / exec
+-----------------------------------------------------------------
+用户报（可复现）：`nodes/python_nodes.py` 只换了 `__import__` 一个名字：
+
+    builtins_copy = dict(vars(_b))
+    builtins_copy["__import__"] = _make_import_guard(False)
+
+`open` / `eval` / `exec` / `compile` 原样留在里面，而模块 docstring 第 16-17 行
+写的是"拦掉 os/sys/subprocess 这类能碰文件系统的导入" —— 注释与实现不一致。
+用户实测（allow_imports=False）：OPEN 写出文件成功、EVAL 可用、ESCAPE 可扫子类，
+只有 IMPORT 被拦。
+
+为什么是本轮要修的：同一周上了 `workflow/comfy_compat.py`，"导入别人的工作流"
+变成正式功能；而本格式的 JSON 能携带 `PythonScript` 节点 → "下载一份工作流 →
+打开就执行任意代码"这条链成立。
+
+修法（不假装做成沙箱）：
+  * 新增 `BLOCKED_BUILTINS = {open, exec, eval, compile, input, breakpoint,
+    globals, locals, vars}`；
+  * 新增 `_restricted_builtins()`：从 `vars(builtins)` 里 pop 掉这些名字，再塞
+    回一个 `_make_denied(name)` 桩 —— 调用时抛中文 NameError
+    "本节点已禁用 open()：它能直接读写文件或动态执行代码。要使用它，请勾选
+    节点参数「允许 import」…"，比 "name 'open' is not defined" 能照做；
+  * `run_code(..., allow_imports=False)` 改用 `_restricted_builtins()`；
+  * docstring 第三道闸重写，明确写"这不是沙箱"，并说明 `__subclasses__()`
+    那条路仍然可行；
+  * 设置页文案改成"允许「任意 Python 节点」（会执行任意代码，只用于你自己写的
+    工作流）"，tooltip 与二次确认框都补上"从 ComfyUI 导入的工作流也可能带代码"
+    与"「允许 import」关掉只是禁用入口，不是沙箱"。
+
+实测（修复后）：OPEN → NameError 且**文件没有生成**；EVAL → NameError；
+IMPORT → ImportError；ESCAPE → 仍然 OK（`type` 子类可枚举）—— 这条**故意保留**
+并写进测试，防止以后有人把它当沙箱。
+
+20.2 IPA 签名不含文件身份
+--------------------------
+`core/model_manager.py` 里跳过重复安装用的是：
+
+    sig = tuple(zip(variants, names, sources, subs))
+
+四项全是"名字/路径"，不含文件内容或元信息。用户把同名适配器文件换掉
+（重下一版、覆盖成别的适配器）时，签名不变 → 继续用内存里那份旧权重。
+
+修法：新增 `ModelManager._ipa_file_stamp(path) -> (size, mtime)`，签名改成
+`zip(variants, names, sources, subs, stamps)`。为什么不用 sha256：SD1.5/SDXL
+的适配器 40~700MB，每次生成都哈希太贵（实测 base 适配器 0.3s 起）；
+体积 + mtime 已能发现"同名文件被替换"。文件不存在时返回 `(0, 0)`，
+不抛异常（原来走 `resolve_ipa_weights` 已经报过缺失）。
+
+20.3 回归
+---------
+* `tests/test_python_nodes.py` 新增 4 项：`dangerous_builtins_are_blocked`
+  （open/exec/eval/compile 全部 NameError + 文件未生成）、
+  `blocked_builtins_are_listed`、`allow_imports_true_keeps_full_builtins`、
+  `escape_via_subclasses_is_documented_not_claimed`（**断言逃逸仍可行** +
+  断言 docstring/设置页里留了"不是沙箱"的说明）。
+* `tests/test_ipa_plumbing.py` 新增 1 项 `ipa_signature_includes_file_identity`
+  （同名文件换内容后 stamp 必须变；源码里签名必须带 stamps）→ 8/8 PASS。
+
+
+================================================================================
+第 21 章  LoRA 训练（轻量、8GB 可跑）
+================================================================================
+
+21.1 缘起与定位
+--------------------------------------------------------------------------------
+需求原话（用户 m09832）：「添加Lora训练部分，支持用户训练轻量Lora」。
+
+定位：
+  · 只训 LoRA（附加权重），不做 DreamBooth / 全参微调；
+  · 训练必须能在 8GB 显存上跑，所以默认 rank=8、batch=1、梯度检查点开；
+  · 入口放在界面里（工具 → 训练 LoRA…），不要求用户敲 accelerate launch；
+  · 不引入新的第三方依赖：peft 0.19.1 与 diffusers 0.40.0 在 venv 里本来就有。
+
+21.2 为什么复用推理的加载链路
+--------------------------------------------------------------------------------
+项目里已经因为"两套实现"吃过五次亏（输出目录、LoRA/CN/IPA 读数、超分签名、
+IPA 七步、LoRA 子目录）。所以 load_pipeline_for_training() 不自己写
+from_pretrained，而是：
+
+    detect(path) → get_loader(arch).load(LoadContext(...)) → result.txt2img
+
+代价是要给 BaseLoader.post_load 一个 manager 桩（_TrainingManagerStub）：
+post_load 会硬调用 mgr._detect_vpred(...)，传 None 直接 AttributeError。
+
+21.3 数据与分桶
+--------------------------------------------------------------------------------
+scan_dataset()：
+  · 不递归子目录（防止误扫）；
+  · 同名 .txt 依次按 UTF-8 → UTF-8-SIG → GBK 读（中文标注直接可用）；
+  · 触发词插到 captions 最前面；
+  · 空目录 / 缺标注都给中文 warning，空目录直接让 train_lora 早退，
+    而且**在碰 pipe.vae 之前**就早退（否则空数据集测试会炸在假 pipe 上）。
+
+bucket_size()：面积≈resolution²、长宽比夹到 [0.25, 4]、长宽四舍五入到 64 的倍数。
+build_batches()：先按桶分组（同一 batch 里张量尺寸必须一致），桶内洗牌。
+
+21.4 训练循环
+--------------------------------------------------------------------------------
+顺序（每一步都为了省显存）：
+  1. scan_dataset → 空则立刻报错；
+  2. VAE 以 fp32 上卡逐张编码 latents（*scaling_factor）后下卡，缓存进内存；
+  3. 文本编码器上卡编码 caption 后下卡；勾了「训文本编码器」则跳过缓存；
+  4. unet.requires_grad_(False) → add_adapter → 可选 enable_gradient_checkpointing；
+  5. AdamW（unet 用 lr、TE 用 text_encoder_lr）+ warmup 10 步 + cosine；
+  6. DDPMScheduler(1000, beta 0.00085→0.012, scaled_linear)，prediction_type 从底模
+     scheduler 读（v_pred 时 target 用 get_velocity）；
+  7. 逐步：add_noise → UNet 前向（SDXL 带 added_cond_kwargs）→ MSE → backward
+     → clip_grad_norm_ → step；
+  8. 每 10 步发一次 status（进度 / loss / 秒每步 / 剩余分钟）；
+  9. _save_lora()，vram_peak_mb 取 torch.cuda.max_memory_allocated()。
+
+21.5 三个只有真机才暴露的 bug
+--------------------------------------------------------------------------------
+（1）把"模块"当成 state dict 存 → 1.7GB 的假 LoRA
+    save_lora_weights(unet_lora_layers=pipe.unet) 会把整份 UNet state_dict 存下来：
+    实测 942 个张量、首几个是 unet.conv_in.weight / conv_out.weight，没有任何键
+    含 "lora"；之后 load_lora_weights 直接抛
+    ValueError: Invalid LoRA checkpoint. Make sure all LoRA param names contain
+    'lora' substring.
+    修法：_lora_state_dict() = peft.utils.get_peft_model_state_dict()
+          → diffusers.utils.convert_state_dict_to_diffusers() → 再过滤含 "lora" 的键。
+    修后产物 256 个张量 / 1.63MB，键形如
+    unet.down_blocks.0.attentions.0.transformer_blocks.0.attn1.to_k.lora.down.weight。
+
+（2）产物必须落 loras/<子目录>/，否则主界面根本看不到
+    界面找 LoRA 是按底模类别进子目录的（loras/sd1.5/、loras/sdxl/），
+    见 ModelManager.current_lora_subdir() 与 utils/app_events.py 里触发词旁文件的
+    查找顺序。第一版存到 loras/ 根目录 → scan_models("lora") 返回 []。
+    修法：lora_subdir_for(arch) 从 get_arch(arch).lora_subdir 取子目录，
+    权重、.txt、.train.json 三者放在同一目录。
+
+（3）"训练没改参数"是假象
+    add_adapter() 会**替换** nn.Linear 层，训练前的 state_dict 快照里根本没有
+    lora 键，所以"对比前后参数"永远为空。改成对比 lr=0 与 lr>0 两次训练的
+    产物文件字节（同种子、同步数），必须不同。
+
+另外两处自造的坑：
+  · 空数据集测试的假 pipe 没有 .vae → 把 scan_dataset 提前到访问任何 pipe 组件之前；
+  · _safe_name 还需要把空白归一成 _（"unit lora/v1" → unit_lora_v1）。
+
+21.6 实测（RTX 5060 Laptop，7.93GB）
+--------------------------------------------------------------------------------
+SD1.5 · 512² · rank 4 · batch 1 · 12 步：
+  · 总耗时 21.2s，稳态 0.48~0.52 s/步（首步含预热 1.4s 量级）；
+  · 训练显存峰值 2868MB；
+  · 产物 loras/sd1.5/tmp_smoke_lora.safetensors 1631936 B / 256 张量；
+  · pipe.load_lora_weights() 读回成功，用它出图存 output/_tmp_lora_real.png。
+
+对话框侧（offscreen 探针）：
+  · 工具菜单有 "训练 LoRA…"（win._act_lora_train 存在，_open_lora_trainer 在）；
+  · 底模下拉列出 8 个可训练检查点（sd15 5 个 + sdxl 3 个），diffusers 目录被过滤掉；
+  · 生成/估算文本随底模与参数即时刷新。
+
+21.7 回归
+--------------------------------------------------------------------------------
+tests/test_lora_train.py（10 项，全通过）：
+  scan_dataset_reads_captions_and_warns / scan_dataset_reports_empty_dir /
+  bucket_size_is_multiple_of_64_and_keeps_aspect / batches_are_bucket_homogeneous /
+  lora_config_has_targets_and_alpha / vram_estimate_scales /
+  micro_training_updates_params_and_saves / training_actually_changes_the_weights /
+  cancel_stops_without_saving / training_empty_dataset_returns_error_not_crash
+
+21.8 未验证边界
+--------------------------------------------------------------------------------
+· SDXL 训练没有真机跑过（只有 SD1.5 实测；代码路径按 hidden_states[-2] + pooled
+  写，与推理侧一致）；
+· batch > 1、每 50 步存中间结果、断点续训都没有真机验证；
+· 训练效果（多少步、什么 rank 好看）需要用户拿自己的数据集试；
+· 训练与生图同时跑会互相抢显存，程序没做互斥。
+
+### 21.9 多架构 LoRA 训练 + 训练窗口崩溃修复（2026-11-13）
+
+**用户报的崩溃**（原话附 traceback）：
+
+```
+File "ui\shell.py", line 1011, in _open_lora_trainer
+    picked = dlg.edit_dataset.text().strip()
+RuntimeError: wrapped C/C++ object of type QLineEdit has been deleted
+```
+
+根因是 `dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)`：
+`exec()` 返回时 Qt 已经把 C++ 对象删掉，Python 侧还拿着壳子去读控件。
+修法：去掉 `WA_DeleteOnClose`，把「读控件」包进 `try/except RuntimeError`
+（拿不到就退回上次目录），最后统一 `dlg.deleteLater()`。
+离屏探针实测：`exec_calls=1 / no_exception=True / dialog_ref_cleared=True /
+saved_dataset='D:/some/dataset'`，崩溃点不再触发。
+
+**多架构**（用户要求「支持训练不同类型模型的 Lora，我的电脑是 8G 卡，但其他用户的不是」）：
+
+| 族 | 判定 | 主干 | 目标层 | 训练口径 | 512² 估算 |
+|----|------|------|--------|----------|-----------|
+| sd | 其余 | `pipe.unet` | `to_q/to_k/to_v/to_out.0`（+TE `q_proj/k_proj/v_proj/out_proj`） | DDPM + epsilon/v-pred | 2.9GB（SDXL 5.5GB） |
+| sd3 | `sd3/sd35/sd3.5/sd3_5` | `pipe.transformer` | 上面 + `add_q_proj/add_k_proj/add_v_proj/to_add_out` | rectified flow | 6.3GB |
+| flux | `flux/flux1/flux.1` | `pipe.transformer` | 四个 + `proj_mlp/proj_out` | rectified flow + 2×2 打包 + `img_ids/txt_ids/guidance` | 20.3GB |
+
+四个只有真看代码才会知道的坑：
+
+1. **Flux 的输入是打包过的**：`(B,C,H,W) → (B,(H/2)(W/2),C*4)`（einsum
+   `bchpwq->bhwpqc`），奇数长宽直接抛错；预测也在打包空间里，所以目标也要打包。
+2. **不能复用管线自带的 `encode_prompt`**：它内部把输入搬到 `self._execution_device`，
+   而我们只把文本编码器临时放上卡、管线本身留在 CPU → 会踩
+   `Expected all tensors to be on the same device`（MOSS 那边同类问题已经踩过一次）。
+   改为自己按上游口径算：Flux 用 CLIP 的 `pooler_output` + T5；SD3 用 CLIP-L/CLIP-G
+   的 `hidden_states[-2]` 拼 T5，`pooled` 拼 CLIP 的两路。用完立刻把 TE 搬回 CPU。
+3. **`save_lora_weights` 的参数名不一样**：SD/SDXL 是 `unet_lora_layers`，
+   Flux/SD3 是 `transformer_lora_layers`。按 `inspect.signature` 挑，不按架构名硬编码。
+4. **`estimate_vram_mb` 必须按族分档**，否则选 Flux 时界面还显示"约 2.9GB"，
+   等于骗用户点开始。新增 `vram_advice()` 直接给一句人话建议（含"8GB 练不动 Flux"）。
+
+回归：`tests/test_lora_train.py` 10 → **17 项全 PASS**（新增 `arch_family` 映射、
+`backbone_targets` 命名、`_pack_latents` 形状与奇数报错、`_predict` 三族分派、
+`_save_lora` 按签名选 kwarg、`estimate_vram_mb` 单调递增、`TRAINABLE_ARCHES` 覆盖）。
+
+未验证边界：**本机没有 SD3 / Flux 权重，这两个族的训练没有真机跑过**，只有假主干
+的形状级与签名级回归；Flux 的 `guidance` 嵌入取 `1.0`(schnell) / `3.5`(其余)
+是按官方文档写的，没有实测对照。
+
+================================================================================
+第 22 章　换模型不释放内存（用户实测报告 → 三层根因 → 修法 → 实测）
+================================================================================
+
+22.1 用户报告（原文）
+--------------------------------------------------------------------------------
+「先使用 moss 模型后使用 anime 模型，没有把前面的模型给放出，占用大量内存/显存」
+
+附任务管理器截图：内存 21.4/31.7 GB（68%）、专用 GPU 内存 4.8/8.0 GB、共享 GPU
+内存 13.3/15.9 GB、GPU 利用率 0%、温度 46°C。也就是**空闲状态下**显存仍占 4.8GB、
+内存仍占 21.4GB。
+
+关键读数：4.8GB 与本项目实测的 "MOSS-Image int8 常驻 DiT = 4.73GB" 几乎一致；
+21.4GB 与 "MOSS 权重 25.4GB 被量化时整份读进工作集" 一致。两者都指向"旧模型没放掉"。
+
+22.2 三层根因（都不是"忘了调 empty_cache"这种简单事）
+--------------------------------------------------------------------------------
+(1) 时机层：加载是懒的。
+    `_gt_load_model()` 只在"开始生成"时调 `ai.load_model()`。用户在下拉框里换了
+    模型、还没点生成，旧模型（含它已经搬到卡上的 DiT）就一直驻留。表现为"我明明
+    换了 anime 模型，内存一点没降"。
+
+(2) 状态层：`clear_memory()` 清得不全。
+    以前它把 5 个 pipe 置空、清 Compel 缓存、清 IPA 状态、gc + empty_cache，
+    但**没有清 `_scheduler_base_cfg`**。这个基线是"第一次切采样器时从当前
+    scheduler.config 抓的快照"，留着上一个模型的 beta/alpha/prediction_type，
+    下一个模型切采样器时会被污染（v-pred 模型尤其致命）。
+
+(3) 系统层（最隐蔽）：Windows 的文件页不会自己还。
+    MOSS-Image 权重是 safetensors 内存映射。量化时 `quantize_weight()` 会把 25.4GB
+    的每个权重块都读一遍（否则算不出 per-channel scale），于是整份文件页进入进程
+    **工作集**。Python 侧引用删光、`gc.collect()`、`torch.cuda.empty_cache()` 全跑过，
+    这些页**仍然**算在进程 RSS 里 —— 任务管理器上就是 20GB+ 不降。
+    必须显式 `EmptyWorkingSet`（`psapi.dll`）才能把它们退回 standby 列表。
+
+22.3 修法
+--------------------------------------------------------------------------------
+新增 `utils/mem.py`（120 行，无第三方依赖）：
+
+  trim_working_set() -> bool      Windows 上调 psapi.EmptyWorkingSet；其他平台 no-op
+  rss_mb() -> float               进程 RSS
+  vram_mb() -> (alloc, reserved, free)
+  release_memory(*, trim=True, empty_cache=True) -> dict   三连并返回前后对比
+  describe(delta) -> str          "进程内存 3046 → 1012 MB（释放 2034 MB）；显存空闲 ..."
+
+四处接线：
+
+  core/model_manager.py::clear_memory()
+      末尾 gc + empty_cache 之后追加 `_mem.release_memory()`，并补 `self._scheduler_base_cfg
+      = None`；日志打 "🧹 已释放旧模型：..."
+  core/model_manager.py::unload_all()
+      pop 掉检测器之后再收一遍，日志打 "✅ 所有模型已释放：..."
+  core/model_manager.py::load_model()
+      换模型时日志带上旧架构："🧹 加载新模型前释放旧管线（旧架构=mossimage）..."
+  main.py::_release_previous_model_for(data)
+      新增：**选中另一个模型文件就立刻卸载**（`is_generating` 或同名文件时不动），
+      由 `_on_model_changed()` 末尾调用。反正下一个模型无论如何都要重新加载。
+  ui/shell.py::on_unload_models() / _show_memory()
+      「释放内存」打出前后对比；「查看当前内存」同时显示内存与显存三项。
+
+22.4 实测（离屏跑真 `AIDesktopApp`，两个 SD1.5 检查点互切）
+--------------------------------------------------------------------------------
+  加载 A 之后                    显存已分配 2057MB / 空闲 507MB / RSS 3046MB
+  只在下拉框里选了 B（没有生成）  显存已分配    0MB / 空闲 7043MB / RSS 1012MB
+  再加载 B 之后                  显存已分配 2057MB / 空闲 507MB / RSS 1022MB
+
+`ai.current_model_name` 与 `ai.txt2img_pipe` 在"选 B"之后都为 None —— 是真的卸载，
+不是数字好看。之后重新加载 B 正常出管线（`StableDiffusionPipeline` / arch=sd15）。
+
+另外用 `_tmp_switch2.py` 验证了 weakref 语义：换模型后旧 pipe / unet / vae 的
+weakref 全部失效（`alive=False`），说明没有隐藏引用把它们钉住；连续切换不累积。
+
+22.5 新回归 `tests/test_model_switch_memory.py`（6 项，全 PASS）
+--------------------------------------------------------------------------------
+  mem_helpers_are_safe                       三个接口都不抛异常、返回值类型对
+  clear_memory_trims_working_set_and_resets_scheduler_base
+                                             源码级：必须调 release_memory、必须清基线
+  unload_all_reports_freed_memory            源码级
+  shell_memory_actions_show_numbers          源码级：两个菜单项都报数字
+  selecting_another_model_releases_previous  同名不卸载 / 换名卸载一次 / 生成中不动
+  model_changed_triggers_release             `_on_model_changed` 必须调用它
+
+22.6 未验证边界（诚实记录）
+--------------------------------------------------------------------------------
+* MOSS-Image → Anima 的**完整复跑**没做：装载 MOSS 需要 ≥14GB 可用内存，写这段时
+  本机被其它程序占到只剩 7.9GB，预检会直接拒绝（这是设计行为，不是 bug）。
+  用两个 SD1.5 走同一条代码路径验证了"选择即卸载 + 工作集回收 + 重新加载"。
+* `EmptyWorkingSet` 只是把页从工作集移到 standby，系统仍算它"已缓存"；如果别的程序
+  立刻要吃内存，这些页可能被重新读回（那时会变慢但没有 OOM 风险）。
+* 非 Windows 平台 `trim_working_set()` 是 no-op（Linux 上没有等价全局调用）。
+
+
+================================================================================
+第 23 章  LoRA 加载失败修复（keys 格式 + 半成功识别）
+================================================================================
+
+23.1 用户报告
+--------------------------------------------------------------------------------
+[跳过] 插件 setu.safetensors: Could not automatically infer state dict type
+[跳过] 插件 E8BFB7E8BFADE9A699E8A1A3.OXvE.safetensors: list index out of range
+（setu 是用户自己训的，另一个是下载的）→ 两个都挂了 = 一个都用不了。
+
+23.2 两个根因（实测定位）
+--------------------------------------------------------------------------------
+A. 训练器存出来的文件带 peft 适配器名
+   setu.safetensors 352 个张量：unet 256 个键是干净的 lora.down/lora.up，
+   text_encoder 96 个键是 ...k_proj.lora_A.default.weight。
+   diffusers/loaders/lora_base.py:381 → convert_state_dict_to_diffusers
+   → state_dict_utils.py:275 直接 ValueError。
+
+B. kohya 格式的文本编码器部分在上游转换里必炸
+   792 个张量，转换后 528 个键（unet 384 + te 144），unet 半边完全健康；
+   te 半边被写成 ...self_attn.to_k_lora.down.weight（UNet 命名），
+   于是 lora_base.py:386-390 用 .k_proj 结尾的名字找不到 lora_B，
+   rank 是空字典 → peft_utils.py:158 list(rank_dict.values())[0] → IndexError。
+
+关键事实：diffusers 把 UNet 和 TE 放在同一个 load_lora_weights 里，
+异常抛出来时 **UNet 其实已经挂上了**（pipe.unet.peft_config 里有该 adapter）。
+旧代码不看这个状态，整块当"损坏"丢掉 → 用户以为 LoRA 完全没用。
+
+23.3 修复
+--------------------------------------------------------------------------------
+新增 utils/lora_repair.py（纯整形、无加载副作用）：
+  strip_adapter_suffix / looks_kohya / has_unet_keys / has_text_encoder_keys /
+  repair_lora_state_dict(drop_text_encoder=True) / describe_repair
+
+core/model_manager.py：
+  apply_multiple_loras 的 try/except → self._load_one_lora(...)
+  _adapter_registered(name)：查 unet/transformer 的 peft_config
+  流程：原样加载 → 失败且 adapter 已注册 → 认"半成功"+ 明确警告
+                     → 未注册 → 修键名重试 → 仍失败才报"不兼容或损坏"
+
+core/lora_train.py::_lora_state_dict：
+  存盘前调用 lora_repair.strip_adapter_suffix()，让训练器自己的产物能被自己读回。
+
+23.4 真机验证
+--------------------------------------------------------------------------------
+三个真实文件（SD1.5 abyssorangemix2_Hard 底模）：
+  setu.safetensors            → unet ✅ + TE ❌（旧训练器产物）
+  E8BFB7...OXvE.safetensors   → unet ✅ + TE ❌（kohya）
+  FComic1To3Page_SD15_1       → unet ✅ + TE ❌（kohya）
+三者在修复前全部"零挂载"，修复后全部返回 True 并进入 set_adapters。
+生成对比（384², 4 步, 同种子）：挂 LoRA 与不挂的平均像素差 26.33，
+卸掉后与原始图差 0.00（干净还原，没有残留）。
+
+训练器往返验证（2 步, rank 4, 含文本编码器）：
+  产物 352 个张量、带 .default 的键 0 个、unet 256 + te 96，
+  load_lora_weights 一次成功，unet 与 te 的 peft_config 都有该 adapter（注册成功不等于生效，见下）。
+
+23.5 刻意没做的事
+--------------------------------------------------------------------------------
+- 没有去"猜"kohya 的 TE 键名硬改成 CLIP 命名：实测改成 .lora_A 后
+  convert_state_dict_to_diffusers 直接 ValueError，改成去前缀又会被整段跳过。
+- 没有调用 _load_lora_into_text_encoder 去"补挂"TE：实测补挂后
+  text_encoder.peft_config 有适配器，但 _encode_prompt 的输出与 base
+  逐位相同（哈希一致），说明它不参与编码 —— 谎报"已修好"比不修更糟，
+  所以只保留诚实的警告。
+- 没有换 diffusers 版本：0.40 是当前 torch 2.11/cu128 的可用组合。
+
+23.6 回归
+--------------------------------------------------------------------------------
+新增 tests/test_lora_repair.py 11 项全 PASS（整形逻辑 8 项 + 接线 3 项）。
+全量测试 43/43 全绿。
+
+================================================================================
+第 24 章  LoRA 微调：学习率调度 / 优化器 / 梯度累积
+================================================================================
+
+24.1 用户诉求
+-------------
+原话（m10916）：「微调部分添加余弦退火等优化」。
+
+改之前 `core/lora_train.py` 里写死了两件事：
+  * `_make_scheduler()` 只有一个硬编码的 lambda：warmup 线性爬升 + 余弦衰减到 0；
+  * 优化器写死 `torch.optim.AdamW(betas=(0.9,0.999), eps=1e-8, weight_decay=1e-2)`。
+问题：
+  1. 用户看不到也选不了，"末端衰减到 0"直接写进 lambda（`max(0.0, ...)`），
+     训练末期学习率归零，最后几步等于白跑；
+  2. 没有梯度累积，8GB 卡想要"等效大 batch"只能把 batch 调大，直接 OOM；
+  3. 没有 8bit / Adafactor 这类省显存的优化器选择。
+
+24.2 实现
+---------
+`core/lora_train.py`：
+  * `TrainConfig` 新增 5 个字段（都有默认值，旧的 .train.json 照样能读）：
+      - `lr_scheduler: str = "cosine"`
+      - `min_lr_ratio: float = 0.05`
+      - `optimizer: str = "adamw"`
+      - `weight_decay: float = 0.01`
+      - `grad_accumulation: int = 1`
+  * `LR_SCHEDULERS`（constant / linear / cosine / cosine_restarts / poly / plateau）与
+    `OPTIMIZERS`（adamw / adamw8bit / adafactor）两张表作为**唯一真相**，
+    界面下拉框直接遍历它们（`tests/test_lora_train_schedule.py` 用同源断言钉住）。
+  * `lr_factor(step, total, warmup, name, min_ratio)` —— **纯函数**，不碰 torch，
+    便于单测：warmup 段返回 `(step+1)/warmup`，其后按名字算形状，
+    末端统一乘上 `min_ratio`（不再是硬编码 0）。
+  * `_make_scheduler()` 返回 `(scheduler, 是否需要喂 loss, 说明文字)`：
+    - 非 plateau 都走 `LambdaLR(lr_factor)`；
+    - plateau 走 `ReduceLROnPlateau(mode="min", factor=0.5, patience=max(5,total//20))`，
+      由训练循环 `lr_sched.step(raw_loss)` 触发。
+  * `_make_optimizer(groups, cfg, log)`：adamw8bit 需要 bitsandbytes，
+    adafactor 需要 transformers，任一不可用时**明确 log 回退**，不静默换掉。
+  * 训练循环：
+      - `accum = max(1, cfg.grad_accumulation)`；`loss = loss / accum` 后再 backward；
+      - `stepped = (step_done + 1) % accum == 0 or (step_done + 1) >= total_steps`
+        （最后一步不足 accum 也要 flush，否则最后几个 batch 白算）；
+      - 只在 stepped 时 clip / optimizer.step / 调度器 step / zero_grad；
+      - 状态栏追加 `lr {cur_lr:.2e}`。
+  * `_clear_adapters(module)`：同一个管线上连续训第二次时，第一次挂的适配器还在，
+    `add_adapter` 会抛 `Adapter with name default already exists`。
+    排查发现 `unet.unload_lora_weights` 在 diffusers 0.40 的 UNet 上**根本不存在**
+    （那是管线上的方法），`delete_adapters` 内部又会碰 `peft_config` 抛 AttributeError，
+    所以这里直接 `delete_adapters(每个名字)` + 手工 `peft_config.clear()` +
+    `_hf_peft_config_loaded = False`。界面每次都重新加载底模，正常路径下是空操作。
+
+`ui/lora_train_dialog.py`：
+  * 新增「学习率调度:」一行（下拉 6 档 + `末端 %` 数值框，0~50%）；
+  * 新增「优化细节:」一行（优化器下拉 + 权重衰减 + 梯度累积）；
+  * `_current_cfg()` 回填 5 个新字段；`spin_accum` / `combo_optim` 变化时刷新显存估算。
+
+24.3 真机验证
+-------------
+（SD1.5 `abyssorangemix2_Hard`，batch 1，512²，rank 4）
+
+  * 三种组合都能跑通并各自存出 1.63MB 的 LoRA：
+      - cosine + adamw + accum 2：4 步、2 次优化器更新，lr 曲线 [1e-4, 2e-4, 2e-4]；
+      - plateau + **adamw8bit**：4 步正常，日志「优化器：AdamW 8bit（bitsandbytes）」；
+      - constant + **adafactor**：4 步正常，lr 全程 2e-4。
+  * 12 步余弦衰减（lr 2e-4，warmup 3，末端 5%）：
+      6.67e-05 → 1.33e-04 → 2.00e-04 → 2.00e-04 → 1.94e-04 → 1.78e-04 →
+      1.53e-04 → 1.21e-04 → 8.85e-05 → 5.75e-05 → 3.22e-05 → 1.57e-05 → 1.00e-05
+    末端正好等于 `2e-4 × 5%`；17.0 秒跑完 12 步，末步 loss 0.00263。
+  * 修复前第二次训练必挂（`Adapter with name default already exists`），
+    修复后同一管线上连着跑三次都正常 —— 这就是 `_clear_adapters` 的作用。
+
+24.4 新回归
+-----------
+`tests/test_lora_train_schedule.py`（11 项，全 PASS）：
+  warmup 爬升 / 五种形状 / min_ratio=0 降到 0 / 真实调度器末端等于下限 /
+  plateau 要求喂 loss 且会减半 / 未知名字回退余弦 / 优化器工厂三种取值 /
+  TrainConfig asdict 往返 / 对话框与 core 同源 / 训练循环接线 / 说明文字含下限。
+
+24.5 未验证边界
+---------------
+  * `adamw8bit` 只在 SD1.5 上跑过 4 步，SDXL / SD3 / Flux 没试；
+  * `adafactor` 只验证了能跑通，没比较过收敛质量；
+  * `plateau` 的 patience 是"步数"不是"epoch"，400 步时 patience=20 步，
+    这个比例是否合适还没有长时间训练的数据；
+  * `cosine_restarts` 只在单测里算了曲线，没有真机训练对比。
+
+
+================================================================================
+第 26 章  视频链路审计与修复（2026-11-16）
+================================================================================
+
+26.1 用户诉求
+--------------------------------------------------------------------------------
+原话：「视频部分，你看看有没有能加的内容技术，我记得现在的比较落后，也有bug」。
+
+做法：不靠读代码猜，先跑真机。三个探针：
+  _tmp_audit_ffmpeg.py  单独验证 ffmpeg 命令（配音/BGM 合并）
+  _tmp_audit_video.py   真机跑 AnimateDiff（SD1.5 + motion adapter v1-5-3）
+  _tmp_vidfix.py        修完之后再跑一遍，对比首帧与输入图的像素差
+
+26.2 实测确认的 bug（都有数字）
+--------------------------------------------------------------------------------
+[1] 旁白比视频短 → 视频被砍
+    6.00s 视频 + 2.02s 旁白，旧命令 `-shortest` → 成片 2.04s。
+    根因：-shortest 按"更短的流"截断，而旁白通常比视频短。
+    修法：[1:a]apad=whole_dur=6.000 + -t 6.000 + -c:v copy -c:a aac
+    验证：成片 6.00s、有音轨、43779 B。
+
+[2] 输出格式选「MP4 + GIF」只产出 GIF
+    旧实现：ext = "gif" if want.lower().endswith("gif") else "mp4"，二选一。
+    实测产出 video_txt2video_..._seed3.gif，界面承诺的两样只给了一样。
+
+[3] 长提示词被静默截断
+    296 token 的提示词经 _encode_single 只编码 77 token，219 个词被丢掉，
+    全程没有任何提示。项目铁律是"绝不截断"，图像链路做了分段，视频链路没做。
+
+[4] 背景配乐会把视频截短
+    amix 用了 duration=shortest + -shortest，同样的截断问题。
+
+另外两条"以为有 bug、其实没有"：
+  - 17 帧（非 4 的倍数）能正常生成 → 不存在"帧数必须是 4 的倍数"的约束；
+  - 8GB 卡跑 320×320/16 帧/4 步只用 1.62GB 显存，视频这块显存不是瓶颈。
+
+26.3 设计层面的问题（比 bug 更值得改）
+--------------------------------------------------------------------------------
+[a] 图生视频其实不是图生视频
+    旧实现只把首帧塞进 ip_adapter_image=（IP-Adapter 当风格参考），
+    画面并不从那张图开始 —— 与"图生视频"四个字不符，还强制依赖 2.5GB 适配器。
+
+[b] 长视频模式的 tooltip 名不副实
+    写着"启用 Context Window，帧数上限扩至 150"，但 generate() 收了
+    use_context_window 参数后从未使用；勾选只改了帧数上限，没有任何上下文窗口。
+
+[c] 输出目录写死 "photo/videos"
+    用户改了输出目录，视频仍然跑到 photo/videos，画廊里当然找不到。
+
+[d] Motion LoRA 用相对路径 "models/motion_lora"
+    与 lora_triggers 同类问题：换工作目录（比如从 IDE 启动）就扫不到。
+
+[e] 生成视频会卸掉用户在图片面板挂的 LoRA 且不恢复 —— 已修
+    _build_pipe() 里 base.unload_lora_weights() 直接作用在 ModelManager 的
+    txt2img_pipe 上，卸完不挂回去 → 生成过一次视频后图片生成就不带 LoRA 了。
+    修法：ModelManager 用 _active_lora_spec 记录真正挂上的 (文件名, 权重)，
+    VideoGenerator._build_pipe 先备份 → 卸载 → 建视频管线（deepcopy 到干净 UNet）
+    → 再 apply_multiple_loras 挂回去。
+    实测：挂 setu 0.9 + FComic 0.6 后建视频管线 8.6s，
+    建完后 txt2img_pipe.get_active_adapters() 仍为 ['lora_slot_0', 'lora_slot_1']。
+
+26.4 修法
+--------------------------------------------------------------------------------
+utils/video_gen.py
+  + RECOMMENDED_MAX_FRAMES = 32 / CLIP_MAX_TOKENS = 77
+  + need_v2v = mode in ("vid2vid", "img2video")
+  + img2video 改走 v2v：video=[first]*num_frames, strength=strength
+  + 保存改为 want_mp4/want_gif 各自判断，两个都存，返回 mp4 路径
+  + _warn_prompt_length()：tokenizer 数 token，超 77 明确告警
+  + num_frames > 32 时告警（说明 motion module 按 16 帧训练）
+
+ui/video_panel_mixin.py
+  + probe_dur 补 stdin=subprocess.DEVNULL（不关 stdin 时 ffmpeg 会挂死，
+    首次审计脚本因此 120s 超时）
+  + 配音/BGM 合并改用 apad + amix longest + -t，绝不用 -shortest（除探测失败的兜底）
+  + 输出目录改为 os.path.join(host_output_dir(self), "videos")
+  + _scan_motion_loras 改用 utils.paths.MODEL_DIR 绝对路径 + 失败记日志
+  + img2video 不再预检 IP-Adapter，改为检查首帧文件存在
+
+ui/pages/video_page.py
+  + 长视频复选框 tooltip 改成实话（能到 150 帧，但 >32 帧动作会跑偏）
+
+26.5 真机验证（修后）
+--------------------------------------------------------------------------------
+_tmp_vidfix.py（真实 SD1.5 + motion adapter v1-5-3，256×256，8 帧，2 步）：
+  [1] output_format="MP4 + GIF" → 目录里同时出现 .mp4 与 .gif ✓
+  [2] 120 词长提示词 → 打出 「✂️ 正面提示词 122 token，超过 SD1.5 的 77 上限，
+      大约后面 45 个词不会生效」 ✓
+  [3] img2video：首帧与输入图的平均像素差 = 4.38
+      同样条件下 txt2video 首帧与输入图的差 = 77.07
+      → 图生视频现在真的从那张图开始（差 4.38 只是 2 步去噪的正常扰动）
+
+配音验证（tests/test_video_pipeline.py::voice_mux_keeps_full_video）：
+  6s 视频 + 2s 旁白 → 成片 ≥5.5s（旧实现 2.04s）。
+
+26.6 新回归
+--------------------------------------------------------------------------------
+tests/test_video_pipeline.py（7 项）：
+  voice_mux_keeps_full_video         配音不截短视频（真跑 ffmpeg）
+  mp4_and_gif_both_saved             两个格式都出文件
+  long_prompt_warns                  长提示词必须告警
+  img2video_uses_v2v_first_frame     走 v2v、首帧重复成整段、不传 ip_adapter_image
+  panel_uses_configured_output_dir   输出目录跟随设置、不再预检 IP-Adapter
+  motion_lora_scan_is_absolute       扫描用 MODEL_DIR
+  no_shortest_in_voice_mux           -shortest 只允许出现在兜底分支
+
+测试期间踩到的坑：utils/video_gen.py 的 logger 是 logging.getLogger(__name__)
+（即 "utils.video_gen"），不是 utils.system_utils.logger，抓日志要挂对名字，
+否则会得到"警告明明打出来了、测试却抓不到"的假失败。
+
+26.7 还能加什么技术（按性价比排序，尚未实现）
+--------------------------------------------------------------------------------
+1. AnimateDiff-Lightning（4 步蒸馏 LoRA）：25 步 → 4 步，本机 320²/16 帧
+   从 ~95s 降到 ~16s。需要用户自行下载 ~700MB 的 lightning LoRA（放 models/puton），
+   加载后把 steps=4~8、CFG=1.0~1.5。这是对 8GB 卡最划算的一步。
+2. 真·长视频：分段生成 + 尾帧续接（每段用上一段最后一帧做首帧约束 —— 本次
+   已经打通"首帧约束"这条路，续接实现起来就顺了），再配合 RIFE 插帧。
+3. 视频元数据：把 prompt/seed/模型/参数写进 mp4 的 metadata（ffmpeg -metadata），
+   与图片的 PNG 元数据对齐，方便回查。
+4. 换更现代的视频架构：LTX-Video、Wan2.1 这类 DiT 视频模型质量远高于
+   AnimateDiff(SD1.5)，但对 8GB 卡不友好；可作为"扩展市场可选引擎"，不接线。
+5. 音轨可视化 / 提示词旅行的时间轴编辑器：现在 prompt_travel 只能填表格式。
+
+26.8 未验证边界
+--------------------------------------------------------------------------------
+- 只在 SD1.5 + motion adapter v1-5-3 上真机验证；SDXL/AnimateDiff-XL 未验证。
+- 配音链路只验证了 ChatTTS 分支（stub 返回现成 wav），SoVITS 分支未跑真机。
+- RIFE 插帧未验证：本机没有 models/rife，is_available() 为 False。
+- BGM 混音的时长保护只做了命令级验证，未与真实音乐文件端到端跑。
+
+================================================================================
+第 27 章  视频第二批：再修 3 个 bug + Lightning 加速 / 分段长视频 / 现代架构入口
+================================================================================
+
+27.1 用户指令
+--------------------------------------------------------------------------------
+用户（m11585）：「修bug，然后做124」——先修剩下的 bug，再做上一轮汇报里
+建议的第 ①（AnimateDiff-Lightning 4 步加速）、②（真·长视频分段+尾帧续接）、
+④（LTX-Video / Wan2.1 入口）。
+
+27.2 又修掉 3 个 bug
+--------------------------------------------------------------------------------
+(a) Windows 下 cv2 打不开中文路径（会静默返回 isOpened()=False）
+    影响：视频转绘读不到输入视频、RIFE 提取帧失败、探测帧率为 0。
+    修法：新增 utils/video_io.py —— SafeVideoCapture 在检测到非 ASCII 路径时
+    先把文件复制到 output/.video_io_tmp/<mkdtemp>/video<ext>，读完自动清理；
+    另提供 probe_video() / read_all_frames()。video_gen._load_video_frames、
+    rife_interpolate._probe_video_info 与提取帧全部改用它。
+    实证：把 8 帧 MJPG 写到 output/_tmp_videoio/中文 目录/测试视频.avi，
+    needs_ascii_workaround → True，probe_video → (True, 8fps, 8 帧, 64x64)，
+    read_all_frames → 8 帧。
+
+(b) RIFE 只认 tools/rife 一个位置
+    修法：RIFE_SEARCH_DIRS = ("tools/rife", "models/rife", "models/puton/rife")，
+    RIFE_MODEL_DIRS = ("rife-v4.6", "rife-v4.26", "rife-v4", "rife-v2.4")，
+    find_rife_dirs() 自动挑选；新增 status_text() 区分"找不到 exe"与"有 exe 缺模型目录"，
+    并直接告诉用户该放 models/rife/。
+
+(c) 队列把失败任务标成 done
+    根因：generation_queue_controller._generation_queue_tick 在生成线程结束后
+    无条件 finish_current("cancelled" if cancel_flag else "done")。
+    生成线程内部抛异常时任务被记成 done —— 弹窗显示成功，实际没出图。
+    修法：generation_task 显式记录 self._gen_outcome（done/failed/cancelled）与
+    self._gen_outcome_error，队列按它归档；提前 return 的分支在 finally 里补 "done"。
+
+27.3 功能①：AnimateDiff-Lightning（4 步加速）
+--------------------------------------------------------------------------------
+机制
+  · models/lightning/ 下放 safetensors；VideoGenerator.list_lightning() 扫描；
+  · lightning_defaults(name) 按文件名判档：*4step* → (4, 1.0)、*8step* → (8, 1.5)，
+    *2step* → (2, 1.0)，认不出按 4 步；
+  · _apply_lightning(pipe, name) 挂到 txt2video 与 v2v 两条管线上
+    （load_lora_weights(adapter_name="lightning") + set_adapters）；
+  · generate() 里挂上后把 num_steps/guidance 覆盖成蒸馏档位，并记日志
+    「⚡ Lightning 参数覆盖：steps 25→4，CFG 7.5→1.0」。
+
+现实兼容
+  · 官方 lightning 文件是 UNet-only，直接能读；
+  · 但第三方 LoRA 若带文本编码器半边、且键名是 peft 原生写法（含 .default），
+    diffusers 会在 TE 那半抛 ValueError。这里复用 utils/lora_repair.py：
+    先原样加载；失败且 adapter 一个都没挂上 → 修键名（去 .default / kohya 转换）
+    再试；已挂上 UNet 半边 → 记 warning 认下（动画加速照常生效）。
+  · 实证：拿 setu.safetensors（TE 带 .default）当 lightning 挂载 → 修复路径生效，
+    真机出片 11.3s（8 帧 / 256² / 4 步）；同样参数 25 步约 95s → 约 6 倍。
+
+UI
+  · 视频页新增「加速 (AnimateDiff-Lightning)」分组：combo_video_lightning
+    （未放文件时只有「不使用」）+ lbl_lightning_hint（指路 models/lightning/）。
+
+27.4 功能②：真·长视频（分段生成 + 尾帧续接）
+--------------------------------------------------------------------------------
+旧实现的 use_context_window 是收参数不用的空壳（tooltip 却承诺"帧数上限扩至 150"）。
+现在：
+  · generate() 里 uses_segments = use_context_window and num_frames > 每段帧数；
+  · uses_segments 时强制 need_v2v=True（否则 txt2video 模式没有 v2v 管线可续接，
+    第一版就栽在这里：TypeError: 'NoneType' object is not callable）；
+  · _run_segmented()：第 1 段走 pipe()（图生视频则用首帧约束走 v2v），
+    之后每段把上一段最后一帧重复成整段参考序列走 v2v，strength=续接强度，
+    最后拼接并按 num_frames 精确裁剪。
+
+UI
+  · 「长视频模式 (>32 帧，分段生成)」+ 每段帧数 spin_segment_frames(8~32, 默认 16)
+    + 续接强度 spin_continuation(0.30~0.80, 默认 0.55)，都透传给 generate()。
+
+真机实测（SD1.5 abyssorangemix2_Hard + v1-5-3，256²、12 步、32 帧分两段）
+  · 共 20.3s，磁盘上正好 32 帧；
+  · 相邻帧平均像素差：段内 14→15 为 10.68、16→17 为 5.40，**段边界 15→16 为 6.66**，
+    跨段远期 0→16 为 19.22 —— 段边界比段内正常运动还平滑，肉眼拼图无可见跳变。
+  · 反例提醒：4 步（Lightning）配分段会明显糊，长视频建议 ≥12 步。
+
+27.5 功能④：LTX-Video / Wan2.1（只留入口，不接通）
+--------------------------------------------------------------------------------
+与 Flux 同一套做法，三处落地：
+  · core/arch/registry.py 新增 ltxvideo / wan21 两条 ArchInfo：
+    supported=False、model_subdir 同名、caps=_TXT2IMG_ONLY（is_base_model=True，
+    这样报错走"未接通 + 需额外准备"那条详细分支，而不是"这不是底模"），
+    unsupported_reason 写清为什么没接通、现在能做什么。
+  · core/arch/signatures.py：_CLASS_TO_ARCH 加 LTXPipeline / LTXImageToVideoPipeline /
+    LTXConditionPipeline / WanPipeline / WanImageToVideoPipeline；
+    _DIR_PIPELINE_HINTS 加 pipeline_ltx_video.py / pipeline_ltx_condition.py /
+    pipeline_wan.py / pipeline_wan_i2v.py（自定义管线文件名比 _class_name 更稳）。
+  · utils/extension_manager.py：「新架构引擎」分类加 ltxvideo_entry / wan21_entry，
+    DOWNLOADERS 里挂 _dl_manual —— 点下载只弹说明（不联网、不下载），
+    写明"需要你自己下载、放到 models/ltxvideo|wan21/ 后重启"。
+
+验证（5/5）
+  · 市场条目存在、分类正确、都在 DOWNLOADERS 里；
+  · download_extension("ltxvideo_entry") 抛 RuntimeError，文案含"自己下载"+路径；
+  · 造 model_index.json{_class_name=LTXPipeline} → detect → ltxvideo；
+    造 _class_name=SomeUnknownWan + pipeline_wan.py → detect → wan21（走文件名兜底）；
+  · ModelManager().load_model(<LTX 目录>) 的报错含"未接通"与 models/ltxvideo。
+
+27.6 新增回归
+--------------------------------------------------------------------------------
+tests/test_video_advanced.py（13 项）：
+  lightning_defaults_parse_4_and_8_step / lightning_loads_and_registers_adapter /
+  lightning_missing_file_says_where_to_put / lightning_overrides_steps_and_cfg /
+  segmented_splits_and_continues_from_tail（断言第二段首帧 == 第一段末帧）/
+  segmented_builds_v2v_pipe_for_txt2video / segment_controls_are_wired_in_ui /
+  video_io_reads_non_ascii_path（真写真读中文路径 avi）/ rife_searched_in_models_dir /
+  modern_video_arches_are_entry_only / modern_video_dir_is_detected /
+  modern_video_market_entries_do_not_download / load_model_explains_entry_only
+
+27.7 未验证边界
+--------------------------------------------------------------------------------
+- 本机没有真实的 AnimateDiff-Lightning 文件，验证用的是普通 LoRA（setu）走同一代码路径；
+  真实 lightning LoRA 的加速倍率以官方口径为准（4 步档约 1/6）。
+- LTX-Video / Wan2.1 没有任何权重，只验证了注册表、识别、报错与市场条目。
+- 分段只在"2 段"上真机验证；3 段以上（150 帧）只做了单元级的规划测试。
+- 续接强度 0.30/0.80 两端没真机试，只有 0.5/0.55 有实测数据。
+
+================================================================================
+第 28 章  视频的两个真 bug：单次 >16 帧必崩、偶发纯黑帧
+================================================================================
+
+28.1 用户报告
+  原话（m11985）：「你看看新生成的视频有问题」。
+  产物 photo/videos/video_txt2video_20261117_103138_seed1665739503.mp4
+  （2591660 B，512x512，8fps，20 帧）。相邻帧平均像素差均值 34.69（正常 <10），
+  抽帧拼图是纯色/条纹块；用 imageio_ffmpeg 直接解码得到同样的垃圾
+  → 不是 cv2 读错，是文件内容本身坏了。
+  日志还原：一次单次 20 帧、25 步、guidance 7.5 的生成，10:07:14 开始，
+  10:31:38 才保存（约 24 分钟），期间没有「分段」也没有「Lightning」日志。
+
+28.2 根因一：AnimateDiff v1-5-3 的单次帧数硬上限是 16
+  同 seed / 同提示词 / 512² / 6 步，只改帧数：
+    8 帧   mean_std=56.9  mean_diff=19.8  → 正常（猫在花田里跑）
+   16 帧   mean_std=37.7  mean_diff=30.0  → 基本正常（天空偶有伪影，6 步太少）
+   20 帧   mean_std=40.9  mean_diff=45.1  → 整段崩成噪声
+  这不是"动作渐渐跑偏"，是过了 16 帧直接崩，与 motion module 只按 16 帧训练吻合。
+
+  修法（utils/video_gen.py）：
+    * 常量 SINGLE_PASS_MAX_FRAMES = 16（RECOMMENDED_MAX_FRAMES 作为旧名保留）；
+    * 帧数 > 16 → **一律自动走分段**（勾不勾长视频模式都一样，因为单次必崩）；
+    * 不勾长视频模式时上限 DEFAULT_MAX_FRAMES = 32，超过才夹住并 warning；
+      勾了则放到 150（分段数量按帧数线性增加，必须显式选择）；
+    * 第一版曾"没勾就夹到 16"，实测这不合理：用户填 20 帧是有意图的，
+      夹到 16 等于悄悄少给 4 帧 —— 改成 17~32 一律分段，填多少给多少；
+    * _run_segmented 改成**均分**：parts 段，base/extra 分配（20 → 10+10，
+      40 → 14+13+13），避免 16+4 那种 4 帧短尾巴；
+    * 界面文案同步：「长视频模式 (>16 帧，分段生成)」，「每段帧数」上限 32 → 16。
+
+28.3 根因二：fp16 偶发 NaN 导致纯黑帧
+  现象：分段生成 20 帧时，成片里出现整帧纯黑。逐帧 dump 确认
+  frame 1/2/6/7 的 min=max=mean=0.00，其余 105~134 → 是模型产出的，不是写文件坏了。
+  用同一管线连续跑 8/9/10/11/12/14/16 帧，黑帧位置每次都不同：
+    8 帧 []  9 帧 []  10 帧 [1,2,6,7]  11 帧 [2,6,7,8,10]
+    12 帧 [1,2,3,4,6,8,11]  14 帧 [2,3,9,10,11]  16 帧 [10]
+  → 不是"帧数必须是 4 的倍数"这种确定性规律，是 fp16 下时间注意力的偶发溢出。
+  试过把 VAE 升 fp32：diffusers 的 AnimateDiffPipeline 解码时不做 dtype 转换，
+  直接 RuntimeError: Input type (struct c10::Half) and bias type (float) should be the same。
+
+  修法（两道保险）：
+    1) _make_step_guard(inner)：挂在 callback_on_step_end，每步检查 latents 是否
+       isfinite，不是就 torch.nan_to_num 就地清零并 warning；同时把界面进度回调
+       链在里面（守卫和 UI 各自的异常都只 logger.debug，绝不让它把生成搞挂）。
+    2) _repair_black_frames(frames, threshold=1.0)：保存前扫一遍，整帧均值 <=1.0
+       判为全黑，用最近的前一帧补齐（没有前一帧就用后一帧），并 warning 报出帧号；
+       整段全黑只告警，不假装修好。
+
+28.4 验证
+  真机（SD1.5 abyssorangemix2_Hard + motion adapter v1-5-3，同 seed 1665739503）：
+    修前：10 帧黑 4、12 帧黑 7、16 帧黑 1
+    修后：10 帧黑 0、12 帧黑 0、16 帧黑 0
+  25 步 / 512² / 20 帧（自动分段 10+10）复验：
+    相邻帧差 23.4 8.2 11.6 9.0 0.0 0.0 11.2 24.7 ... 均值 7.9 → OK_VIDEO
+    日志「🧽 修复了 2 帧纯黑帧（fp16 偶发 NaN），已用相邻帧补齐：[5, 6]」
+    —— 说明守卫拦不住最后一层解码溢出，兜底修补这一道是必需的，两道都要留。
+  回归：tests/test_video_advanced.py 18 项全 PASS（新增 nan_guard_is_installed_and_clears_nan、
+  black_frames_are_repaired、generate_wires_guard_and_repair）。
+
+28.5 未验证边界
+  * 只在 SD1.5 + v1-5-3 上验证；其它 motion adapter 版本没试。
+  * 修补是"复制相邻帧"，会让那两帧看起来停住一下；更好的做法是插帧
+    （RIFE 装上之后可以接），本机没有 models/rife 所以没验证。
+  * fp16 之外的精度（fp32 全管线）没试，显存不够。
+
+================================================================================
+第 29 章  长视频质量：历史前缀续接 + 段间颜色对齐 + 段进度
+================================================================================
+
+29.1 用户诉求
+  原话（m12322）：「想要「同画质、更长」」。
+  上一章已确认 16 帧是 motion module 的硬上限，所以"更长"只能靠分段；
+  这一章是回答"分段之后怎么不露馅"。
+
+29.2 体检：接缝不跳，但第 2 段起画面冻住
+  _tmp_long_probe.py：64 帧 = 4 段 x16，384²/10 步，seed 2026。
+    接缝 5.93 / 4.91 / 5.11，都小于段内早期帧差 11.94  → 接缝本身不跳
+    段内帧差：第 1 段 13~38，第 2 段起 2.4~3.8       → 后段几乎静止
+    段均值 RGB：(123.9,131.0,94.1) → (137.5,148.3,107.2)  → 第一处接缝提亮约 12%
+  根因：续接用 [尾帧]*n 当参考，模型只看到一张静止图，于是照着"不动"画。
+
+29.3 三种续接方案 A/B/C（48 帧、384²/10 步、seed 2026）
+  A 只重复 1 张尾帧（旧）：intra [24.12, 2.99, 2.80]  seams [5.93, 5.07]
+                            段均值 (124,131,94) | (138,148,107) | (135,144,106)
+  B 4 帧循环铺满整段      ：intra [24.12, 20.74, 20.62] seams [30.53, 28.28]
+                            颜色漂到 (168,174,120)
+  C 最近 4 帧当历史 + 尾帧铺满，生成后丢弃前缀（采用）：
+                            intra [24.12, 2.95, 2.97]  seams [5.55, 4.56]
+                            段均值 (124,131,94) | (138,148,106) | (140,149,108)
+  结论：C 的接缝比 A 更顺，颜色漂移略小；B 虽然"动了"，但每段像换镜头，不能要。
+
+29.4 续接强度扫描（32 帧两段、384²/12 步、seed 404、k=1）
+  0.35 → 段内 1.4 / 接缝 5.8   第 2 段基本静止
+  0.55 → 段内 3.0 / 接缝 7.0   动一点，偏粘
+  0.75 → 段内 7.6 / 接缝 14.0  动作明显，接缝开始像切镜头
+  人眼看 0.75 的接缝读作"猫转身"而不是"故障"，0.55 太粘 → 默认取 0.70。
+
+29.5 代码改动（utils/video_gen.py）
+  * 常量 CONTINUATION_FRAMES = 4、CONTINUATION_STRENGTH = 0.70（注释带上面三组实测数字）
+  * _run_segmented(..., continuation_frames, segment_callback)
+      k = max(0, min(continuation_frames, len(out), n))
+      k >= 2：prefix = out[-k:]；pad = [prefix[-1]] * n；video_in = prefix + pad
+              got = result.frames[0][k:]      # 丢掉历史前缀
+      否则退回 [tail] * n（continuation_frames=1 的兼容路径）
+  * @staticmethod _match_segment_color(frames, ref_frame, max_shift=18.0)
+      逐通道 gain = clip(ref_std/cur_std, 0.92, 1.08)
+              shift = clip(ref_mean-cur_mean, ±max_shift)
+      偏差很小时原样返回；idx > 0 时对新段调用
+  * generate() 新增 continuation_frames / segment_callback 参数并透传
+  * 修 UnboundLocalError：got 原先只在 else 分支赋值，前两个分支各补 got = result.frames[0]
+
+29.6 界面改动
+  ui/video_panel_mixin.py
+    seg_state = {"idx": 0, "total": 1}
+    def segment_callback(idx, total, n) → 状态栏「长视频 第 2/4 段（16 帧）开始…」
+    progress_callback：overall = ((idx + local) / total) * 100，
+      total > 1 时文案「生成中 第 2/4 段 43%」（原来每段 0→100 反复跳）
+  ui/pages/video_page.py
+    spin_continuation 默认 0.55 → 0.70，tooltip 改写
+    （实测 0.35≈静止 / 0.70 动作自然 / 0.80 像切镜头）
+  顺手修正 utils/video_gen.py docstring 里说反的一句：
+    「越大越贴近上一段」→「越大越敢动」
+
+29.7 回归
+  tests/test_video_advanced.py 24 项全 PASS（新增 4 条）：
+    continuation_uses_history_prefix_then_drops_it
+      v2v 输入长度 == 4 + 16；生成总量 == 32 + 4（多出的是被丢掉的前缀）
+    continuation_frames_one_keeps_static_tail
+    segment_color_is_matched_to_previous_tail
+      偏暗段被拉亮 >45；已对齐的不动
+    long_video_defaults_and_segments_progress_are_wired
+      CONTINUATION_FRAMES == 4；CONTINUATION_STRENGTH ≈ 0.70；
+      panel 有 segment_callback 与段号文案；page 有 _dspin(0.30, 0.80, 0.70, 0.05, 2)
+  另有 4 条旧断言按新行为更新（v2v 输入 4+13 / 4+10；夹到 32 帧时总量要减去丢弃的前缀）。
+
+29.8 未验证边界
+  * 所有数字都来自 384²/10~12 步的小图；512²/25 步的长视频没有重跑。
+  * k=4 与强度 0.70 是折中值：k 更大更有"惯性"，但每段要生成的帧数变多（更慢）。
+  * 颜色对齐上限 ±18 是按"别把场景改色"定的，没做逐帧自适应。
+  * 补掉的纯黑帧仍是"复制相邻帧"（会停顿一瞬），理想做法是接 RIFE 插帧，
+    本机没有 models/rife，未验证。
+
+
+========================================================================
+第 30 章  工作流编辑器「更好用」改造（参考 ComfyUI）+ 两个市场入口
+========================================================================
+
+30.1  用户诉求（原文）
+----------------------
+「这些参考comifului来改进工作流，让用户更好的使用，Wan2.1-T2V-1.3B 原生 81 帧，
+ RIFE 插帧这些先添加扩展市场入口。然后参考"F:\ai_photo_portable"上的文件，
+ 把现在的新版产物也更新过去同样不附带任何模型权重」
+
+拆成三件事：
+  A. 参考 ComfyUI 改进工作流编辑器（普通用户要能自己上手）
+  B. Wan2.1-T2V-1.3B（81 帧）、RIFE 插帧 → 扩展市场入口（只入口、不下载）
+  C. 把新版代码同步到 F:\ai_photo_portable（不带任何模型权重）
+
+30.2  B：两个市场入口
+---------------------
+· Wan2.1-T2V-1.3B（引擎未接通 · 仅入口）
+  size_mb 16000，说明写清"原生 81 帧 @480p / 官方 8.19GB 显存口径 / 本机 8GB 要靠 offload"。
+· RIFE 插帧（补帧工具 · 不提供下载）
+  category「视频」，check ["tools/rife/rife-ncnn-vulkan.exe"]，
+  与 utils/rife_interpolate.py::find_rife_dirs() 的判定保持一致。
+· 两者都走 _dl_manual(...)：点了只会弹出"要你自己去下、放到哪个目录"，
+  不会发起任何下载 —— 与"模型由用户自行下载"的硬约束一致。
+  RIFE 是工具不是权重，所以 _dl_manual 增加 kind="tool"，文案改成"解压到 tools/rife/"。
+· 新增文案必须同步 ui/i18n_catalog.py（tests/test_ui_i18n.py 会断言
+  英文/日文下市场卡片不得出现汉字），否则该测试直接红。
+
+30.3  A：编辑器补齐的六件事
+---------------------------
+1) 内置模板（workflow/templates.py）
+   五个能直接跑的图：文生图（6 节点 9 连线）/ 文生图+高清（7/13）/
+   局部重绘（7/9）/ 参考图 IP-Adapter（8/11）/ 图片放大（3/3）。
+   入口两处：编辑器工具栏「模板 ▾」、主菜单「工作流 → 从模板新建…」。
+   模板只填"合法参数 + 合法连线"，位置写进 workflow.metadata["ui_positions"]。
+
+2) 撤销 / 重做（ui/workflow_editor/history.py）
+   快照式：每次结构性改动前 push 一份整图 JSON（含坐标），limit=80。
+   覆盖 add_node / remove_node / connect_ports / 粘贴 / 载入模板 / 打开文件。
+   恢复时用 _suspend_history 包住 load_workflow，避免"恢复动作自己又进历史"。
+
+3) 复制 / 粘贴 / 再制
+   只复制选中节点，**两端都在选区内的连线一起复制**；粘贴分配新 id 并按锚点平移。
+   剪贴板挂在 GraphScene 上 —— QGraphicsScene 不是 QWidget，没有 window()，
+   所以不能像普通控件那样借用 self.window()。
+
+4) 节点搜索（ui/workflow_editor/search_dialog.py）
+   双击空白 / Ctrl+F / 拖线到空白松手 三种入口。
+   带 type_hint 时只列"输入口接得住该类型"的节点，标题写明"只显示能接住 X 的节点"；
+   选中后 finish_link 的源端口会自动接到第一个兼容且未占用的输入口。
+
+5) 拖拽文件
+   图片（png/jpg/jpeg/webp/bmp）拖进画布 → 建 LoadImage 并写好 path；
+   .json 拖进画布 → 直接打开工作流。
+
+6) 右键菜单
+   添加节点… / 粘贴 / 全选 / 删除选中 / 从当前界面生成 / 适应窗口 / 校验。
+
+30.4  这一轮踩到的坑（都已修，写下来免得再踩）
+---------------------------------------------
+· VAEDecode.model 的端口类型是 **MODEL**，不是 VAE。第一版模板写
+  model.vae → decode.model，直接报「类型不匹配: model.vae(VAE) → model(MODEL)」。
+· HiresFix.scale 的合法值只有 ['1.5','2.0','2.5','3.0']，写 "1.5x" 会被参数校验拒绝。
+· 高清模板不能"在 save 后面再挂 save2"，必须**删掉旧 save 节点及其连线**，
+  否则图里留一个悬空 SaveImage（校验会报未连接输入）。
+· QGraphicsScene 没有 window()（不是 QWidget），剪贴板只能挂场景自己。
+· i18n 对象要从 `from ui.i18n import ui_i18n` 拿（是实例，有 trf）；
+  `from ui import i18n` 拿到的是模块，调 .trf 会 AttributeError。
+· 搜索框带 type_hint 时会**正确排除** LoadImage（它没有输入口），
+  所以"搜 loadimage"只能在无类型过滤的对话框里验证 —— 第一版测试写错了这一点。
+· PowerShell 的 `*>` 重定向写的是 UTF-16，用 utf-8 读回来是乱码；
+  要读回日志就让 Python 自己写文件。
+
+30.5  回归
+----------
+新增 tests/test_workflow_editor_ux.py（9 项，全部 PASS / WF_EDITOR_UX_OK）：
+  templates_build_and_validate      5 个模板 0 错误，且每个节点都有坐标
+  scene_loads_template              画布节点/连线数与数据层一致
+  undo_redo_restores_graph          加节点→撤销→回到 6 个→重做→7 个且类型正确
+  copy_paste_keeps_internal_links   3 节点 3 连线整体复制后变 6/6，id 不重复
+  duplicate_selection_offsets       再制偏移 36px
+  search_filters_by_type            全量 34 项；按 IMAGE 过滤 26 项且每个都能吃 IMAGE
+  finish_link_on_empty_requests_search  拖到空白发 LATENT 提示并自动接上 VAEDecode
+  drop_image_creates_loadimage      拖入图片建 LoadImage 且 path 写进参数
+  context_menu_has_expected_actions 右键菜单六项齐全
+相关回归全绿：test_ui_contract / test_nav / test_ui_i18n /
+test_workflow_editor_ux / test_comfy_compat / test_python_nodes。
+另做了一次真实主界面冒烟：菜单里 5 个模板齐全，点"文生图（最简）"后编辑器
+载入 6 节点 9 连线，撤销后回 6、重做后 7，按 MODEL 过滤能列出 19 个节点。
+
+30.6  未验证边界
+----------------
+· 拖拽（文件拖入 / 端口拖到空白）只在离屏环境用合成信号验证，没有真手拖过。
+· 模板只按本机现有资源（SD1.5 检查点 + v1-5-3 motion adapter）预检过；
+  换成 SDXL / Flux 时模板里的节点组合仍合法，但显存与依赖需要用户自己核对。
+· 撤销栈 80 步、快照是整图 JSON，超大图（上百节点）时内存占用未测。
+
+
+========================================================================
+第 31 章  新版产物同步到便携包（F:\ai_photo_portable，不含任何权重）
+========================================================================
+
+31.1  目标
+----------
+用户要求：「参考 F:\ai_photo_portable 上的文件，把现在的新版产物也更新过去，
+同样不附带任何模型权重」。也就是：便携包 = 代码 + 文案 + 运行环境，
+模型/权重/LoRA 一律由用户自己放。
+
+31.2  同步范围（共 226 个文件）
+------------------------------
+· 代码目录：core(29) / ui(47) / utils(46) / workflow(16) / nodes(15) / photo_turn(7)
+· tests/*.py 53 个（只拷 .py，不拷 artifacts / 视频 / 镜像副本）
+· docs/audits（审计文档本体）+ docs/images（README 引用的 6 张图，跳过 mp4）
+· 顶层：main.py / README.md / requirements.txt / requirements-lock.txt /
+        THIRD_PARTY_NOTICES.md / LICENSE / pyproject.toml
+· 同步时清掉目标里的 __pycache__（旧版 8 月的 .pyc 会遮蔽同名新模块）
+
+**没有碰**：models/ loras/ controlnets/ weights/ models_cache/ photo/ output/
+logs/ data/ third_party/ runtime/ venv/ —— 权重与用户数据全部保持原样
+（便携包原有 loras 118MB、weights 1.1MB、models_cache 14.9MB 都是它自带的，
+ 这次一个字节都没动；models/ 同步后仍是空的）。
+
+31.3  runtime 必须一起升级（这是本轮最关键的一步）
+--------------------------------------------------
+便携包自带的嵌入式 CPython 3.12.8 里，三个包比开发环境落后：
+
+    包                 便携包旧版     开发环境/新版要求
+    diffusers          0.32.2     →   0.40.0
+    transformers       4.45.2     →   5.16.1
+    huggingface_hub    0.26.2     →   1.24.0
+
+不升级会怎样：新版代码里 Anima 需要 `diffusers.ModularPipeline`（0.33+）、
+DiT 分块 offload 需要 `diffusers.hooks.apply_group_offloading`（0.36+）、
+量化需要 `PipelineQuantizationConfig`（0.37+）。已实测旧 runtime 下这些
+模块能 import（都是函数内延迟导入），但一走到对应功能就缺符号。
+
+升级命令（在便携包根目录执行）：
+    runtime\python.exe -m pip install --upgrade ^
+        diffusers==0.40.0 transformers==5.16.1 huggingface_hub==1.24.0
+
+pip 会连带装 safetensors 0.8.0 / tokenizers 0.23.3 / hf-xet 1.8.0。
+pip 会报三条"依赖冲突"警告（chattts-fork 要 transformers~=4.41、
+compel 2.0.3 要 ~=4.25、hf-gradio 要旧的 gradio-client）——
+**这三条是元数据层面的**：开发环境本来就是"transformers 5.16.1 + compel 2.0.3
++ chattts-fork 0.0.8"这个组合，ChatTTS/翻译/Compel 相关测试全绿。
+升级后便携包与开发环境的版本表已对齐（tokenizers 0.23.3 vs 0.23.1、
+hf-xet 1.8.0 vs 1.6.0，差异无影响）。
+
+31.4  便携包自检（用便携包自己的 runtime 跑，结果全绿）
+-------------------------------------------------------
+probe 覆盖 25 个模块 + 5 项真实动作：
+· 版本：diffusers 0.40.0 / transformers 5.16.1 / hub 1.24.0；
+  `has apply_group_offloading True`、`has ModularPipeline True`
+· 25 个模块 import 全 OK（含 core.loaders.anima / core.loaders.moss /
+  core.moss_int8 / core.lora_train / workflow.* / nodes / ui.workflow_editor.*）
+· 采样器：`build_scheduler({}, "DPM++ 2M", "Karras")` 构造成功且 karras 生效
+· RIFE：`tools\rife` 存在 → `is_available() True`，状态「✅ RIFE 可用」
+  （这一项正好说明市场里新加的 RIFE 入口在便携包里是真能用的）
+· 真实启动：`AIDesktopApp()` 起得来，菜单 = 文件/工具/工作流/内存/关于/设置
+· 工作流：「从模板新建…」5 项齐全；点"文生图（最简）"后编辑器 6 节点 9 连线
+· 搜索：按 MODEL 过滤能列出 19 个节点
+
+31.5  便携包文案更新
+--------------------
+· `启动.bat`：新增"缺了就建的目录"清单（models/sd15、models/sdxl、models/vae、
+  models/puton、models/lightning、models/motion_adapter、models/motion_lora、
+  loras/sd15、loras/sdxl、controlnets、photo、photo/videos、workflows、logs），
+  仍然先校验 runtime\python.exe 再启动（已用"把启动行替换成 echo"的副本验证过
+  batch 语法与建目录结果，且文件必须无 BOM）。
+· `首次使用请看我.txt`：把"出图在 outputs\"改成"photo\（视频在 photo\videos\）"，
+  补上 SDXL/VAE/ControlNet 的放置位置、models/puton 自动归类、可选项
+  （models/lightning 加速、tools/rife 补帧、models/ltxvideo|wan21 仅入口）、
+  工作流入口，以及四条新的常见问题（换模型自动释放内存 / 视频慢怎么办）。
+
+31.6  未验证边界
+----------------
+· 便携包 models/ 是空的，所以只在"能启动、能开编辑器、能建采样器"这层验证过，
+  **没有在便携包里真跑一次出图**（需要用户先放模型）。
+· 便携包沿用它自己的 app_config.json（8 月 31 日那份），新版本新增的配置键
+  会走默认值；这与"用户自己的设置不被覆盖"是一致的，但没有逐键核对过。
+· 便携包 time 上的 tools\realesrgan 未验证（本次没改这块）。
+
+
+
+============================================================
+第 32 章  ADetailer 模型路径统一（市场 / 下载器 / 检测器只有一处真相）
+============================================================
+
+32.1 用户报告
+------------------------------------------------------------
+「市场虽有入口但存盘位置不同这些修改为一致」。
+
+现场：
+
+  · 扩展市场两条 ADetailer 条目的 check 是 models/adetailer/*.pt；
+  · utils/model_downloader.py 的 local 也是 models/adetailer/*.pt；
+  · utils/image_processor.py 解析到 Path(MODEL_DIR) / "adetailer"；
+  · 但便携包里的实际文件在 models_cache/adetailer/（两个 .pt 共 12.4MB）
+    → 市场「已安装 0 项」，用户点下载会重复拉一遍同一份权重；
+    → 开发机同时存在两份，白占 12.4MB。
+
+根因：旧版本把这类"工具模型"和 HF 缓存一起放进了 models_cache/，
+后来市场与下载器改到 models/adetailer/，旧位置的文件没人搬。
+
+32.2 修法：一个解析函数 + 一次幂等迁移
+------------------------------------------------------------
+utils/paths.py
+
+  ADETAILER_DIR        = <root>/models/adetailer        ← 唯一位置
+  LEGACY_ADETAILER_DIR = <root>/models_cache/adetailer  ← 只作为迁移来源
+
+  adetailer_path(name) -> str
+      兼容四种历史写法，全部归一：
+        face_yolov8n.pt
+        models/adetailer/face_yolov8n.pt
+        models\adetailer\face_yolov8n.pt
+        models_cache/adetailer/face_yolov8n.pt
+      绝对路径原样返回（用户可能在设置里填了别处的模型）。
+
+  migrate_adetailer_models() -> list[str]
+      · 只搬 .pt/.onnx/.engine；
+      · 目标已存在同名文件就跳过（**绝不覆盖**用户后来下的新版本）；
+      · os.replace 失败（跨盘/占用）退回复制 + 删源；
+      · 搬空后把旧目录删掉，免得下次又被当成"旧位置有东西"；
+      · 旧目录里还有别的文件时保留目录；
+      · 全程不抛异常（检测器还有旧位置兜底）。
+
+调用点：
+
+  · main.py：setup_ui() 之前调用一次（和 models/puton 投递箱同一段），
+    这样市场/检测器第一次打开就已是统一状态；
+  · utils/image_processor.py::_resolve_local_adetailer_model() 开头再调一次
+    （幂等、无目录时零成本），保证不走主流程的调用方也不会错位；
+  · 找不到统一位置的模型时，额外检查一次旧位置并提示"建议移到 …"。
+
+32.3 顺带消掉字符串漂移
+------------------------------------------------------------
+  · utils/extension_manager.py：新增 _AD_REL_DIR = "models/adetailer" 与
+    _ad_rel(fname)，两条 check 与 _dl_adetailer 的下载目标全部走它；
+  · utils/model_downloader.py：同样的 _ad_rel()；
+  · utils/image_processor.py：_get_adetailer_model_path() 改为
+    Path(paths.adetailer_path(...))，删掉原来手写的 parts[:2] 前缀判断。
+
+32.4 实测
+------------------------------------------------------------
+便携包（用便携包自己的 runtime）：
+
+  ADETAILER_DIR = F:\ai_photo_portable\models\adetailer
+  moved = ['face_yolov8n.pt', 'hand_yolov8n.pt']
+  face installed = True
+  hand installed = True
+  legacy exists = False
+
+开发机：删除重复的 models_cache/adetailer/（两个 .pt），
+models/adetailer/ 保留 face + hand（各 6.2MB）。
+
+32.5 新增回归 tests/test_asset_paths.py（10 项）
+------------------------------------------------------------
+  adetailer_path_normalizes_every_spelling
+  migrate_moves_legacy_files
+  migrate_keeps_legacy_dir_when_it_still_has_other_files
+  migrate_never_overwrites_newer_file
+  migrate_is_noop_without_legacy_dir
+  image_processor_uses_the_same_resolver
+  resolver_falls_back_to_legacy_location
+  market_agrees_with_the_single_location
+      ← 断言「市场已安装」等价于「唯一位置上有文件」，防两套路径回归
+  no_code_writes_adetailer_to_cache_dir
+      ← 只扫字符串字面量（注释里提到旧路径是合法的，那是在解释历史）
+  regional_hint_uses_the_same_path
+      ← ADETAILER_MODELS 的键是中文（现实脸部 / 二次元手部 …），
+        逐个数了一遍
+
+同一份测试在开发机（venv，10/10）与便携包（runtime，10/10）各跑一遍。
+
+32.6 顺带修掉的 README 结构问题
+------------------------------------------------------------
+README 的「模型放置表」里，LoRA 分目录的引用块被插在了表格中间，
+导致 ControlNet 那一行掉到引用块后面、表格断裂。已把引用块移出表格，
+并给 ADetailer 行补上"唯一位置 + 旧位置会自动搬"的说明。
+
+32.7 未验证边界
+------------------------------------------------------------
+  · 没有真机跑一次"修脸"，只验证了路径解析与市场状态（检测器加载
+    本身由 tests/test_adetailer_fallback.py 覆盖）；
+  · person_yolov8n-seg.pt（全身）没有下载，日志里仍会提示未找到（正常）；
+  · 用户如果在 app_config.json 里给 adetailer 填了自定义绝对路径，
+    仍按原样使用（不会被迁移动到）。

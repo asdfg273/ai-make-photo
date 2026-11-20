@@ -1,7 +1,9 @@
 # ui/nav.py
+# 左侧导航栏：读页面注册表自动生成按钮，单选。
+# 纯文字导航（无图标），选中态由 theme.py 的 QSS 钩子 #navBtn 渲染。
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QToolButton, QButtonGroup,
                              QSizePolicy)
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 
 
 class NavRail(QWidget):
@@ -21,6 +23,7 @@ class NavRail(QWidget):
         self._layout.addStretch(1)
 
     def set_pages(self, pages: list) -> None:
+        from ui.icons import get_icon
         for cls in pages:
             btn = QToolButton()
             btn.setObjectName("navBtn")          # theme.py 的 QSS 钩子
@@ -29,6 +32,16 @@ class NavRail(QWidget):
             btn.setToolTip(cls.title)
             btn.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            # 图标接口：注册了 page_id（或页面自带的 icon key）就显示图标，
+            # 未注册保持纯文字，行为与之前完全一致
+            icon = get_icon(cls.page_id) or get_icon(getattr(cls, "icon", ""))
+            if icon is not None:
+                btn.setIcon(icon)
+                btn.setToolButtonStyle(
+                    Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            else:
+                btn.setToolButtonStyle(
+                    Qt.ToolButtonStyle.ToolButtonTextOnly)
             btn.clicked.connect(
                 lambda _=False, pid=cls.page_id: self.page_selected.emit(pid))
             self._buttons[cls.page_id] = btn

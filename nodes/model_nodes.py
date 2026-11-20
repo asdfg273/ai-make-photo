@@ -60,6 +60,27 @@ def run_load_checkpoint(ctx, node, inputs):
     ai.load_model(name)
     ctx.check_cancel()
 
+    # 建立"干净的基线"：清掉上一轮可能残留的 LoRA。
+    #
+    # ⚠️ 为什么必须清：`load_model()` 在**同一个模型**上会短路跳过（不重新加载），
+    # 而 LoRA 是挂在管线上的副作用状态。于是"没有 LoadLoRA 节点的工作流"
+    # 会继承上一个工作流挂的 LoRA —— 同一张图跑两次结果不一样，
+    # 用户会以为"关掉 LoRA 没生效"。实测：带 LoRA 出的图 vs 之后不带 LoRA
+    # 出的图差异 **0.0**（完全相同），显式清空后才恢复到 33.3 的正常差异。
+    #
+    # 语义上也该如此：LoadCheckpoint = 干净的底模；LoRA 由 LoadLoRA 负责加。
+    # 拓扑序保证 LoadCheckpoint 一定排在 LoadLoRA 之前。
+    try:
+        ai.apply_multiple_loras([])
+    except Exception as e:
+        logger.debug(f"清理残留 LoRA 失败（忽略）: {e}")
+
+    # IP-Adapter 多参考图同样必须清空 —— 一模一样的串味问题：
+    # `ModelRef.meta` 是跨节点传递的同一份 dict，若不清，
+    # "这轮没接参考图"的工作流会继承上一轮的参考图，
+    # 同一组参数跑两次结果不同，用户完全无从判断。
+    # （清理放在 ModelRef 建立**之后**，见下面的 model.meta）
+
     arch = getattr(ai, "current_arch_id", "") or "sd15"
     adapter = adapters_mod.get_adapter(arch)
 
@@ -95,6 +116,13 @@ def run_load_checkpoint(ctx, node, inputs):
         clip_skip=cs, dtype=getattr(ai, "dtype", None), loaded=True,
         meta={"capabilities": adapters_mod.capabilities_for(arch).to_dict()})
     caps = adapters_mod.capabilities_for(arch)
+    # 干净基线：清掉累积的 IP-Adapter 参考图（见上面 LoRA 那段同样的理由）。
+    # ⚠️ 必须在 ModelRef 建好之后清：参考图就存在 model.meta 里。
+    try:
+        from nodes import ipa_nodes
+        ipa_nodes.clear_references(model)
+    except Exception as e:
+        logger.debug(f"清理残留参考图失败（忽略）: {e}")
     meta = {"model": model.name, "model_path": model.path,
             "architecture": arch, "adapter": adapter.describe(),
             "capabilities": caps.to_dict()}
@@ -226,16 +254,40 @@ def run_load_lora(ctx, node, inputs):
                 "metadata": {"loras": []}}
 
     # 复用 ModelManager 的 LoRA 应用逻辑（它已处理子目录/架构匹配）
-    lora_list = [{"name": n, "weight": w} for n, w in pairs]
+    # 必须传 [(name, weight)] 元组形式。
+    # 以前传的是 [{"name":..,"weight":..}]，而 apply_multiple_loras 内部是
+    # `for (lora_name, weight) in lora_list` —— 对字典解包拿到的是**键**
+    # （"name"/"weight"），于是它去找名为 "name" 的文件、找不到就 continue，
+    # **LoRA 被静默跳过**，出图和不挂 LoRA 完全一样；而下面的
+    # `except TypeError` 兜底也救不了（2 键字典解包不抛 TypeError）。
+    lora_pairs = [(n, w) for n, w in pairs]
     try:
-        ctx.ai.apply_multiple_loras(lora_list)
+        ctx.ai.apply_multiple_loras(lora_pairs)
     except TypeError:
         # 兼容旧的 (name, weight) 元组签名
         ctx.ai.apply_multiple_loras(pairs)
     ctx.check_cancel()
 
-    refs = [LoraRef(name=n, weight=w, applied=True) for n, w in pairs]
+    # 挂完核实一下：没生效就必须说出来，不能再静默
+    applied_ok = True
+    try:
+        _pipe = getattr(ctx.ai, "txt2img_pipe", None)
+        _active = list(_pipe.get_active_adapters() or []) if _pipe else []
+        if not _active:
+            applied_ok = False
+            logger.error("LoRA 未真正挂上（active_adapters 为空）: %s",
+                         lora_pairs)
+    except Exception:
+        pass
+
+    refs = [LoraRef(name=n, weight=w, applied=applied_ok)
+            for n, w in pairs]
     info = [f"<lora:{n}:{w}>" for n, w in pairs]
     model.meta["loras"] = info
+    model.meta["loras_applied"] = applied_ok
     ctx.metadata["loras"] = info
+    if not applied_ok:
+        ctx.metadata["warnings"] = list(
+            ctx.metadata.get("warnings") or []) + [
+            "LoRA 没有真正挂上（文件可能不在当前架构的 loras/ 子目录下）"]
     return {"model": model, "lora": refs, "metadata": {"loras": info}}

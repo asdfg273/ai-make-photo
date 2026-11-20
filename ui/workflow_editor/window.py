@@ -8,9 +8,21 @@
 · 运行前校验 / 资源清单 / 执行 / 逐节点状态着色 / 失败自动定位
 · 工作流 JSON 的保存、另存、加载、模板列表
 · 只重跑某个节点（选中节点 → 只跑此节点，其余用缓存）
+· ComfyUI 工作流导入/导出（workflow.comfy_compat；不认识的节点会明确列出来，
+  不会静默少节点）
 
-刻意**不**做的：任意 Python 节点、子图/循环、ComfyUI 格式兼容。
-那些会让调试、显存管理与错误定位迅速复杂化，等基础版稳定后再说。
+交互（参考 ComfyUI 补齐的部分）
+----------------------------
+· Ctrl+Z / Ctrl+Shift+Z   撤销 / 重做（快照式，连拖动位置也能撤）
+· Ctrl+C / Ctrl+V / Ctrl+D 复制 / 粘贴 / 再制
+· 双击空白 或 Ctrl+F       搜索添加节点
+· 端口拖到空白松手          只列能接住该类型的节点，选中即连线
+· 拖图片文件进画布          自动建 LoadImage（带预览）；拖 .json 直接打开
+· 右键空白                  添加节点 / 粘贴 / 全选 / 适配 / 校验
+· 工具栏「模板」            五个能直接跑的示例工作流
+
+仍然**不**做的：子图 / 循环 / 自定义节点类型。任意 Python 节点现在有了
+（`nodes/python_nodes.py`），但默认关闭，要在设置里显式打开。
 """
 from __future__ import annotations
 
@@ -20,15 +32,18 @@ import traceback
 
 from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence
-from PyQt6.QtWidgets import (QComboBox, QFileDialog, QLabel, QMainWindow, QMessageBox,
-                             QPlainTextEdit, QSplitter,
+from PyQt6.QtWidgets import (QComboBox, QFileDialog, QLabel, QMainWindow, QMenu,
+                             QMessageBox, QPlainTextEdit, QSplitter,
                              QToolBar, QVBoxLayout, QWidget)
 
 from ui.i18n import ui_i18n
 from ui.workflow_editor.canvas import GraphScene, GraphView
+from ui.workflow_editor.history import HistoryStack
+from ui.workflow_editor.search_dialog import NodeSearchDialog
 from ui.workflow_editor.palette import NodePalette
 from ui.workflow_editor.param_panel import ParamPanel
-from workflow import graph as G, registry, resource_manager, serializers
+from workflow import comfy_compat as comfy
+from workflow import graph as G, registry, resource_manager, serializers, templates
 from workflow.schema import Workflow
 
 logger = logging.getLogger(__name__)
@@ -56,7 +71,7 @@ class WorkflowRunThread(QThread):
             from workflow.executor import Executor, make_context
             ai = getattr(self.host, "ai", None)
             arch = getattr(ai, "current_arch_id", "") or ""
-            # ⚠️ 用工作流里记下的策略预设。旧代码硬编码 preset="auto"，
+            #  用工作流里记下的策略预设。旧代码硬编码 preset="auto"，
             # 编辑器工具栏上选的「节省显存/平衡/高性能」完全不生效。
             preset = (self.wf.metadata or {}).get("memory_preset") or "auto"
             ctx = make_context(
@@ -90,6 +105,9 @@ class WorkflowEditorWindow(QMainWindow):
         self.resize(1360, 860)
         self._thread: WorkflowRunThread | None = None
         self._current_path = ""
+        self.history = HistoryStack()
+        self.act_undo = None
+        self.act_redo = None
 
         registry.load_builtin_nodes()
 
@@ -98,6 +116,7 @@ class WorkflowEditorWindow(QMainWindow):
         self.palette = NodePalette(self)
         self.params = ParamPanel(self)
 
+        self.scene.history = self.history
         self._build_ui()
         self._connect()
         self.scene.load_workflow(Workflow(name="新工作流"))
@@ -123,6 +142,10 @@ class WorkflowEditorWindow(QMainWindow):
         act("打开", self.on_open, "Ctrl+O")
         act("保存", self.on_save, "Ctrl+S")
         act("另存为", self.on_save_as)
+        act("导入 ComfyUI", self.on_import_comfy, None,
+            "导入 ComfyUI 的 API 格式或界面格式工作流；不支持的节点会列出来")
+        act("导出 ComfyUI", self.on_export_comfy, None,
+            "导出成 ComfyUI 的 API 格式（只含能完整表达的节点）")
         tb.addSeparator()
         act("从当前界面生成", self.on_build_from_ui, "Ctrl+G",
             "把简易模式当前的模型/提示词/LoRA/高清/修脸等设置编译成工作流")
@@ -142,6 +165,23 @@ class WorkflowEditorWindow(QMainWindow):
         act("清空状态", lambda: self.scene.reset_states())
         act("删除选中", self.on_delete_selected)
         act("适应窗口", self.on_fit, "Ctrl+0")
+
+        # ---- 参考 ComfyUI 的编辑体验 ----
+        tb.addSeparator()
+        self.act_undo = act("撤销", self.do_undo, "Ctrl+Z", "撤销上一步编辑")
+        self.act_redo = act("重做", self.do_redo, "Ctrl+Shift+Z", "重做刚才撤销的编辑")
+        self.act_undo.setEnabled(False)
+        self.act_redo.setEnabled(False)
+        act("搜索节点", self.on_search_nodes, "Ctrl+F",
+            "搜类型 / 分类 / 说明，回车添加")
+        self.menu_templates = QMenu(self)
+        for key, name, desc in templates.list_templates():
+            a = self.menu_templates.addAction(name)
+            a.setToolTip(desc)
+            a.triggered.connect(lambda _checked=False, _k=key: self.load_template(_k))
+        btn_tpl = tb.addAction("模板 ▾")
+        btn_tpl.setToolTip("载入一个能直接跑的内置工作流")
+        btn_tpl.triggered.connect(self._show_templates_menu)
 
         # 显存策略选择（能力配置，不是显卡名字）
         tb.addSeparator()
@@ -189,6 +229,160 @@ class WorkflowEditorWindow(QMainWindow):
         # 必须双向同步，否则两边显示不一致、而且不知道哪个才是真的。
         self.params.paramChanged.connect(self._on_param_changed)
         self.scene.paramChanged.connect(self._on_param_changed)
+        self.scene.nodeSearchRequested.connect(self._on_node_search_requested)
+        self.scene.filesDropped.connect(self._on_files_dropped)
+        self.scene.graphChanged.connect(self._update_history_actions)
+        self.view.customContextMenuRequested.connect(self._on_context_menu)
+
+    # ------------------------------------------------------------ 撤销/重做
+    def _update_history_actions(self):
+        if self.act_undo is not None:
+            self.act_undo.setEnabled(self.history.can_undo)
+            tip = self.history.undo_label()
+            self.act_undo.setToolTip(ui_i18n.trf("撤销：{what}", what=tip) if tip else "撤销")
+        if self.act_redo is not None:
+            self.act_redo.setEnabled(self.history.can_redo)
+            tip = self.history.redo_label()
+            self.act_redo.setToolTip(ui_i18n.trf("重做：{what}", what=tip) if tip else "重做")
+
+    def do_undo(self):
+        got = self.history.undo(self.scene.snapshot())
+        if not got:
+            self._log(ui_i18n.tr("没有可撤销的操作"))
+            return
+        label, snap = got
+        self.scene.restore_snapshot(snap)
+        self.params.show_node(self.scene.to_workflow(), "")
+        self._update_history_actions()
+        self._log(ui_i18n.trf("已撤销：{what}", what=label))
+
+    def do_redo(self):
+        got = self.history.redo(self.scene.snapshot())
+        if not got:
+            self._log(ui_i18n.tr("没有可重做的操作"))
+            return
+        label, snap = got
+        self.scene.restore_snapshot(snap)
+        self.params.show_node(self.scene.to_workflow(), "")
+        self._update_history_actions()
+        self._log(ui_i18n.trf("已重做：{what}", what=label))
+
+    # ------------------------------------------------------------ 搜索添加
+    def on_search_nodes(self):
+        self._on_node_search_requested(None, "")
+
+    def _on_node_search_requested(self, scene_pos, type_hint: str):
+        """双击空白 / Ctrl+F / 拖线到空白 都会走这里。"""
+        hint = str(type_hint or "")
+        title = ui_i18n.tr("添加节点")
+        if hint:
+            title = ui_i18n.trf("接住 {type} 的节点", type=hint)
+        ntype = NodeSearchDialog.pick(self, type_hint=hint, title=title)
+        if not ntype:
+            self.scene._pending_link_src = None
+            return
+        pos = scene_pos
+        if pos is None:
+            pos = self.view.mapToScene(self.view.viewport().rect().center())
+        nid = self.scene.add_node(ntype, pos)
+        if not nid:
+            return
+        if self.scene._pending_link_src is not None:
+            self.scene.complete_pending_link(nid)
+        for it in self.scene.node_items.values():
+            it.setSelected(it.node_id == nid)
+        self.scene.nodeSelected.emit(nid)
+
+    # ------------------------------------------------------------ 拖入文件
+    IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+    def _on_files_dropped(self, paths, scene_pos):
+        paths = [p for p in (paths or []) if isinstance(p, str)]
+        if not paths:
+            return
+        # 先处理工作流 JSON：只取第一个
+        for p in paths:
+            if p.lower().endswith(".json"):
+                if not self._confirm_discard():
+                    return
+                try:
+                    wf = serializers.load(p)
+                except Exception as e:
+                    QMessageBox.critical(self, ui_i18n.tr("打开失败"),
+                                         f"{type(e).__name__}: {e}")
+                    return
+                self.history.push(ui_i18n.tr("打开工作流"), self.scene.snapshot())
+                self.scene.load_workflow(wf)
+                self._current_path = p
+                self._update_title()
+                self._update_history_actions()
+                self._log(ui_i18n.trf("已载入 {path}（{count} 节点）",
+                                      path=p, count=len(wf.nodes)))
+                return
+        imgs = [p for p in paths if p.lower().endswith(self.IMAGE_EXTS)]
+        if not imgs:
+            self._log(ui_i18n.tr("拖进来的文件里没有图片或工作流 JSON"))
+            return
+        base = scene_pos
+        for i, p in enumerate(imgs):
+            pos = base
+            if pos is not None:
+                from PyQt6.QtCore import QPointF
+                pos = QPointF(pos.x() + i * (236 + 40), pos.y())
+            nid = self.scene.add_node("LoadImage", pos)
+            if nid:
+                self.scene.set_node_param(nid, "path", p)
+                self._log(ui_i18n.trf("已加入图片 {name}", name=os.path.basename(p)))
+
+    # ------------------------------------------------------------ 右键菜单
+    def _on_context_menu(self, pos):
+        menu = QMenu(self)
+        a = menu.addAction(ui_i18n.tr("添加节点…"))
+        a.triggered.connect(lambda: self._on_node_search_requested(
+            self.view.mapToScene(pos), ""))
+        clip = getattr(self.scene, "clipboard_payload", None)
+        a_paste = menu.addAction(ui_i18n.tr("粘贴"))
+        a_paste.setEnabled(bool(clip))
+        a_paste.triggered.connect(
+            lambda: clip and self.scene.paste_payload(
+                clip, self.view.mapToScene(pos)))
+        menu.addSeparator()
+        a = menu.addAction(ui_i18n.tr("全选"))
+        a.triggered.connect(self.scene.select_all)
+        a = menu.addAction(ui_i18n.tr("删除选中"))
+        a.triggered.connect(self.on_delete_selected)
+        a = menu.addAction(ui_i18n.tr("从当前界面生成"))
+        a.triggered.connect(self.on_build_from_ui)
+        menu.addSeparator()
+        a = menu.addAction(ui_i18n.tr("适应窗口"))
+        a.triggered.connect(self.on_fit)
+        a = menu.addAction(ui_i18n.tr("校验"))
+        a.triggered.connect(self.on_validate)
+        menu.exec(self.view.mapToGlobal(pos))
+
+    # ------------------------------------------------------------ 模板
+    def _show_templates_menu(self):
+        self.menu_templates.exec(self.mapToGlobal(self.rect().center()))
+
+    def load_template(self, key: str):
+        if not self._confirm_discard():
+            return
+        try:
+            wf = templates.build(key)
+        except Exception as e:
+            QMessageBox.critical(self, ui_i18n.tr("模板载入失败"),
+                                 f"{type(e).__name__}: {e}")
+            return
+        self.history.push(ui_i18n.trf("载入模板 {name}", name=wf.name),
+                          self.scene.snapshot())
+        self.scene.load_workflow(wf)
+        self._current_path = ""
+        self.params.show_node(self.scene.to_workflow(), "")
+        self._update_title()
+        self._update_history_actions()
+        self._log(ui_i18n.trf("已载入模板：{name}（{count} 节点）",
+                              name=wf.name, count=len(wf.nodes)))
+        self.on_fit()
 
     def _on_param_changed(self, node_id: str, name: str, value):
         """把改动写回数据层，并同步到另一处控件。"""
@@ -296,6 +490,69 @@ class WorkflowEditorWindow(QMainWindow):
         self._update_title()
         self._log(ui_i18n.trf("已保存 {path}", path=path))
 
+    # ------------------------------------------------------- ComfyUI 互通
+    def on_import_comfy(self):
+        """导入 ComfyUI 工作流（API 或 UI 格式）。"""
+        if not self._confirm_discard():
+            return
+        d = serializers.workflows_dir()
+        path, _ = QFileDialog.getOpenFileName(
+            self, ui_i18n.tr("导入 ComfyUI 工作流"), d,
+            ui_i18n.tr("ComfyUI JSON (*.json)"))
+        if not path:
+            return
+        try:
+            wf, rep = comfy.load_file(path)
+        except Exception as e:
+            QMessageBox.critical(self, ui_i18n.tr("导入失败"),
+                                 f"{type(e).__name__}: {e}")
+            return
+        text = rep.summary_text()
+        if not wf.nodes:
+            QMessageBox.warning(self, ui_i18n.tr("没导入任何节点"), text)
+            return
+        self.scene.load_workflow(wf)
+        self._current_path = ""
+        self._update_title()
+        self._log(ui_i18n.trf("已从 ComfyUI 导入 {n} 个节点：{p}",
+                              n=len(wf.nodes), p=path))
+        for line in text.splitlines():
+            self._log("  " + line)
+        if rep.unsupported:
+            QMessageBox.warning(self, ui_i18n.tr("部分节点不支持"), text)
+        else:
+            QMessageBox.information(self, ui_i18n.tr("导入完成"), text)
+        self.on_validate(silent_ok=True)
+
+    def on_export_comfy(self):
+        """导出成 ComfyUI API 格式。"""
+        wf = self.scene.to_workflow()
+        data, rep = comfy.export_prompt(wf)
+        text = rep.summary_text()
+        if not data:
+            QMessageBox.warning(self, ui_i18n.tr("没有可导出的节点"), text)
+            return
+        d = serializers.workflows_dir()
+        default = os.path.join(d, serializers._safe_name(wf.name) + "_comfy.json")
+        path, _ = QFileDialog.getSaveFileName(
+            self, ui_i18n.tr("导出为 ComfyUI"), default,
+            ui_i18n.tr("ComfyUI JSON (*.json)"))
+        if not path:
+            return
+        try:
+            import json
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+        except Exception as e:
+            QMessageBox.critical(self, ui_i18n.tr("导出失败"),
+                                 f"{type(e).__name__}: {e}")
+            return
+        self._log(ui_i18n.trf("已导出 ComfyUI 格式：{p}", p=path))
+        if rep.unsupported or rep.warnings:
+            QMessageBox.warning(self, ui_i18n.tr("导出完成（有省略）"), text)
+        else:
+            QMessageBox.information(self, ui_i18n.tr("导出完成"), text)
+
     # ------------------------------------------------------------------ 生成
     def on_build_from_ui(self):
         if self.host is None:
@@ -317,7 +574,26 @@ class WorkflowEditorWindow(QMainWindow):
         self._update_title()
         self._log(ui_i18n.trf(
             "已从当前界面生成工作流：{description}", description=builder.describe(wf)))
+        self._log_ui_drop_warnings(wf)
         self.on_validate(silent_ok=True)
+
+    def _log_ui_drop_warnings(self, wf):
+        """把"界面上开了、但没能进工作流"的项**明确说出来**。
+
+         这是 P0 静默降级的另一半：以前界面勾了 ControlNet/IP-Adapter
+        却因为缺参考图而没进图，既不报错也不警告，用户以为用了。
+        现在只要 builder 记了 warnings，就在日志里红字列出 + 弹窗提示。
+        """
+        warns = list((wf.metadata or {}).get("warnings") or [])
+        if not warns:
+            return
+        for w in warns:
+            self._log(ui_i18n.trf("界面上的设置没能进工作流：{warning}", warning=w))
+        QMessageBox.warning(
+            self, ui_i18n.tr("有设置没进工作流"),
+            ui_i18n.tr("以下设置在界面上是开着的，但没有进入生成的工作流（通常是缺少参考图/姿势图）：")
+            + "\n\n" + "\n".join(f"· {w}"for w in warns)
+            + "\n\n" + ui_i18n.tr("补齐后重新点「从当前界面生成」即可。"))
 
     def on_apply_ui_to_graph(self):
         if self.scene.node_items and not self._confirm_discard():
@@ -495,7 +771,7 @@ class WorkflowEditorWindow(QMainWindow):
             outs = res.get("outputs") or {}
             for k, v in outs.items():
                 if isinstance(v, str) and os.path.exists(v):
-                    self._log(f"🖼 {k} → {v}")
+                    self._log(f"{k} → {v}")
             if res.get("cache_stats"):
                 st = res["cache_stats"]
                 self._log(ui_i18n.trf(

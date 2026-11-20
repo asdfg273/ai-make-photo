@@ -59,7 +59,7 @@ class AIToolsMixin:
             self._on_adetailer_complete(result_img, result_mask,
                                         success_count, total)
         except Exception:
-            logger.exception("❌ ADetailer 结果应用失败")
+            logger.exception("ADetailer 结果应用失败")
             QMessageBox.warning(self, "提示", "ADetailer 结果应用失败，请查看日志")
 
     def run_adetailer(self):
@@ -104,7 +104,7 @@ class AIToolsMixin:
         try:
             self._adetailer_worker(snapshot, mask_snapshot)
         except Exception as e:
-            logger.exception("❌ ADetailer 处理失败")
+            logger.exception("ADetailer 处理失败")
             self.sig_adetailer_error.emit(f"ADetailer 处理失败：{e}", "critical")
             self._adetailer_running = False
 
@@ -120,7 +120,7 @@ class AIToolsMixin:
             self.sig_adetailer_status.emit(text, color)
 
         try:
-            _status("🔍 正在检测人脸...", "#f9e2af")
+            _status("正在检测人脸…", "#f9e2af")
             cv_img = cv2.cvtColor(np.array(snapshot), cv2.COLOR_RGB2BGR)
             gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
 
@@ -164,7 +164,7 @@ class AIToolsMixin:
 
             for idx, (x, y, w, h) in enumerate(faces):
                 _status(
-                    f"🧑‍🎨 ADetailer: 正在修复第 {idx+1}/{len(faces)} 张脸...",
+                    f"正在修复第 {idx+1}/{len(faces)} 张人脸…",
                     "#f9e2af",
                 )
 
@@ -242,13 +242,13 @@ class AIToolsMixin:
                     logger.warning(f"ADetailer 人脸 {idx+1} 跳过: {e}")
 
             if success_count == 0:
-                _status("⚠️ ADetailer: 所有人脸均修复失败", "#f38ba8")
+                _status("人脸修复失败", "#f38ba8")
                 self.sig_adetailer_error.emit("未能成功修复任何人脸，请检查日志。", "warning")
                 self._adetailer_running = False
                 return
 
             _status(
-                f"✅ ADetailer 完成 ({success_count}/{len(faces)} 张)",
+                f"人脸修复完成（{success_count}/{len(faces)} 张）",
                 "#a6e3a1",
             )
             # 交给 GUI 线程套用（结果对象跨线程传递，只读不改）
@@ -266,7 +266,7 @@ class AIToolsMixin:
         self._adetailer_snapshot = None      # 及时释放这张全图
 
         if snapshot is None:
-            logger.warning("⚠️ ADetailer 完成但快照丢失，跳过确认")
+            logger.warning("ADetailer 完成但快照丢失，跳过确认")
             self.current_img = result_img
             self.mask_img = result_mask
             self.base_img = result_img.copy()
@@ -279,12 +279,12 @@ class AIToolsMixin:
             reply = QMessageBox.question(
                 self,
                 "确认覆盖",
-                f"画布已被修改，是否用 ADetailer 结果覆盖？\n成功修复 {success_count}/{total} 张人脸",
+                f"画布已被修改，是否用人脸修复结果覆盖？\n成功修复 {success_count}/{total} 张人脸",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
             if reply != QMessageBox.StandardButton.Yes:
-                logger.info("🚫 用户取消 ADetailer 覆盖")
+                logger.info("用户取消人脸修复结果覆盖")
                 return
 
         # 应用结果
@@ -296,8 +296,8 @@ class AIToolsMixin:
         self.push_history()  # 修复后入历史
         self.update_canvas(self.current_img, force=True)
 
-        self.lbl_status.setText(f"✅ ADetailer 完成 ({success_count}/{total} 张)")
-        self.lbl_status.setStyleSheet("color:#a6e3a1; font-size:13px;")
+        self.lbl_status.setText(f"人脸修复完成（{success_count}/{total} 张）")
+        self.lbl_status.setStyleSheet("color:#a6e3a1; font-size:12px;")
 
 
 

@@ -1,6 +1,8 @@
 # tests/test_gallery_unified.py — 统一画廊（图片/动画）+ 防抖测试（无头，纯脚本）
 import os
 import _bootstrap  # noqa: F401,E402  (统一放宽 stdout 编码，避免 emoji 让脚本假失败)
+
+_bootstrap.isolate_config_globally()  # 隔离配置：不读写用户真实 app_config.json
 import sys
 import time
 import tempfile

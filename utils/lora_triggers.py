@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -18,12 +17,33 @@ def split_display(text: str) -> tuple[str, str]:
     return value, ""
 
 
+def _lora_roots():
+    """LoRA 搜索根目录（绝对路径）。
+
+    ⚠️ 这里曾经直接用相对路径 `Path("loras")`。触发词旁文件（`xxx.txt`）
+    是跟着 LoRA 放在 `<项目>/loras/` 下的，而相对路径只在"当前工作目录
+    正好是项目根"时才命中：换 CWD（测试、快捷方式启动、从别的目录调用
+    本模块）就**静默读不到触发词**，LoRA 加载了但触发词没进提示词。
+    """
+    roots = []
+    try:
+        from utils import paths  # 延迟导入：避免 utils 包循环导入
+        lora_dir = getattr(paths, "LORA_DIR", None)
+        if lora_dir:
+            roots.append(Path(lora_dir))
+    except Exception as exc:
+        logger.debug("读取 LORA_DIR 失败，回退相对路径: %s", exc)
+    roots.append(Path("loras"))
+    return roots
+
+
 def _sidecar_candidates(name: str, lora_path: str = ""):
     if lora_path:
         yield Path(lora_path).with_suffix(".txt")
     base = Path(name).stem
-    for sub in ("sdxl", "sd1.5", "sd15", ""):
-        yield Path("loras") / sub / f"{base}.txt" if sub else Path("loras") / f"{base}.txt"
+    for root in _lora_roots():
+        for sub in ("sdxl", "sd1.5", "sd15", ""):
+            yield (root / sub / f"{base}.txt") if sub else (root / f"{base}.txt")
 
 
 def trigger_for_display(text: str, lora_path: str = "") -> str:

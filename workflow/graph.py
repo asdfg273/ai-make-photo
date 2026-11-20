@@ -153,17 +153,68 @@ def errors_only(issues: List[ValidationIssue]) -> List[ValidationIssue]:
     return [i for i in issues if i.level == "error"]
 
 
+def _edges(wf: Workflow) -> List[Tuple[str, str]]:
+    """(src_id, dst_id) 边列表 —— **唯一来源是节点自己的 inputs**。
+
+    为什么不用 `wf.links`（这是一个真实存在过的坑）
+    ------------------------------------------------
+    `Node.inputs` 用同一个约定同时表达"字面量"和"连线"
+    （列表 = 连线，见 schema.Node.link_refs），所以**直接给 inputs 写连线**
+    是完全合法的用法：
+
+        wf.add(Node("sampler", "Sampler", {"model": ["ckpt", "model"]}, {...}))
+
+    但 `wf.links` 只在调用 `wf.connect()` 时才会被填。旧版 topo_sort 只读
+    `wf.links`，于是这种工作流**所有节点的入度都是 0**，顺序退化成节点插入
+    顺序 —— 一旦插入顺序与依赖顺序不一致，执行器就会在"上游还没跑"的时候
+    去取输入，报出与真实原因毫无关系的错误。实测（本机复现）：
+
+        wf.add(Node("sampler", "Sampler", {...}, {...}))
+        wf.add(Node("vae", "VAEDecode", {"latent": ["sampler", "latent"]}, {}))
+        wf.connect("ckpt", "model", "sampler", "model")
+        → topo_sort 返回 ['ckpt', 'pos', 'neg', 'vae', 'sampler']
+
+    VAEDecode 排到了 Sampler **前面**，于是它拿不到 latent，报
+    `ValueError: 缺少 latent（也没有可透传的 image）`。
+
+    改为从 `link_refs()` 推导后，两种写法都能得到正确顺序；而且
+    `add() + connect()` 混用也不会把同一条边算两次（connect 会把连线写进
+    `inputs`，这里按 (src,dst) 去重）。
+    """
+    edges: List[Tuple[str, str]] = []
+    seen = set()
+    ids = set(wf.node_ids())
+    for node in wf.nodes:
+        for _port, ref in (node.link_refs() or {}).items():
+            try:
+                src = ref[0]
+            except Exception:
+                continue
+            if src not in ids or src == node.id:
+                continue
+            key = (src, node.id)
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append(key)
+    return edges
+
+
 def topo_sort(wf: Workflow, *, translate=None) -> List[str]:
-    """拓扑排序（Kahn）。有环抛 WorkflowError 并指出环上节点。"""
+    """拓扑排序（Kahn）。有环抛 WorkflowError 并指出环上节点。
+
+    边来自 `_edges(wf)`（= 节点自己的连线声明），**不依赖 `wf.links`** ——
+    后者只在 `wf.connect()` 时才会被填，直接用 `Node(inputs={...})` 声明
+    连线的工作流在旧实现下会被当成"没有依赖"，顺序退化成插入顺序。
+    """
     tr = translate or (lambda text: text)
     ids = wf.node_ids()
     indeg: Dict[str, int] = {i: 0 for i in ids}
     adj: Dict[str, List[str]] = {i: [] for i in ids}
 
-    for (src, _sp, dst, _dp) in wf.links:
-        if src in indeg and dst in indeg:
-            adj[src].append(dst)
-            indeg[dst] += 1
+    for (src, dst) in _edges(wf):
+        adj[src].append(dst)
+        indeg[dst] += 1
 
     q = deque([i for i in ids if indeg[i] == 0])
     order: List[str] = []
@@ -183,10 +234,15 @@ def topo_sort(wf: Workflow, *, translate=None) -> List[str]:
 
 
 def upstream_of(wf: Workflow, node_id: str) -> List[str]:
-    """某个节点的全部上游（含间接），按拓扑序返回。"""
+    """某个节点的全部上游（含间接），按拓扑序返回。
+
+    ⚠️ 同样必须用 `_edges(wf)` 而不是 `wf.links`：后者在"直接用
+    `Node(inputs={...})` 声明连线"的工作流里是空的，会让
+    `needed_for()`（只跑子图）把上游全漏掉。
+    """
     order = topo_sort(wf)
     parents: Dict[str, set] = {i: set() for i in wf.node_ids()}
-    for (src, _sp, dst, _dp) in wf.links:
+    for (src, dst) in _edges(wf):
         if dst in parents:
             parents[dst].add(src)
     need = set()

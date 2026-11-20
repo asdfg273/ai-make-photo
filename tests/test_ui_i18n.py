@@ -1,6 +1,9 @@
 # tests/test_ui_i18n.py
 # UI 多语言离屏测试：配置、词典、控件树重翻译与动态文本保护
 import os
+import _bootstrap  # noqa: F401,E402  (统一放宽 stdout 编码 + 配置隔离)
+
+_bootstrap.isolate_config_globally()  # 隔离配置：不读写用户真实 app_config.json
 import sys
 import tempfile
 
@@ -9,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QGroupBox, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QTabWidget, QTextEdit, QWidget,
+    QMainWindow, QPlainTextEdit, QPushButton, QTabWidget, QTextEdit, QWidget,
 )
 
 _APP = QApplication.instance() or QApplication([])
@@ -121,6 +124,109 @@ def test_widget_tree_roundtrip_and_dynamic_text():
         ui_i18n.set_language(old)
         root.close()
         root.deleteLater()
+
+
+def test_standard_edit_context_menu_language_roundtrip():
+    """Qt 标准编辑菜单必须整单跟随界面语言，且不能改动用户正文。"""
+    from ui.i18n import ui_i18n
+
+    expected = {
+        "zh": ["撤消(U)", "重做(R)", "剪切(T)", "复制(C)",
+               "粘贴(P)", "删除", "全选"],
+        "ja": ["元に戻す(U)", "やり直す(R)", "切り取り(T)", "コピー(C)",
+               "貼り付け(P)", "削除", "すべてを選択"],
+        "en": ["Undo", "Redo", "Cut", "Copy", "Paste", "Delete", "Select All"],
+    }
+    old = ui_i18n.language
+    ui_i18n.install(_APP)
+    try:
+        for language, labels in expected.items():
+            assert ui_i18n.set_language(language) or ui_i18n.language == language
+            for widget_type in (QLineEdit, QTextEdit, QPlainTextEdit):
+                edit = widget_type()
+                original = "用户自己的提示词 / User text / ユーザー本文"
+                if isinstance(edit, QLineEdit):
+                    edit.setText(original)
+                else:
+                    edit.setPlainText(original)
+                edit.selectAll()
+                menu = edit.createStandardContextMenu()
+                try:
+                    actual = [
+                        action.text().split("\t", 1)[0].replace("&", "")
+                        for action in menu.actions() if action.text()
+                    ]
+                    assert actual == labels, (language, widget_type.__name__, actual)
+                finally:
+                    menu.deleteLater()
+                current = edit.text() if isinstance(edit, QLineEdit) else edit.toPlainText()
+                assert current == original
+                edit.deleteLater()
+    finally:
+        ui_i18n.set_language(old)
+
+
+def test_standard_message_and_file_dialog_language_roundtrip():
+    """标准按钮及非原生文件对话框不得残留其他语言。"""
+    import re
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox, QPushButton
+    from ui.i18n import ui_i18n
+
+    def plain(text):
+        # Qt 在首次创建与运行时重翻译时可能省略快捷键标记，语义不受影响。
+        return re.sub(r"\([A-Z]\)(?=[:：]|$)", "", text.replace("&", ""))
+
+    message_buttons = {
+        "zh": {"Yes": "是", "No": "否", "Save": "保存",
+               "Discard": "丢弃", "Cancel": "取消"},
+        "ja": {"Yes": "はい", "No": "いいえ", "Save": "保存",
+               "Discard": "変更を破棄", "Cancel": "キャンセル"},
+        "en": {"Yes": "Yes", "No": "No", "Save": "Save",
+               "Discard": "Discard", "Cancel": "Cancel"},
+    }
+    file_labels = {
+        "zh": ["查找范围：", "文件名称：", "文件类型："],
+        "ja": ["参照位置:", "ファイル名:", "ファイルの種類:"],
+        "en": ["Look in:", "File name:", "Files of type:"],
+    }
+    file_buttons = {
+        "zh": ["打开", "取消"],
+        "ja": ["開く", "キャンセル"],
+        "en": ["Open", "Cancel"],
+    }
+    standard_buttons = {
+        name: getattr(QMessageBox.StandardButton, name)
+        for name in ("Yes", "No", "Save", "Discard", "Cancel")
+    }
+    old = ui_i18n.language
+    ui_i18n.install(_APP)
+    dialog = None
+    try:
+        for language in ("zh", "ja", "en"):
+            ui_i18n.set_language(language)
+            box = QMessageBox()
+            box.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel)
+            for name, button_type in standard_buttons.items():
+                assert plain(box.button(button_type).text()) == message_buttons[language][name]
+            box.deleteLater()
+
+            if dialog is None:
+                dialog = QFileDialog()
+                dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+                dialog.show()
+            _APP.processEvents()
+            assert [plain(label.text()) for label in dialog.findChildren(QLabel)] \
+                == file_labels[language]
+            assert [plain(button.text()) for button in dialog.findChildren(QPushButton)] \
+                == file_buttons[language]
+    finally:
+        ui_i18n.set_language(old)
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
 
 
 def test_settings_language_control():
@@ -745,7 +851,6 @@ def test_workflow_report_language():
 
 
 def test_preflight_checks_language():
-    from unittest.mock import patch
     from ui.i18n import ui_i18n
     from workflow.memory_policy import DeviceCapabilities, MemoryPolicy, plan_for_nodes
     from workflow.preflight import PreflightResult, _check_models, _check_structure, run_preflight
@@ -1096,6 +1201,8 @@ if __name__ == "__main__":
     test_config_language_roundtrip()
     test_translate_and_validate_language()
     test_widget_tree_roundtrip_and_dynamic_text()
+    test_standard_edit_context_menu_language_roundtrip()
+    test_standard_message_and_file_dialog_language_roundtrip()
     test_settings_language_control()
     test_shell_language_and_layout()
     test_gallery_count_language_roundtrip()

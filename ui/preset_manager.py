@@ -1,6 +1,6 @@
 # ui/preset_manager.py
 """
-🎯 预设管理 Mixin
+ 预设管理 Mixin
 - 加载/保存用户预设
 - 右键菜单（保存/删除/导入/导出）
 - 收集当前 UI 状态为预设
@@ -26,7 +26,7 @@ class PresetManagerMixin:
     def _refresh_preset_combo(self, select_name: str = None):
         """重新加载 combo_preset 的选项"""
         if not hasattr(self, "combo_preset"):
-            logger.warning("⚠️ combo_preset 尚未创建，跳过 _refresh_preset_combo")
+            logger.warning("combo_preset 尚未创建，跳过 _refresh_preset_combo")
             return
         from core.presets import get_all_presets, is_builtin_preset
 
@@ -46,12 +46,12 @@ class PresetManagerMixin:
         user_names    = [n for n in all_presets if not is_builtin_preset(n)]
 
         for n in builtin_names:
-            self.combo_preset.addItem(f"🎯 {n}", userData=n)
+            self.combo_preset.addItem(f"{n}", userData=n)
 
         if user_names:
             self.combo_preset.insertSeparator(self.combo_preset.count())
             for n in user_names:
-                self.combo_preset.addItem(f"⭐ {n}", userData=n)
+                self.combo_preset.addItem(f"{n}", userData=n)
 
         # 恢复选择
         idx = self.combo_preset.findData(current)
@@ -62,14 +62,14 @@ class PresetManagerMixin:
         self.combo_preset.currentIndexChanged.connect(self.apply_preset)
 
     def _get_current_preset_name(self) -> str:
-        """从 combo_preset 取真实预设名（去掉🎯/⭐前缀）"""
+        """从 combo_preset 取真实预设名（去掉/前缀）"""
         if not hasattr(self, "combo_preset"):
             return ""
         data = self.combo_preset.currentData()
         if data:
             return data
         txt = self.combo_preset.currentText()
-        for prefix in ("🎯 ", "⭐ "):
+        for prefix in (" ", " "):
             if txt.startswith(prefix):
                 return txt[len(prefix):]
         return txt
@@ -147,7 +147,7 @@ class PresetManagerMixin:
     # ───────────────────── 业务方法 ─────────────────────
 
     def save_current_as_preset(self):
-        """💾 把当前控件状态保存为用户预设"""
+        """把当前控件状态保存为用户预设"""
         from core.presets import load_user_presets, save_user_presets, is_builtin_preset, PROMPT_PRESETS
 
         name, ok = QInputDialog.getText(
@@ -182,13 +182,13 @@ class PresetManagerMixin:
             PROMPT_PRESETS[name] = preset
             self._refresh_preset_combo(select_name=name)
             self._set_status(ui_i18n.trf("已保存预设「{name}」", name=name), "#a6e3a1")
-            logger.info(f"💾 保存用户预设: {name}")
+            logger.info(f"保存用户预设: {name}")
         else:
             QMessageBox.critical(
                 self, ui_i18n.tr("保存失败"), ui_i18n.tr("写入 user_presets.json 失败。"))
 
     def delete_current_preset(self):
-        """🗑️ 删除当前选中的用户预设"""
+        """删除当前选中的用户预设"""
         from core.presets import load_user_presets, save_user_presets, is_builtin_preset, PROMPT_PRESETS
 
         name = self._get_current_preset_name()
@@ -215,10 +215,10 @@ class PresetManagerMixin:
         if save_user_presets(user):
             self._refresh_preset_combo(select_name="（无）")
             self._set_status(ui_i18n.trf("已删除预设「{name}」", name=name), "#fab387")
-            logger.info(f"🗑️ 删除用户预设: {name}")
+            logger.info(f"删除用户预设: {name}")
 
     def export_user_presets(self):
-        """📤 导出用户预设到外部 JSON"""
+        """导出用户预设到外部 JSON"""
         from core.presets import load_user_presets
 
         user = load_user_presets()
@@ -237,12 +237,12 @@ class PresetManagerMixin:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(user, f, ensure_ascii=False, indent=2)
             self._set_status(ui_i18n.trf("已导出 {count} 个预设", count=len(user)), "#a6e3a1")
-            logger.info(f"📤 导出预设到 {path}")
+            logger.info(f"导出预设到 {path}")
         except Exception as e:
             QMessageBox.critical(self, ui_i18n.tr("导出失败"), str(e))
 
     def import_user_presets(self):
-        """📥 从外部 JSON 导入用户预设"""
+        """从外部 JSON 导入用户预设"""
         from core.presets import load_user_presets, save_user_presets, is_builtin_preset, PROMPT_PRESETS
 
         path, _ = QFileDialog.getOpenFileName(
@@ -272,7 +272,7 @@ class PresetManagerMixin:
         user = load_user_presets()
         overlap = set(user) & set(valid)
         if overlap:
-            preview = ", ".join(list(overlap)[:5]) + ("..." if len(overlap) > 5 else "")
+            preview = ", ".join(list(overlap)[:5]) + ("..."if len(overlap) > 5 else "")
             ret = QMessageBox.question(
                 self, ui_i18n.tr("名称冲突"),
                 ui_i18n.trf("有 {count} 个预设同名：\n{preview}\n\n是否覆盖？\n（选'否'跳过冲突项）",
@@ -301,19 +301,19 @@ class PresetManagerMixin:
 
         menu = QMenu(self)
 
-        act_save = menu.addAction("💾 保存当前参数为新预设")
+        act_save = menu.addAction("保存当前参数为新预设")
         act_save.triggered.connect(self.save_current_as_preset)
 
         name = self._get_current_preset_name()
-        if name and name != "（无）" and not is_builtin_preset(name):
-            act_del = menu.addAction(f"🗑️ 删除「{name}」")
+        if name and name != "（无）"and not is_builtin_preset(name):
+            act_del = menu.addAction(f"删除「{name}」")
             act_del.triggered.connect(self.delete_current_preset)
 
         menu.addSeparator()
-        menu.addAction("📤 导出用户预设...").triggered.connect(self.export_user_presets)
-        menu.addAction("📥 导入用户预设...").triggered.connect(self.import_user_presets)
+        menu.addAction("导出用户预设...").triggered.connect(self.export_user_presets)
+        menu.addAction("导入用户预设...").triggered.connect(self.import_user_presets)
         menu.addSeparator()
-        menu.addAction("🔄 重新加载预设").triggered.connect(lambda: self._refresh_preset_combo())
+        menu.addAction("重新加载预设").triggered.connect(lambda: self._refresh_preset_combo())
 
         menu.exec(self.combo_preset.mapToGlobal(pos))
 

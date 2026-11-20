@@ -33,10 +33,11 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
                              QVBoxLayout, QWidget)
 
 from ui.i18n import ui_i18n
+
 logger = logging.getLogger(__name__)
 
 # 新建区域时轮换的配色（画布上便于区分）
-PALETTE = ["#f38ba8", "#a6e3a1", "#89b4fa", "#f9e2af", "#cba6f7",
+REGION_COLORS = ["#f38ba8", "#a6e3a1", "#89b4fa", "#f9e2af", "#cba6f7",
            "#fab387", "#94e2d5", "#f5c2e7"]
 
 COL_ENABLE, COL_NAME, COL_PROMPT, COL_NEG, COL_WEIGHT, COL_SHAPE = range(6)
@@ -115,7 +116,7 @@ class RegionCanvas(QWidget):
             rc = QRect(int(r.x() + x0 * r.width()), int(r.y() + y0 * r.height()),
                        max(2, int((x1 - x0) * r.width())),
                        max(2, int((y1 - y0) * r.height())))
-            col = QColor(reg.get("color") or PALETTE[i % len(PALETTE)])
+            col = QColor(reg.get("color") or REGION_COLORS[i % len(REGION_COLORS)])
             on = reg.get("enabled", True)
             fill = QColor(col)
             fill.setAlpha(50 if on else 18)
@@ -335,7 +336,7 @@ class RegionEditorDialog(QDialog):
                 d.setdefault("shape", "rect")
                 d.setdefault("rect", (0.0, 0.0, 0.5, 0.5))
                 d.setdefault("mask_path", "")
-                d.setdefault("color", PALETTE[i % len(PALETTE)])
+                d.setdefault("color", REGION_COLORS[i % len(REGION_COLORS)])
                 d.setdefault("enabled", True)
                 d.setdefault("feather", 16)
                 self._regions.append(d)
@@ -420,7 +421,6 @@ class RegionEditorDialog(QDialog):
         self._update_summary()
         self.canvas.update()
 
-
     # ------------------------------------------------------------------
     def _on_created(self, rect):
         idx = len(self._regions)
@@ -428,7 +428,7 @@ class RegionEditorDialog(QDialog):
             "name": ui_i18n.trf("区域{index}", index=idx + 1),
             "prompt": "", "negative": "",
             "weight": 0.5, "shape": "rect", "rect": tuple(rect),
-            "mask_path": "", "color": PALETTE[idx % len(PALETTE)],
+            "mask_path": "", "color": REGION_COLORS[idx % len(REGION_COLORS)],
             "enabled": True, "feather": 16})
         self._rebuild_table()
         self._refresh_canvas()
@@ -502,7 +502,7 @@ class RegionEditorDialog(QDialog):
             "prompt": "", "negative": "",
             "weight": 0.5, "shape": shape,
             "rect": (0.1 + off, 0.1 + off, 0.5 + off, 0.4 + off),
-            "mask_path": "", "color": PALETTE[idx % len(PALETTE)],
+            "mask_path": "", "color": REGION_COLORS[idx % len(REGION_COLORS)],
             "enabled": True, "feather": 16})
         self._rebuild_table()
         self._refresh_canvas()
@@ -520,7 +520,7 @@ class RegionEditorDialog(QDialog):
             "name": name or ui_i18n.trf("区域{index}", index=idx + 1),
             "prompt": "", "negative": "",
             "weight": 0.5, "shape": "mask", "rect": (0.0, 0.0, 1.0, 1.0),
-            "mask_path": path, "color": PALETTE[idx % len(PALETTE)],
+            "mask_path": path, "color": REGION_COLORS[idx % len(REGION_COLORS)],
             "enabled": True, "feather": 16})
         self._rebuild_table()
         self._refresh_canvas()

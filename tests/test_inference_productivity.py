@@ -143,7 +143,7 @@ def test_generation_queue_fifo_edit_and_pause():
 
 
 def test_queue_controller_dispatches_and_batch_bypasses():
-    from PyQt6.QtWidgets import QApplication, QWidget
+    from PyQt6.QtWidgets import QWidget
     from utils.generation_queue_controller import GenerationQueueMixin
 
     app = _qapp()
@@ -252,9 +252,8 @@ def test_clip_missing_local_model_is_explicit():
 
 
 def test_queue_refresh_preserves_unsaved_edits():
-    from types import SimpleNamespace
     from PyQt6.QtCore import QTimer
-    from PyQt6.QtWidgets import QApplication, QWidget
+    from PyQt6.QtWidgets import QWidget
     from ui.generation_queue_dialog import GenerationQueueDialog
     from utils.generation_queue import GenerationQueue
 
@@ -288,7 +287,7 @@ def test_queue_refresh_preserves_unsaved_edits():
 def test_gallery_semantic_search_uses_window_clip_config():
     from types import SimpleNamespace
     from unittest.mock import patch
-    from PyQt6.QtWidgets import QApplication, QWidget
+    from PyQt6.QtWidgets import QWidget
     from ui.gallery_panel import GalleryPanel
 
     app = _qapp()
@@ -326,7 +325,7 @@ def test_gallery_semantic_search_uses_window_clip_config():
 def test_gallery_context_menu_can_find_similar_images():
     from unittest.mock import patch
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication, QListWidgetItem, QMenu
+    from PyQt6.QtWidgets import QListWidgetItem, QMenu
     from ui.gallery_panel import GalleryPanel
 
     app = _qapp()
@@ -350,7 +349,6 @@ def test_gallery_context_menu_can_find_similar_images():
 
 
 def test_gallery_query_change_rearms_semantic_button():
-    from PyQt6.QtWidgets import QApplication
     from ui.gallery_panel import GalleryPanel
 
     app = _qapp()
@@ -366,7 +364,7 @@ def test_gallery_query_change_rearms_semantic_button():
 
 def test_settings_saves_local_clip_directory():
     from types import SimpleNamespace
-    from PyQt6.QtWidgets import QApplication, QWidget
+    from PyQt6.QtWidgets import QWidget
     from ui.settings_dialog import SettingsDialog
 
     app = _qapp()

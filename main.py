@@ -20,12 +20,16 @@ os.environ["TRANSFORMERS_CACHE"]   = os.path.join(CACHE_ROOT, "huggingface", "tr
 os.environ["DIFFUSERS_CACHE"]      = os.path.join(CACHE_ROOT, "huggingface", "diffusers")
 os.environ["MODELSCOPE_CACHE"]     = os.path.join(CACHE_ROOT, "modelscope")
 os.environ["TORCH_HOME"]           = os.path.join(CACHE_ROOT, "torch")
-os.environ["HF_ENDPOINT"]          = "https://hf-mirror.com"
+# HF 镜像：以前无条件覆盖成 hf-mirror.com，海外用户反而更慢。
+# 现在只在调用方没设置时才用镜像；想直连 huggingface.co 就自己设环境变量：
+#   PowerShell:  $env:HF_ENDPOINT="https://huggingface.co"
+#   cmd:         set HF_ENDPOINT=https://huggingface.co
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 from utils.system_utils import setup_logging, log_system_info, logger
 setup_logging()
-logger.info(f"📦 模型缓存目录: {CACHE_ROOT}")
+logger.info(f"模型缓存目录: {CACHE_ROOT}")
 
 import threading
 import warnings
@@ -83,13 +87,13 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
     def __init__(self):
         super().__init__()
         log_system_info()
-        logger.info("🚀 AI 绘画工作站启动...")
+        logger.info("AI 绘画工作站启动...")
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
         # ── 基础状态 ──
         self.translator = TranslationService()
         self.translator.qwen_enhancer = get_enhancer()
-        logger.info("✅ 已将 Qwen 单例注入到翻译服务")
+        logger.info("已将 Qwen 单例注入到翻译服务")
         self.ai = None
         self.is_generating = False
         self.cancel_flag = False
@@ -127,7 +131,16 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             from utils.model_inbox import run as _run_inbox
             self._inbox_report = _run_inbox()
         except Exception as _e:
-            logger.warning(f"⚠️ 投递箱整理失败（已忽略）: {_e}")
+            logger.warning(f"投递箱整理失败（已忽略）: {_e}")
+
+        # ── ADetailer 模型归位：旧版下到 models_cache/adetailer/ ──
+        # 统一到 models/adetailer/，这样扩展市场能认出"已安装"，
+        # 检测器也不会出现"文件在、却提示未找到"的错位。
+        try:
+            from utils.paths import migrate_adetailer_models as _mig_ad
+            _mig_ad()
+        except Exception as _e:
+            logger.warning(f"ADetailer 模型归位失败（已忽略）: {_e}")
 
         self.setup_ui()
         self.apply_config_to_ui()
@@ -150,12 +163,12 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             self._bridge.gallery_add_signal.connect(self._on_new_image_saved)
             self._bridge.live_preview_signal.connect(self.show_preview_image)
         except Exception as e:
-            logger.error(f"[CONNECT] ❌ 预览信号连接失败: {e}")
+            logger.error(f"[CONNECT]  预览信号连接失败: {e}")
 
         try:
             self.gallery.apply_params_signal.connect(self._on_apply_gallery_params)
         except Exception as e:
-            logger.error(f"[CONNECT] ❌ 失败: {e}")
+            logger.error(f"[CONNECT]  失败: {e}")
 
         # enhance_done_signal 已在 _init_gen_bridge() 中连接,此处不再重复连接
         self._ui_ready = True
@@ -187,7 +200,36 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
                 self._set_status(
                     ui_i18n.tr("默认模型就绪（权重将在首次生成时加载）"), "#a6e3a1")
         except Exception as e:
-            logger.warning(f"[PRELOAD] ⚠️ 默认模型信息加载失败: {e}")
+            logger.warning(f"[PRELOAD]  默认模型信息加载失败: {e}")
+
+    def _check_runtime_env(self):
+        """启动自检：依赖版本不够时说明清楚（否则功能会静默失效）。
+
+        典型场景：用系统 Python 启动而没走 venv —— diffusers 0.32 既没有
+        `hooks.apply_group_offloading`（8GB 卡跑 MOSS-Image 必需），也没有
+        `ModularPipeline`（Anima 必需），现象是"某个模型用不了"。
+        """
+        try:
+            from utils import runtime_check
+            rep = runtime_check.log_report()
+        except Exception as e:
+            logger.warning(f"[RUNTIME] 环境自检失败（忽略）: {e}")
+            return
+        if rep.get("ok"):
+            return
+        text = runtime_check.summary_text(rep)
+        if not text:
+            return
+        try:
+            self._set_status(
+                "⚠️ 运行环境依赖版本不够，部分架构/功能不可用（详见日志）",
+                "#f38ba8")
+        except Exception as e:
+            logger.debug("状态栏提示失败: %s", e)
+        try:
+            QMessageBox.warning(self, "运行环境自检", text)
+        except Exception as e:
+            logger.warning(f"[RUNTIME] 弹窗失败: {e}")
 
     def _show_inbox_report(self):
         """弹窗告知 models/puton 的整理结果。
@@ -212,7 +254,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
                     except Exception as e:
                         logger.warning(f"[INBOX] {fn} 刷新失败: {e}")
         try:
-            QMessageBox.information(self, "📥 模型已自动整理", text)
+            QMessageBox.information(self, "模型已自动整理", text)
         except Exception as e:
             logger.warning(f"[INBOX] 弹窗失败: {e}")
 
@@ -240,7 +282,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         "不下载引擎就完全不能用"，值得单独强调一次并给出去处。
         """
         try:
-            if not any(getattr(e, "arch_id", "") == "flux" for e in rep.entries):
+            if not any(getattr(e, "arch_id", "") == "flux"for e in rep.entries):
                 return
             from utils.flux_engine import installed_variant, status_text
             if installed_variant():
@@ -253,9 +295,9 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         logger.warning("[FLUX] 检测到 Flux 模型，但引擎组件缺失")
         try:
             goto = self._confirm_go_market(
-                "⚠️ Flux 引擎尚未下载",
+                "Flux 引擎尚未下载",
                 "检测到 Flux 模型，但 Flux 引擎组件（T5/CLIP/VAE，约 10GB）"
-                "还没下载。\n\n**不下载引擎就无法使用 Flux 生成。**\n\n" + text)
+                "还没下载。\n\n**不下载引擎就无法使用 Flux 生成。**\n\n"+ text)
         except Exception as e:
             logger.warning(f"[FLUX] 弹窗失败: {e}")
             return
@@ -289,7 +331,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             print_scan_report()
         except Exception as e:
             logger.warning(f"模型扫描失败(忽略): {e}")
-        logger.info("👉 [预热] 后台导入重型库 (PyTorch / Diffusers)...")
+        logger.info("[预热] 后台导入重型库 (PyTorch / Diffusers)...")
         self._emit_status(
             ui_i18n.tr("正在导入 PyTorch & Diffusers..."), "#f9e2af")
         try:
@@ -302,7 +344,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
                 ui_i18n.tr("正在加载大模型,首次启动可能需要数分钟..."), "#f9e2af")
             self.ai = ModelManager()
         except Exception as e:
-            logger.exception("❌ AI 引擎加载失败")   # exception 会带完整 traceback
+            logger.exception("AI 引擎加载失败")   # exception 会带完整 traceback
             self._app_bridge.ai_failed.emit(str(e))
             return
         self._app_bridge.ai_loaded.emit()
@@ -317,7 +359,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         self.btn_generate.setText(ui_i18n.tr("开始生成"))
         self._set_status(
             ui_i18n.tr("系统就绪,等待生成指令..."), "#a6e3a1")
-        logger.info("✅ [预热] 引擎就绪!")
+        logger.info("[预热] 引擎就绪!")
         QMetaObject.invokeMethod(self, "refresh_models", Qt.ConnectionType.QueuedConnection)
 
         if not hasattr(self, 'combo_device'):
@@ -367,7 +409,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             return
         preset = PROMPT_PRESETS[name]
 
-        # ⚠️ 必须在改动任何控件**之前**备份：↩️「还原」按钮依赖 _preset_backup。
+        #  必须在改动任何控件**之前**备份：↩「还原」按钮依赖 _preset_backup。
         # 以前这里从不调用 _snapshot_current_params()，_preset_backup 永远是
         # None，还原按钮只会提示"没有可还原的快照"。
         try:
@@ -379,26 +421,26 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
                        for k in self._CONTROL_LABELS.keys()}
         self._preset_before_snap = before_snap
 
-        # ⚠️ 提示词是**替换**，不是追加。
+        #  提示词是**替换**，不是追加。
         # 预设是一整套场景/画质配置（正负提示词都是完整的），旧代码写的是
-        #     merged = preset["p"] + ", " + 当前文本
+        #     merged = preset["p"] + ", "+ 当前文本
         # 于是每点一次预设就把上一份提示词再叠一遍：点两次"高清细节"会得到
         # "高清细节…, 高清细节…, 我原来的词"，越点越长且互相冲突。
-        # 旧文本已由上面的快照备份，点 ↩️ 可还原。
+        # 旧文本已由上面的快照备份，点 ↩ 可还原。
         if preset.get("p"):
             self.txt_prompt.setPlainText(str(preset["p"]).strip())
         if preset.get("n"):
             self.txt_neg.setPlainText(str(preset["n"]).strip())
 
         params = preset.get("params", {})
-        if "steps"   in params: self._safe_set_int  ("spin_steps",    params["steps"])
-        if "cfg"     in params: self._safe_set_float("scale_cfg",     params["cfg"])
-        if "sampler" in params: self._safe_set_combo("combo_sampler", params["sampler"])
-        if "resolution" in params: self._safe_set_combo("combo_res", params["resolution"])
-        if "count"   in params: self._safe_set_int("spin_count", params["count"])
-        if "seed"    in params: self._safe_set_int("spin_seed",  params["seed"])
+        if "steps"in params: self._safe_set_int  ("spin_steps",    params["steps"])
+        if "cfg"in params: self._safe_set_float("scale_cfg",     params["cfg"])
+        if "sampler"in params: self._safe_set_combo("combo_sampler", params["sampler"])
+        if "resolution"in params: self._safe_set_combo("combo_res", params["resolution"])
+        if "count"in params: self._safe_set_int("spin_count", params["count"])
+        if "seed"in params: self._safe_set_int("spin_seed",  params["seed"])
 
-        if "strength" in preset:
+        if "strength"in preset:
             self._safe_set_float("scale_strength", preset["strength"])
 
         if (af := preset.get("adetailer_face")) is not None:
@@ -431,7 +473,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
                        "_toggle_hires", "_toggle_cn"):
             if hasattr(self, toggle):
                 try: getattr(self, toggle)()
-                except: pass
+                except Exception as e: logger.debug(f"UI 刷新钩子失败(忽略): {e}")
 
         after_snap = {k: self._get_widget_value(k)
                       for k in self._CONTROL_LABELS.keys()}
@@ -445,13 +487,13 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 
         if hasattr(self, "_update_preset_badge"):
             try: self._update_preset_badge(changed, [])
-            except: pass
+            except Exception as e: logger.debug(f"预设徽标更新失败(忽略): {e}")
         self._set_status(
-            f"🎯 已套用「{name}」· {changed} 项参数变化"
-            f"（提示词已替换，点 ↩️ 可还原）",
-            "#a6e3a1" if changed else "#fab387"
+            f"已套用「{name}」· {changed} 项参数变化"
+            f"（提示词已替换，点 ↩ 可还原）",
+            "#a6e3a1"if changed else "#fab387"
         )
-        logger.info(f"🎯 套用预设 [{name}] - {changed} 项变化")
+        logger.info(f"套用预设 [{name}] - {changed} 项变化")
 
     def read_png_info(self, path: str = None):
         if not path:
@@ -474,7 +516,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 
             pos, neg, info_part = "", "", ""
 
-            if "Negative prompt:" in params:
+            if "Negative prompt:"in params:
                 pos_part, rest = params.split("Negative prompt:", 1)
                 pos = pos_part.strip()
                 rest_lines = rest.strip().split("\n", 1)
@@ -489,11 +531,11 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             self.txt_neg.setPlainText(neg)
 
             if hasattr(self, "append_log"):
-                self.append_log(f"📥 已读取 PNG 参数: {os.path.basename(path)}", "#a6e3a1")
+                self.append_log(f"已读取 PNG 参数: {os.path.basename(path)}", "#a6e3a1")
                 if info_part:
-                    self.append_log(f"   {info_part}", "#7f849c")
+                    self.append_log(f"{info_part}", "#7f849c")
 
-            self._set_status("📥 已回填 PNG 元数据", "#a6e3a1")
+            self._set_status("已回填 PNG 元数据", "#a6e3a1")
 
             try:
                 pix = QPixmap(path)
@@ -514,15 +556,15 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
     # ==========================================================
     def closeEvent(self, event: QCloseEvent):
         if not getattr(self, '_ui_ready', False):
-            logger.warning("⚠️ UI 未完成初始化, 跳过配置保存")
+            logger.warning("UI 未完成初始化, 跳过配置保存")
             event.accept()
             return
-        logger.info("💾 正在保存配置并退出...")
+        logger.info("正在保存配置并退出...")
         try:
             self.config.default_steps    = self.spin_steps.value()
             # 分辨率以下拉框 combo_res 为准（spin_width/height 是隐藏兼容字段）
             _res = self.combo_res.currentText() if hasattr(self, 'combo_res') else ""
-            if "x" in _res:
+            if "x"in _res:
                 _w, _h = _res.split("x")
                 self.config.default_width, self.config.default_height = int(_w), int(_h)
             else:
@@ -532,6 +574,9 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             self.config.default_cfg      = self.scale_cfg.float_value()
             self.config.default_strength = self.scale_strength.float_value()
             self.config.default_sampler  = self.combo_sampler.currentText()
+            if hasattr(self, 'combo_scheduler'):
+                self.config.sampler_scheduler = (
+                    self.combo_scheduler.currentText())
 
             self.config.last_prompt = self.txt_prompt.toPlainText()
             self.config.last_neg    = self.txt_neg.toPlainText()
@@ -544,6 +589,9 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 
             self.config.use_hires      = self.chk_hires.isChecked()
             self.config.hires_denoise  = self.scale_hires_denoise.float_value()
+            if hasattr(self, 'scale_hires_tile_denoise'):
+                self.config.hires_tile_denoise = \
+                    self.scale_hires_tile_denoise.float_value()
 
             # 高清方式 / 顺序（用户可决定"先高清后修脸"还是反过来）
             if hasattr(self, 'combo_hires_mode'):
@@ -587,15 +635,23 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
                     and any(r.get("enabled", True)
                             for r in (self.config.regions or [])
                             if isinstance(r, dict)))
+            # 多参考图 (IP-Adapter)：参考图列表由编辑器直接写进
+            # config.ipa_refs，这里同样只同步"启用"开关
+            if hasattr(self, 'chk_use_ipa_refs'):
+                self.config.use_ipa_refs = bool(
+                    self.chk_use_ipa_refs.isChecked()
+                    and any(r.get("enabled", True)
+                            for r in (self.config.ipa_refs or [])
+                            if isinstance(r, dict)))
             # watermark_image 由选择/清除按钮即时写入，这里不覆盖
 
             if hasattr(self, 'combo_device'):
                 self.config.device_preference = self.combo_device.currentText()
 
             self.config.save()
-            logger.info("✅ 配置保存成功。")
+            logger.info("配置保存成功。")
         except Exception as e:
-            logger.warning(f"⚠️ 配置保存时出错(已忽略): {e}")
+            logger.warning(f"配置保存时出错(已忽略): {e}")
 
         if hasattr(self, '_video_thread') and self._video_thread.isRunning():
             self._video_thread.quit()
@@ -617,11 +673,11 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             if r != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
-            logger.warning("⚠️ 用户强制退出，正在中断生成…")
+            logger.warning("用户强制退出，正在中断生成…")
             self.cancel_flag = True          # ← 关键：让 step_cb 抛 InterruptedError
             t.join(timeout=10)
             if t.is_alive():
-                logger.warning("⚠️ 线程未在 10 秒内退出，强制关闭")
+                logger.warning("线程未在 10 秒内退出，强制关闭")
 
         # ── 扩展市场的后台下载线程收尾 ──
         # worker 故意不挂父对象（关窗后要继续下载），所以必须在这里显式收尾：
@@ -631,7 +687,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             from ui.extension_market import shutdown_workers
             shutdown_workers(timeout_ms=8000)
         except Exception as e:
-            logger.warning(f"⚠️ 后台下载线程收尾失败(忽略): {e}")
+            logger.warning(f"后台下载线程收尾失败(忽略): {e}")
 
         event.accept()
 
@@ -647,20 +703,20 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
     def show_preview_image(self, path: str):
         logger.debug(f"[SHOW] 收到预览 path={path}")
         if not path or not os.path.exists(path):
-            logger.error("[SHOW] ❌ 文件不存在")
+            logger.error("[SHOW]  文件不存在")
             return
         try:
             from PyQt6.QtGui import QPixmap
             pix = QPixmap(path)
             if pix.isNull():
-                logger.error("[SHOW] ❌ QPixmap 加载失败")
+                logger.error("[SHOW]  QPixmap 加载失败")
                 return
             if hasattr(self, 'lbl_preview'):
                 self.lbl_preview.set_pixmap(pix)
-                logger.debug("[SHOW] ✅ 已刷新 lbl_preview")
+                logger.debug("[SHOW]  已刷新 lbl_preview")
         except Exception as e:
             import traceback
-            logger.error(f"[SHOW] ❌ 异常: {e}")
+            logger.error(f"[SHOW]  异常: {e}")
             traceback.print_exc()
 
     def _on_new_image_saved(self, path: str):
@@ -668,71 +724,103 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         if hasattr(self, 'gallery') and path and os.path.exists(path):
             try:
                 self.gallery.add_image(path, prepend=True)
-                logger.debug("[GALLERY-SIG] ✅ add_image 成功")
+                logger.debug("[GALLERY-SIG]  add_image 成功")
             except Exception as e:
-                logger.error(f"[GALLERY-SIG] ❌ add_image 失败: {e}")
+                logger.error(f"[GALLERY-SIG]  add_image 失败: {e}")
 
     def _on_apply_gallery_params(self, meta: dict):
-        logger.debug(f"[APPLY] 收到 meta: {list(meta.keys())}")
-        try:
-            if meta.get("prompt") and hasattr(self, "txt_prompt"):
-                self.txt_prompt.setPlainText(meta["prompt"])
-            if meta.get("negative_prompt") and hasattr(self, "txt_neg"):
-                self.txt_neg.setPlainText(meta["negative_prompt"])
-            mapping = {
-                "steps": ("spin_steps", int),
-                "cfg_scale": ("scale_cfg", float),
-                "cfg": ("scale_cfg", float),
-                "seed": ("spin_seed", int),
-                "width": ("spin_width", int),
-                "height": ("spin_height", int),
-            }
-            for k, (widget_name, caster) in mapping.items():
-                if k in meta and hasattr(self, widget_name):
-                    try:
-                        if caster is float:
-                            self._safe_set_float(widget_name, float(meta[k]))
-                        else:
-                            self._safe_set_int(widget_name, int(meta[k]))
-                    except Exception as e:
-                        logger.debug(f"[APPLY] 跳过 {k}: {e}")
-            if "sampler" in meta and hasattr(self, "combo_sampler"):
-                try:
-                    self._safe_set_combo("combo_sampler", str(meta["sampler"]))
-                except Exception:
-                    pass
-            self._set_status("✅ 已套用画廊参数", "#a6e3a1")
-        except Exception as e:
-            logger.error(f"[APPLY] ❌ 异常: {e}")
+        """画廊「套用参数」信号 —— 唯一实现放在 apply_meta_params()。
+
+        以前这里与 apply_meta_params() 各写了一遍回填逻辑，而且：
+          · 本函数回填 width/height，apply_meta_params() 不回填；
+          · main.py:155、ui/ui_builder.py:1588、ui/pages/gallery_page.py:58
+            三处都连了同一个 apply_params_signal → 实际会跑两个实现，行为不一致。
+        现在统一委托，重复触发也只是幂等地写两遍同样的值。
+        """
+        self.apply_meta_params(meta)
 
     def apply_meta_params(self, meta: dict):
+        """把元数据 / 画廊参数回填到界面（唯一实现）。
+
+        分辨率：v6 的真实分辨率来自 `combo_res`（如 "832x1216"），v5 才是
+        `spin_width`/`spin_height`。两边都写，v6 下 combo_res 找不到该项时
+        会自动补一项再选中 —— 否则 832x1216 这种非预设尺寸会被静默丢弃。
+        """
+        if not isinstance(meta, dict):
+            return
         try:
-            if "prompt" in meta and meta["prompt"]:
-                self.txt_prompt.setPlainText(meta["prompt"])
-            if "negative_prompt" in meta and meta["negative_prompt"]:
-                self.txt_neg.setPlainText(meta["negative_prompt"])
-            if "steps" in meta:
-                self._safe_set_int("spin_steps", int(meta["steps"]))
-            if "cfg" in meta or "cfg_scale" in meta:
-                cfg = meta.get("cfg") or meta.get("cfg_scale")
-                self._safe_set_float("scale_cfg", float(cfg))
-            if "sampler" in meta:
-                self._safe_set_combo("combo_sampler", str(meta["sampler"]))
-            if "seed" in meta:
+            mapping = {
+                "steps":     ("spin_steps",  "int"),
+                "cfg":       ("scale_cfg",   "float"),
+                "cfg_scale": ("scale_cfg",   "float"),
+                "seed":      ("spin_seed",   "int"),
+                "width":     ("spin_width",  "int"),
+                "height":    ("spin_height", "int"),
+            }
+            if meta.get("prompt") and hasattr(self, "txt_prompt"):
+                self.txt_prompt.setPlainText(str(meta["prompt"]))
+            if meta.get("negative_prompt") and hasattr(self, "txt_neg"):
+                self.txt_neg.setPlainText(str(meta["negative_prompt"]))
+            for key, (widget, kind) in mapping.items():
+                if meta.get(key) in (None, ""):
+                    continue
                 try:
-                    self.spin_seed.setValue(int(meta["seed"]))
-                except Exception:
-                    pass
-            self._set_status("✅ 已套用元数据参数", "#a6e3a1")
+                    if kind == "float":
+                        self._safe_set_float(widget, float(meta[key]))
+                    else:
+                        self._safe_set_int(widget, int(float(meta[key])))
+                except (TypeError, ValueError) as e:
+                    logger.debug(f"[APPLY] 跳过 {key}: {e}")
+            self._apply_meta_resolution(meta)
+            if meta.get("sampler"):
+                # "DPM++ 2M Karras" 这种老写法要拆成「采样器 + sigma 风格」
+                # 两个下拉框，否则 combo 里没有这一项，用户以为没回填。
+                name = str(meta["sampler"])
+                style = meta.get("scheduler") or meta.get("sigma_style")
+                try:
+                    from core import samplers as _samplers
+                    _def, split_style, _inline = _samplers.resolve(name, style)
+                except Exception as e:  # pragma: no cover
+                    logger.debug(f"[APPLY] 采样器拆分失败 {name!r}: {e}")
+                    _def, split_style = None, None
+                if _def is not None:
+                    self._safe_set_combo("combo_sampler", _def.name)
+                    self._safe_set_combo("combo_scheduler", split_style or "默认")
+                else:
+                    self._safe_set_combo("combo_sampler", name)
+            self._set_status("已套用参数", "#a6e3a1")
         except Exception as e:
-            self._set_status(f"⚠️ 套用失败: {e}", "#f38ba8")
+            logger.error(f"[APPLY] 回填参数异常: {e}")
+            self._set_status(f"套用失败: {e}", "#f38ba8")
+
+    def _apply_meta_resolution(self, meta: dict):
+        """把元数据里的宽高同步到 v6 的 combo_res（缺项自动补）。"""
+        w, h = meta.get("width"), meta.get("height")
+        if not w or not h:
+            return
+        combo = getattr(self, "combo_res", None)
+        if combo is None:
+            return
+        try:
+            text = f"{int(float(w))}x{int(float(h))}"
+        except (TypeError, ValueError):
+            logger.debug(f"[APPLY] 分辨率不可解析: {w}x{h}")
+            return
+        idx = combo.findText(text)
+        if idx < 0:
+            combo.addItem(text)
+            idx = combo.findText(text)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        else:
+            logger.warning(f"[APPLY] combo_res 无法选中 {text}")
 
     def save_current_image_as(self):
         from PyQt6.QtWidgets import QFileDialog
         import shutil
         src = getattr(self, 'last_generated_path', None)
         if not src or not os.path.exists(src):
-            self._set_status("⚠️ 当前没有可保存的图片", "#f9e2af")
+            self._set_status("当前没有可保存的图片", "#f9e2af")
             return
         dst, _ = QFileDialog.getSaveFileName(
             self, "另存为", os.path.basename(src),
@@ -742,47 +830,47 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             return
         try:
             shutil.copy2(src, dst)
-            self._set_status(f"✅ 已另存为: {os.path.basename(dst)}", "#a6e3a1")
+            self._set_status(f"已另存为: {os.path.basename(dst)}", "#a6e3a1")
         except Exception as e:
-            self._set_status(f"❌ 保存失败: {e}", "#f38ba8")
+            self._set_status(f"保存失败: {e}", "#f38ba8")
 
     def send_preview_to_img2img(self):
         src = getattr(self, 'last_generated_path', None)
         if not src or not os.path.exists(src):
-            self._set_status("⚠️ 当前没有可发送的图片", "#f9e2af")
+            self._set_status("当前没有可发送的图片", "#f9e2af")
             return
         try:
             self.ref_image_path = src
             if hasattr(self, 'tabs'):
                 for i in range(self.tabs.count()):
-                    if "图生图" in self.tabs.tabText(i) or "img2img" in self.tabs.tabText(i).lower():
+                    if "图生图"in self.tabs.tabText(i) or "img2img"in self.tabs.tabText(i).lower():
                         self.tabs.setCurrentIndex(i)
                         break
             elif hasattr(self, 'nav'):
                 self.nav.select("img2img")   # v6 界面：切到图生图页
             if hasattr(self, 'refresh_ref_image_preview'):
                 self.refresh_ref_image_preview()
-            self._set_status("✅ 已发送到图生图", "#a6e3a1")
+            self._set_status("已发送到图生图", "#a6e3a1")
         except Exception as e:
-            self._set_status(f"❌ 发送失败: {e}", "#f38ba8")
+            self._set_status(f"发送失败: {e}", "#f38ba8")
 
     def send_preview_to_inpaint(self):
         src = getattr(self, 'last_generated_path', None)
         if not src or not os.path.exists(src):
-            self._set_status("⚠️ 当前没有可发送的图片", "#f9e2af")
+            self._set_status("当前没有可发送的图片", "#f9e2af")
             return
         try:
             self.inpaint_image_path = src
             if hasattr(self, 'tabs'):
                 for i in range(self.tabs.count()):
-                    if "重绘" in self.tabs.tabText(i) or "inpaint" in self.tabs.tabText(i).lower():
+                    if "重绘"in self.tabs.tabText(i) or "inpaint"in self.tabs.tabText(i).lower():
                         self.tabs.setCurrentIndex(i)
                         break
             if hasattr(self, 'refresh_inpaint_preview'):
                 self.refresh_inpaint_preview()
-            self._set_status("✅ 已发送到局部重绘", "#a6e3a1")
+            self._set_status("已发送到局部重绘", "#a6e3a1")
         except Exception as e:
-            self._set_status(f"❌ 发送失败: {e}", "#f38ba8")
+            self._set_status(f"发送失败: {e}", "#f38ba8")
 
     def reuse_params_from_path(self, path: str):
         """胶片条/画廊单击复用：解析 PNG 内嵌参数，全量回填生成区
@@ -791,15 +879,15 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             img = Image.open(path)
             params = (img.info or {}).get("parameters", "")
         except Exception as e:
-            self._set_status(f"❌ 复用失败: {e}", "#f38ba8")
+            self._set_status(f"复用失败: {e}", "#f38ba8")
             return
         if not params:
-            self._set_status("⚠️ 该图无内嵌生成参数，无法回填", "#f9e2af")
+            self._set_status("该图无内嵌生成参数，无法回填", "#f9e2af")
             return
 
         # ── 拆 正/负 prompt 与参数行 ──
         pos, neg, info_part = "", "", ""
-        if "Negative prompt:" in params:
+        if "Negative prompt:"in params:
             pos_part, rest = params.split("Negative prompt:", 1)
             pos = pos_part.strip()
             rest_lines = rest.strip().split("\n", 1)
@@ -810,10 +898,10 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             pos = lines[0].strip()
             info_part = lines[1].strip() if len(lines) > 1 else ""
 
-        # ── 解析 "Steps: 30, Sampler: x, CFG scale: 7.0, Seed: n, Size: WxH, Model: m" ──
+        # ── 解析 "Steps: 30, Sampler: x, CFG scale: 7.0, Seed: n, Size: WxH, Model: m"──
         kv = {}
         for seg in info_part.split(","):
-            if ":" in seg:
+            if ":"in seg:
                 k, v = seg.split(":", 1)
                 kv[k.strip().lower()] = v.strip()
 
@@ -827,7 +915,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
                 meta["seed"] = int(float(kv["seed"]))
             if kv.get("sampler"):
                 meta["sampler"] = kv["sampler"]
-            if kv.get("size") and "x" in kv["size"].lower():
+            if kv.get("size") and "x"in kv["size"].lower():
                 _w, _h = kv["size"].lower().split("x", 1)
                 meta["width"], meta["height"] = int(_w), int(_h)
         except (ValueError, TypeError) as e:
@@ -853,24 +941,24 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
 
         if hasattr(self, "append_log"):
             self.append_log(
-                f"🔁 复用参数: {os.path.basename(path)} → "
+                f"复用参数: {os.path.basename(path)} → "
                 f"steps={meta.get('steps', '-')} cfg={meta.get('cfg_scale', '-')} "
                 f"seed={meta.get('seed', '-')} "
                 f"size={meta.get('width', '?')}x{meta.get('height', '?')} "
                 f"sampler={meta.get('sampler', '-')}",
                 "#a6e3a1")
-        self._set_status(f"🔁 已回填全部参数: {os.path.basename(path)}", "#a6e3a1")
+        self._set_status(f"已回填全部参数: {os.path.basename(path)}", "#a6e3a1")
 
     def send_path_to_img2img(self, path: str):
         self.last_generated_path = path
         if hasattr(self, 'send_preview_to_img2img'):
             self.send_preview_to_img2img()
-        self._set_status("🛠 已发送到 img2img", "#a6e3a1")
+        self._set_status("已发送到 img2img", "#a6e3a1")
 
     def send_path_to_face_fix(self, path: str):
         """画廊 → 发送到修脸：打开修图编辑器，引擎就绪时自动运行 ADetailer"""
         if not path or not os.path.exists(path):
-            self._set_status("⚠️ 图片不存在,无法修脸", "#f38ba8")
+            self._set_status("图片不存在,无法修脸", "#f38ba8")
             return
         try:
             self.show_preview(path)
@@ -885,7 +973,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         )
         self._editor_auto_adetailer = engine_ready
         self._set_status(
-            "😀 已打开发修图编辑器" + ("，ADetailer 自动修复中..." if engine_ready
+            "已打开发修图编辑器"+ ("，ADetailer 自动修复中..."if engine_ready
                                      else "，请点击左侧「ADetailer 人脸修复」"),
             "#a6e3a1")
         self.open_editor()
@@ -893,14 +981,14 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
     def send_path_to_editor(self, path: str):
         """画廊 → 载入预览并打开修图编辑器"""
         if not path or not os.path.exists(path):
-            self._set_status("⚠️ 图片不存在,无法编辑", "#f38ba8")
+            self._set_status("图片不存在,无法编辑", "#f38ba8")
             return
         try:
             self.show_preview(path)   # 同时更新 current_generated_path
         except Exception:
             self.current_generated_path = path
             self.last_generated_path = path
-        self._set_status("✏️ 正在打开修图编辑器...", "#89dceb")
+        self._set_status("正在打开修图编辑器...", "#89dceb")
         self.open_editor()
 
     # ==========================================================
@@ -941,7 +1029,7 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
             lbl = getattr(self, 'lbl_model_info', None)
             if lbl is not None:
                 reason = info.unsupported_reason or "该架构尚未实现。"
-                lbl.setText(f"⚠ {info.display_name}：{reason}")
+                lbl.setText(f"{info.display_name}：{reason}")
 
         self._on_model_changed()
 
@@ -965,9 +1053,58 @@ class AIDesktopApp(QMainWindow, _UIMixin, ParamSnapshotMixin, EventMixin,
         label = getattr(self, 'lbl_model_note', None) or getattr(self, 'lbl_model_info', None)
         if label is not None:
             if note:
-                label.setText(f"📌 备注: {note}")
+                label.setText(f"备注: {note}")
             else:
-                label.setText("📌 备注: (无)")
+                label.setText("备注: (无)")
+
+        # 模型变了（包括切架构类型后列表变成另一批）→「中文提示词」提醒也要跟着变。
+        # 不能只靠 combo 的 currentIndexChanged：重新填充后索引仍是 0 时它不发信号。
+        _refresh = getattr(self, "_refresh_prompt_lang_hint", None)
+        if callable(_refresh):
+            try:
+                _refresh()
+            except Exception:
+                logger.debug("刷新提示词语言提醒失败", exc_info=True)
+
+        # 换模型 → 立刻把旧模型放掉。
+        # 以前是"生成时才懒加载"，用户在下拉框里换了模型，显存/内存却一直
+        # 被旧模型占着（实测：MOSS-Image 的 int8 DiT 常驻 4.7GB 显存 + 20GB
+        # 文件页挂在进程工作集里，换到 Anima 后任务管理器数字完全不降）。
+        # 这里主动卸载：反正下一个模型无论如何都要重新加载。
+        self._release_previous_model_for(data)
+
+    def _release_previous_model_for(self, data):
+        """选中了另一个模型文件 → 释放当前已加载的模型。"""
+        if getattr(self, "is_generating", False):
+            return False
+        ai = getattr(self, "ai", None)
+        if ai is None or not getattr(ai, "current_model_name", None):
+            return False
+        if not isinstance(data, dict):
+            return False
+        new_path = data.get("path") or ""
+        old_name = getattr(ai, "current_model_name", "") or ""
+        # current_model_name 可能是文件名也可能是路径：按 basename 比一次
+        new_base = os.path.basename(str(new_path))
+        if not new_base:
+            return False
+        if new_base == os.path.basename(str(old_name)) or new_path == old_name:
+            return False
+        try:
+            logger.info("🔄 已选新模型「%s」，释放旧模型「%s」...", new_base, old_name)
+            ai.unload_all()
+            try:
+                from utils import mem as _mem
+
+                _line = _mem.describe(_mem.release_memory())
+                if _line:
+                    logger.info("🔄 旧模型已释放：%s", _line)
+            except Exception:  # noqa: BLE001
+                logger.debug("释放后统计失败", exc_info=True)
+            return True
+        except Exception:
+            logger.debug("释放旧模型失败", exc_info=True)
+            return False
 
     # ==========================================================
     #  视频面板辅助 → 见 ui/video_panel_mixin.py (VideoPanelMixin)
@@ -986,7 +1123,7 @@ if __name__ == "__main__":
         app.setStyleSheet(DARK_STYLE)
     else:
         from ui.theme import apply_theme
-        logger.info(f"🎨 主题: {apply_theme(app)}")
+        logger.info(f"主题: {apply_theme(app)}")
 
     ico_path = os.path.join(BASE_DIR, "logo", "dzbut-9fc5g-001.ico")
     if os.path.exists(ico_path):
@@ -994,7 +1131,7 @@ if __name__ == "__main__":
 
     from ui.disclaimer import check_global_disclaimer
     if not check_global_disclaimer():
-        logger.error("❌ 用户未同意免责声明,程序退出")
+        logger.error("用户未同意免责声明,程序退出")
         sys.exit(0)
 
     splash = create_splash()
@@ -1007,6 +1144,8 @@ if __name__ == "__main__":
         splash.finish_loading(window)
         # 投递箱结果等主界面出来后再弹，免得被启动画面挡住
         QTimer.singleShot(1200, window._show_inbox_report)
+        # 依赖版本自检（用错解释器时功能会静默失效，必须明说）
+        QTimer.singleShot(1600, window._check_runtime_env)
 
     QTimer.singleShot(500, _show_main)
     sys.exit(app.exec())

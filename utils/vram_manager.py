@@ -142,6 +142,11 @@ class VRAMManager:
         # Flux 主干 transformer 本身就比 8GB 大得多，只有量化版才可能
         # 走 CPU-Offload；全 bf16 会落到 Sequential。
         "flux":  (2.5, 1.2),
+        # MOSS-Image：5B DiT（bf16 约 10GB）+ Qwen 系文本编码器。
+        # 官方在 1024²/50 步测到 3.65GiB 显存 / 14GiB 内存（minimal 档），
+        # 说明它是靠 offload 把权重留在 CPU 内存里的；这里按「主干外的
+        # 组件几乎都得 offload」估，激活值需求比 SDXL 略高（4K token 提示词）。
+        "mossimage": (3.0, 1.4),
     }
 
     @classmethod
@@ -218,6 +223,30 @@ class VRAMManager:
 
         total = float(info["total"])
 
+        # ⚠️ 不是所有管线都支持 offload hooks：Anima 用的 ModularPipeline 连
+        #    `enable_model_cpu_offload` / `enable_sequential_cpu_offload` 都
+        #    没有（MRO 是 ConfigMixin，不是 DiffusionPipeline）。旧实现在
+        #    分支里直接 call，一旦走到就是 AttributeError，模型加载失败。
+        has_offload = (hasattr(pipe, "enable_model_cpu_offload")
+                       and hasattr(pipe, "enable_sequential_cpu_offload"))
+
+        def _offload_else_full(level: int, label: str,
+                               tiling: bool = False) -> str:
+            """能 offload 就 offload，不能就老实说清楚、退回全 GPU。"""
+            if tiling:
+                VRAMManager._set_vae_option(pipe, "tiling", True)
+            if has_offload:
+                if level == 1:
+                    pipe.enable_model_cpu_offload(gpu_id=device_id)
+                else:
+                    pipe.enable_sequential_cpu_offload(gpu_id=device_id)
+                return label
+            pipe.to("cuda:0")
+            logger.warning(
+                "⚠️ %s 不支持 CPU offload（如 ModularPipeline），只能全 GPU 运行；"
+                "显存不够时请降低分辨率或步数", type(pipe).__name__)
+            return "🚀 全速模式 (全GPU，该管线不支持 offload)"
+
         def _tier(frac: float, floor: float) -> float:
             """比例阈值，不超过物理总量也不低于下限。"""
             return min(total, max(floor, total * frac))
@@ -243,12 +272,11 @@ class VRAMManager:
                 pipe.to("cuda:0")
                 strategy = "🚀 全速模式 (全GPU)"
             elif headroom_offload >= need_offload:
-                pipe.enable_model_cpu_offload(gpu_id=device_id)
-                strategy = "⚡ 标准模式 (CPU Offload，权重按需上卡)"
+                strategy = _offload_else_full(
+                    1, "⚡ 标准模式 (CPU Offload，权重按需上卡)")
             else:
-                pipe.enable_sequential_cpu_offload(gpu_id=device_id)
-                VRAMManager._set_vae_option(pipe, "tiling", True)
-                strategy = "🐢 极限模式 (Sequential Offload)"
+                strategy = _offload_else_full(
+                    2, "🐢 极限模式 (Sequential Offload)", tiling=True)
         else:
             # 主干体积测不到（unet / transformer 都没有，如 Anima 的
             # ModularPipeline）→ 退回按预算的旧逻辑，并用检查点体积扣减
@@ -270,13 +298,11 @@ class VRAMManager:
                 pipe.to("cuda:0")
                 strategy = "⚡ 标准模式 (全GPU+VAE切片)"
             elif budget >= offload_min:
-                pipe.enable_model_cpu_offload(gpu_id=device_id)
-                VRAMManager._set_vae_option(pipe, "tiling", True)
-                strategy = "💾 节能模式 (CPU Offload)"
+                strategy = _offload_else_full(
+                    1, "💾 节能模式 (CPU Offload)", tiling=True)
             else:
-                pipe.enable_sequential_cpu_offload(gpu_id=device_id)
-                VRAMManager._set_vae_option(pipe, "tiling", True)
-                strategy = "🐢 极限模式 (Sequential Offload)"
+                strategy = _offload_else_full(
+                    2, "🐢 极限模式 (Sequential Offload)", tiling=True)
 
         logger.info("策略: %s", strategy)
         return strategy

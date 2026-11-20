@@ -5,7 +5,7 @@
 # ============================================================
 import logging
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget, QProgressBar, QLabel, QStatusBar,
-                             QScrollArea, QSizePolicy, QApplication)
+                             QScrollArea, QSizePolicy, QApplication, QMessageBox)
 from PyQt6.QtCore import Qt
 
 from ui.nav import NavRail
@@ -16,6 +16,9 @@ from ui.i18n import ui_i18n
 
 _DEFAULT_FG = PALETTE["fg"]
 _OK = PALETTE["success"]
+_WARN = PALETTE["warning"]
+_ERR = PALETTE["danger"]
+_INFO = PALETTE["info"]
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +32,9 @@ def _describe_chain(wf) -> str:
             n = wf.node(nid)
             if n is not None:
                 types.append(n.type)
-        return " → ".join(types) or "(空)"
+        return "→ ".join(types) or "(空)"
     except Exception:
-        return " → ".join(n.type for n in wf.nodes) or "(空)"
+        return "→ ".join(n.type for n in wf.nodes) or "(空)"
 
 
 class ShellMixin:
@@ -84,7 +87,7 @@ class ShellMixin:
             try:
                 page.build(self)              # 页面专属控件挂到 self
             except Exception:
-                logger.exception(f"❌ 页面构建失败: {cls.page_id}")
+                logger.exception(f"页面构建失败: {cls.page_id}")
                 self.center_stack.addWidget(QLabel(f"页面 {cls.title} 加载失败"))
                 continue
             self._pages[cls.page_id] = page
@@ -117,7 +120,7 @@ class ShellMixin:
         install_aliases(self)
         crit, minor = check_contract(self)
         if minor:
-            logger.warning(f"⚠️ 契约自检（非关键缺失）: {minor}")
+            logger.warning(f"契约自检（非关键缺失）: {minor}")
         apply_degradation(self, crit)
 
         self._build_statusbar_v6()
@@ -200,13 +203,13 @@ class ShellMixin:
             return
         # 离开动画页时停止播放；进入时刷新视频历史
         prev = getattr(self, "_current_page_id", None)
-        if prev == "video" and page_id != "video" and hasattr(self, "stop_video"):
+        if prev == "video"and page_id != "video"and hasattr(self, "stop_video"):
             try:
                 self.stop_video()
             except Exception:
                 pass
         self._current_page_id = page_id
-        if page_id == "txt2img" and getattr(self, "ref_image_path", None):
+        if page_id == "txt2img"and getattr(self, "ref_image_path", None):
             self.clear_reference()
 
         self.center_stack.setCurrentWidget(page.workspace())
@@ -236,7 +239,7 @@ class ShellMixin:
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(100, self._refresh_video_gallery)
         # 进入画廊页：重新扫描输出目录（图片 + videos 子目录）
-        if page_id == "gallery" and getattr(self, "gallery", None) is not None:
+        if page_id == "gallery"and getattr(self, "gallery", None) is not None:
             from PyQt6.QtCore import QTimer
             def _reload():
                 try:
@@ -410,9 +413,9 @@ class ShellMixin:
         from PyQt6.QtCore import QUrl
         _status = getattr(self, "_set_status", None) or \
             (lambda msg, color=None: logger.info(msg))
-        logger.info(f"🎥 尝试播放视频: {video_path}")
+        logger.info(f"尝试播放视频: {video_path}")
         if not _os.path.exists(video_path):
-            _status(f"⚠️ 视频文件不存在: {video_path}", "#e06c75")
+            _status(f"视频文件不存在: {video_path}", _ERR)
             return
         try:
             self.video_player.stop()
@@ -423,12 +426,12 @@ class ShellMixin:
                 self.lbl_video_placeholder.hide()
                 self.video_widget.show()
             self.video_player.play()
-            _status(f"🎥 正在播放: {_os.path.basename(video_path)}", "#dfe5ec")
+            _status(f"正在播放: {_os.path.basename(video_path)}", _DEFAULT_FG)
             self.current_video_path = video_path
         except Exception as e:
             import traceback
-            _status(f"⚠️ 视频播放失败: {e}", "#e06c75")
-            logger.error(f"❌ 视频播放失败: {e}")
+            _status(f"视频播放失败: {e}", _ERR)
+            logger.error(f"视频播放失败: {e}")
             logger.error(traceback.format_exc())
             if hasattr(self, 'video_stacked'):
                 self.video_stacked.setCurrentIndex(0)
@@ -486,29 +489,32 @@ class ShellMixin:
             ok, reason = supports_clip_skip(self.ai)
             if skip and not ok:
                 # 架构不支持时明确说明原因，避免"调了没用"的假象
-                self._set_status(f"⚠️ CLIP Skip 不适用于当前模型：{reason}", "#f9e2af")
+                self._set_status(f"CLIP Skip 不适用于当前模型：{reason}", _WARN)
                 return
             n = apply_clip_skip_to_pipes(self.ai, skip)
             if skip:
                 if n:
-                    self._set_status(f"🎚️ CLIP Skip = {skip}（已作用于 {n} 个文本编码器）",
-                                     "#a6e3a1")
+                    self._set_status(f"CLIP Skip = {skip}（已作用于 {n} 个文本编码器）",
+                                     _OK)
                 else:
                     self._set_status(
-                        "⚠️ 当前架构不支持 CLIP Skip（仅 CLIP 系：SD1.5/SD2.1）", "#f9e2af")
+                        "当前架构不支持 CLIP Skip（仅 CLIP 系：SD1.5/SD2.1）", _WARN)
             else:
-                self._set_status("🎚️ CLIP Skip 已关闭（使用最后一层）", "#89dceb")
+                self._set_status("CLIP Skip 已关闭（使用最后一层）", _INFO)
         except Exception as e:
-            logger.warning(f"⚠️ CLIP Skip 应用失败: {e}")
-            self._set_status(f"⚠️ CLIP Skip 应用失败: {e}", "#f38ba8")
+            logger.warning(f"CLIP Skip 应用失败: {e}")
+            self._set_status(f"CLIP Skip 应用失败: {e}", _ERR)
 
     def _toggle_hires(self):
         if not hasattr(self, 'chk_hires'):
             return
         on = self.chk_hires.isChecked()
-        for c in (self.combo_hires_scale, self.scale_hires_denoise,
-                  self.combo_hires_upscaler):
-            c.setEnabled(on)
+        for name in ("combo_hires_scale", "scale_hires_denoise",
+                     "scale_hires_tile_denoise", "combo_hires_upscaler",
+                     "combo_hires_mode", "combo_hires_order"):
+            c = getattr(self, name, None)
+            if c is not None:
+                c.setEnabled(on)
 
     def _toggle_xy(self):
         if not hasattr(self, 'chk_enable_xy'):
@@ -536,12 +542,12 @@ class ShellMixin:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.information(
                 self, "Pose Transfer 已启用",
-                "✅ 工作流程:\n\n"
-                "1️⃣ AI 用提示词生成动作参考图\n"
-                "2️⃣ 自动提取 OpenPose 骨架\n"
-                "3️⃣ 骨架 + IP-Adapter 角色图 → 最终图\n\n"
-                "⚠️ 请确保已上传【IP-Adapter 角色参考图】\n"
-                "💡 推荐: 影响力 0.6~0.8")
+                "工作流程:\n\n"
+                "1. AI 用提示词生成动作参考图\n"
+                "2. 自动提取 OpenPose 骨架\n"
+                "3. 骨架 + IP-Adapter 角色图 → 最终图\n\n"
+                "请确保已上传【IP-Adapter 角色参考图】\n"
+                "推荐: 影响力 0.6~0.8")
 
     def _on_ai_model_changed(self, index: int = 0):
         """AI 模型档位切换 - 立即生效，无需重启"""
@@ -554,7 +560,7 @@ class ShellMixin:
         PromptEnhancer().set_model_key(key)
         self.config.qwen_model_key = key
         self.config.save()
-        logger.info(f"🎚️ AI 模型档位 → {self.combo_ai_model.currentText()}")
+        logger.info(f"AI 模型档位 → {self.combo_ai_model.currentText()}")
 
     # ---------- 修前/修后对比 ----------
     def _on_prefix_image(self, path: str):
@@ -579,7 +585,7 @@ class ShellMixin:
                 self.compare_canvas.set_images(QPixmap(prefix), QPixmap(result))
                 stack.setCurrentIndex(1)
             else:
-                self.set_status("⚠️ 没有可对比的修前快照", "#ff7a17")
+                self.set_status("没有可对比的修前快照", _WARN)
                 btn = getattr(self, "btn_compare", None)
                 if btn is not None:
                     btn.blockSignals(True)
@@ -594,11 +600,11 @@ class ShellMixin:
         raw = self.txt_prompt.toPlainText().strip() \
             if hasattr(self, "txt_prompt") else ""
         if not raw:
-            self.set_status("⚠️ 提示词为空，无法回译对比", "#ff7a17")
+            self.set_status("提示词为空，无法回译对比", _WARN)
             return
         translator = getattr(self, "translator", None)
         if translator is None:
-            self.set_status("⚠️ 翻译服务未就绪", "#ff7a17")
+            self.set_status("翻译服务未就绪", _WARN)
             return
 
         mode_idx = self.combo_trans_mode.currentIndex() \
@@ -608,8 +614,8 @@ class ShellMixin:
         btn = getattr(self, "btn_trans_compare", None)
         if btn is not None:
             btn.setEnabled(False)
-            btn.setText("⏳ 翻译中")
-        self.set_status("🌐 正在 中→英→中 回译...", "#89dceb")
+            btn.setText("翻译中…")
+        self.set_status("正在 中→英→中 回译...", _INFO)
 
         import threading
         holder = {"phase": "init"}
@@ -623,7 +629,7 @@ class ShellMixin:
                 try:
                     # AI 相关模式：确保翻译服务手里有 Qwen 实例，
                     # 否则 zh→en 会悄悄降级成词典，对比结果不代表 AI 水平
-                    if mode != "dict" and prev_qwen is None:
+                    if mode != "dict"and prev_qwen is None:
                         translator.qwen_enhancer = enh
                     holder["phase"] = "zh2en"
                     en = translator.translate(raw, mode=mode)
@@ -658,15 +664,15 @@ class ShellMixin:
             if t.is_alive():
                 phase = holder.get("phase")
                 if phase == "zh2en":
-                    self.set_status("🌐 中→英 翻译中...", "#89dceb")
+                    self.set_status("中→英 翻译中...", _INFO)
                 elif phase == "en2zh":
-                    self.set_status("🧠 载入 AI 回译 英→中（首次需加载模型，请稍候）...",
-                                    "#89dceb")
+                    self.set_status("载入 AI 回译 英→中（首次需加载模型，请稍候）...",
+                                    _INFO)
                 return
             timer.stop()
             if btn is not None:
                 btn.setEnabled(True)
-                btn.setText("🔁 对比")
+                btn.setText("回译对比")
             self._show_trans_compare(raw, holder, mode)
 
         timer.timeout.connect(_poll)
@@ -676,17 +682,17 @@ class ShellMixin:
     def _show_trans_compare(self, raw: str, holder: dict, mode: str):
         from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QTextEdit,
                                      QLabel, QDialogButtonBox)
-        if "err" in holder:
-            self.set_status(f"❌ 回译失败: {holder['err']}", "#f38ba8")
+        if "err"in holder:
+            self.set_status(f"回译失败: {holder['err']}", _ERR)
             return
         en = holder.get("en", "")
         back = holder.get("back", "")
         if not en:
-            self.set_status("⚠️ 翻译结果为空", "#ff7a17")
+            self.set_status("翻译结果为空", _WARN)
             return
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("🔁 翻译回译对比（检查幻觉）")
+        dlg.setWindowTitle("翻译回译对比（检查幻觉）")
         dlg.resize(560, 520)
         v = QVBoxLayout(dlg)
 
@@ -711,7 +717,7 @@ class ShellMixin:
             _block(f"② AI 英文（实际送入模型 · 模式 {mode}）", en)
         if back and back.strip() and back.strip() != en.strip():
             _block("③ 回译（英→中，对照①检查是否词不达意）", back,
-                   "💡 若③与①语义偏差大，说明②有幻觉/漏词，"
+                   "若③与①语义偏差大，说明②有幻觉/漏词，"
                    "建议换「AI 智能改写」模式或手动修改英文")
         else:
             _block("③ 回译（英→中）",
@@ -723,12 +729,12 @@ class ShellMixin:
         v.addWidget(bb)
         dlg.show()   # 非模态，方便对照主窗口
         self._trans_compare_dlg = dlg  # 防 GC
-        self.set_status("✅ 回译完成，请对照 ①/③ 检查", "#a6e3a1")
+        self.set_status("回译完成，请对照 ①/③ 检查", _OK)
 
     # ---------- 显存/内存常驻监控 ----------
     def _setup_resource_monitor(self):
         from PyQt6.QtCore import QTimer
-        self.lbl_resource = QLabel("💾 --")
+        self.lbl_resource = QLabel("— —")
         self.lbl_resource.setProperty("role", "hint")
         self.statusBar().addPermanentWidget(self.lbl_resource)
         self._resource_timer = QTimer(self)
@@ -804,7 +810,7 @@ class ShellMixin:
             lora_name = combo.currentText().strip()
             if not lora_name or lora_name in ("无", "None", ""):
                 continue
-            if "[" in lora_name:
+            if "["in lora_name:
                 lora_name = lora_name.split("[")[0].strip()
             base = os.path.splitext(lora_name)[0]
             for sub in ["sdxl", "sd1.5", "sd15", ""]:
@@ -818,17 +824,17 @@ class ShellMixin:
                                 triggers_list.append(content)
                                 break
                     except Exception as e:
-                        logger.warning(f"⚠️ 读取 {txt_path} 失败: {e}")
+                        logger.warning(f"读取 {txt_path} 失败: {e}")
 
         if not triggers_list:
-            self._set_status("⚠️ 没有可插入的触发词", "#ff7a17")
+            self._set_status("没有可插入的触发词", _WARN)
             return
 
         all_triggers = ", ".join(triggers_list)
         cur = self.txt_prompt.toPlainText().strip()
-        new_text = f"{all_triggers}, {cur}" if cur else all_triggers
+        new_text = f"{all_triggers}, {cur}"if cur else all_triggers
         self.txt_prompt.setPlainText(new_text)
-        self._set_status(f"✅ 已插入 {len(triggers_list)} 组触发词", "#dadbdf")
+        self._set_status(f"已插入 {len(triggers_list)} 组触发词", _DEFAULT_FG)
 
     # ---------- 菜单 ----------
     def _build_menu_v6(self):
@@ -863,6 +869,12 @@ class ShellMixin:
         act_refresh = QAction("刷新扩展状态", self)
         act_refresh.triggered.connect(self._refresh_extension_count)
         m_tool.addAction(act_refresh)
+        m_tool.addSeparator()
+        act_train = QAction("训练 LoRA…", self)
+        act_train.setToolTip("用自己的图片训练一个轻量 LoRA（只训附加权重，8GB 显存可跑）")
+        act_train.triggered.connect(self._open_lora_trainer)
+        m_tool.addAction(act_train)
+        self._act_lora_train = act_train
 
         # ---------- 工作流（节点编辑 / 用引擎生成）----------
         m_wf = mb.addMenu("工作流")
@@ -876,6 +888,20 @@ class ShellMixin:
         a_wf_gen.setToolTip("把当前模型/提示词/LoRA/高清/修脸等设置编译成工作流并打开编辑器")
         a_wf_gen.triggered.connect(self._open_workflow_from_ui)
         m_wf.addAction(a_wf_gen)
+
+        # 从内置模板新建：给"不知道节点怎么连"的人一个能直接跑的起点
+        self._wf_template_menu = m_wf.addMenu("从模板新建…")
+        self._wf_template_menu.setToolTip("文生图 / 高清 / 局部重绘 / 参考图 / 放大，五个能直接跑的流程")
+        try:
+            from workflow import templates as _tpl
+            for _key, _name, _desc in _tpl.list_templates():
+                _act = QAction(_name, self)
+                _act.setToolTip(_desc)
+                _act.triggered.connect(
+                    lambda _checked=False, _k=_key: self._open_workflow_template(_k))
+                self._wf_template_menu.addAction(_act)
+        except Exception as _e:      # 模板加载失败不该让主窗口起不来
+            logger.warning(f"工作流模板菜单构建失败: {_e}")
         m_wf.addSeparator()
 
         a_wf_run = QAction("用工作流引擎生成", self)
@@ -946,8 +972,7 @@ class ShellMixin:
         self._refresh_extension_count()   # 只刷新文字，不再重建控件
 
     def _refresh_extension_count(self):
-        lbl = getattr(self, 'lbl_ext_count', None)
-        if lbl is None:
+        if getattr(self, 'lbl_ext_count', None) is None:
             return
         try:
             from utils.extension_manager import get_status_summary
@@ -985,6 +1010,43 @@ class ShellMixin:
                 ui_i18n.trf("打开扩展市场失败:\n{error}", error=e))
 
     # ==================================================================
+    #  LoRA 训练
+    # ==================================================================
+    def _open_lora_trainer(self):
+        """打开轻量 LoRA 训练窗口（数据集目录默认给上次用过的）。"""
+        try:
+            from ui.lora_train_dialog import LoraTrainDialog
+            last = str(getattr(self.config, "lora_dataset_dir", "") or "")
+            dlg = LoraTrainDialog(self, dataset_default=last)
+            self._lora_train_dialog = dlg
+            dlg.exec()
+            # 读控件必须在控件还活着的时候做：窗口若带 WA_DeleteOnClose，
+            # exec() 返回时 C++ 对象可能已被销毁，读 edit_dataset 会抛
+            # RuntimeError: wrapped C/C++ object of type QLineEdit has been deleted
+            try:
+                picked = dlg.edit_dataset.text().strip()
+            except RuntimeError:
+                picked = last
+            if picked and picked != last:
+                self.config.lora_dataset_dir = picked
+                try:
+                    self.config.save()
+                except Exception as exc:  # noqa: BLE001 - 记不住目录不算错误
+                    logger.debug("保存 lora_dataset_dir 失败: %s", exc)
+            try:
+                dlg.deleteLater()
+            except Exception:  # noqa: BLE001
+                pass
+            self._lora_train_dialog = None
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self, ui_i18n.tr("错误"),
+                ui_i18n.trf("打开 LoRA 训练窗口失败:\n{error}", error=e))
+
+    # ==================================================================
     #  工作流（节点编辑器 / 用引擎生成）
     # ==================================================================
     def _open_workflow_editor(self):
@@ -999,6 +1061,19 @@ class ShellMixin:
             QMessageBox.critical(
                 self, ui_i18n.tr("错误"),
                 ui_i18n.trf("打开工作流编辑器失败:\n{error}", error=e))
+
+    def _open_workflow_template(self, key: str):
+        """从内置模板新建一张图并打开编辑器。"""
+        try:
+            from ui.workflow_editor import open_editor
+            win = open_editor(host=self, parent=None)
+            self._workflow_editor_win = win
+            win.load_template(key)
+        except Exception as e:
+            logger.exception("从模板新建工作流失败")
+            QMessageBox.warning(
+                self, ui_i18n.tr("打开模板失败"),
+                ui_i18n.trf("打开模板失败:\n{error}", error=e))
 
     def _open_workflow_from_ui(self):
         """把当前界面设置编译成工作流图并打开编辑器。"""
@@ -1015,17 +1090,36 @@ class ShellMixin:
                 ui_i18n.trf("生成工作流失败:\n{error}", error=e))
 
     def _workflow_from_ui_or_warn(self):
-        """编译当前界面 → Workflow；失败时弹窗并返回 None。"""
+        """编译当前界面 → Workflow；失败时弹窗并返回 None。
+
+        另外把"界面上开了但没能进工作流"的项（通常是缺参考图）**明确告诉你**——
+        这类静默降级以前不报错也不警告，用户会以为功能生效了。
+        """
         from PyQt6.QtWidgets import QMessageBox
         try:
             from workflow import builder
-            return builder.build_from_ui(self)
+            wf = builder.build_from_ui(self)
         except Exception as e:
             QMessageBox.warning(
                 self, ui_i18n.tr("无法生成工作流"),
                 f"{type(e).__name__}: {e}\n\n"
                 + ui_i18n.tr("请确认模型列表已加载（等主界面显示「系统就绪」后再试）。"))
             return None
+        warns = list((wf.metadata or {}).get("warnings") or [])
+        if warns:
+            for w in warns:
+                try:
+                    self.append_log(f"界面上的设置没能进工作流：{w}",
+                                    "#fab387")
+                except Exception:
+                    pass
+            QMessageBox.warning(
+                self, ui_i18n.tr("有设置没进工作流"),
+                ui_i18n.tr("以下设置在界面上是开着的，但没有进入生成的工作流"
+                           "（通常是缺少参考图/姿势图）：")
+                + "\n\n" + "\n".join(f"· {w}" for w in warns)
+                + "\n\n" + ui_i18n.tr("补齐后重试即可。"))
+        return wf
 
     def _check_workflow_from_ui(self):
         """预检当前界面会生成的工作流：不执行，只报错误/警告/提示。"""
@@ -1037,7 +1131,8 @@ class ShellMixin:
             from workflow.preflight import run_preflight
             res = run_preflight(
                 wf, host=self, ai=getattr(self, "ai", None), translate=ui_i18n.tr)
-            text = (f"节点链：\n{_describe_chain(wf)}\n\n" + res.to_text(translate=ui_i18n.tr))
+            text = (ui_i18n.tr("节点链：") + f"\n{_describe_chain(wf)}\n\n"
+                    + res.to_text(translate=ui_i18n.tr))
             if res.errors:
                 QMessageBox.warning(self, ui_i18n.tr("预检未通过"), text)
             else:
@@ -1064,7 +1159,7 @@ class ShellMixin:
             from ui.workflow_editor import open_editor
             win = open_editor(host=self, parent=None)
             win.scene.load_workflow(wf)
-            win._log(f"▶️ 由主界面触发执行：{_describe_chain(wf)}")
+            win._log(f"由主界面触发执行：{_describe_chain(wf)}")
             win.on_run()
         except Exception as e:
             import traceback
@@ -1109,12 +1204,22 @@ class ShellMixin:
 
     def _show_about(self):
         from PyQt6.QtWidgets import QMessageBox
+        from utils.version import collect_versions
+        try:
+            _v = collect_versions()
+            _ver_line = f"torch {_v.get('torch', '?')} · diffusers {_v.get('diffusers', '?')}"
+        except Exception:
+            _ver_line = ""
         QMessageBox.about(
             self, ui_i18n.tr("关于"),
             f"<b>{ui_i18n.tr('AI 绘画工作站 v6.0')}</b><br>"
             + ui_i18n.tr(
                 "基于 Stable Diffusion + ADetailer<br>"
-                "支持 LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer"))
+                "支持 LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer")
+            + (f"<br><br><small>{_ver_line}</small>" if _ver_line else "")
+            + "<br><br><small>"
+            + ui_i18n.tr("本项目以 AGPL-3.0 发布，完整许可见 LICENSE")
+            + "</small>")
 
     def on_unload_models(self):
         from PyQt6.QtWidgets import QMessageBox
@@ -1123,38 +1228,49 @@ class ShellMixin:
                 self, ui_i18n.tr("提示"), ui_i18n.tr("请先停止当前生成任务"))
             return
         try:
-            self._set_status(ui_i18n.tr("正在释放模型..."), "#ff7a17")
+            from utils import mem as _mem
+
+            before = _mem.rss_mb()
+            self._set_status(ui_i18n.tr("正在释放模型..."), _WARN)
             if hasattr(self, 'ai'):
                 self.ai.unload_all()
-            try:
-                import psutil
-                mem = psutil.Process().memory_info().rss / 1024 / 1024
-                self._set_status(
-                    ui_i18n.trf("模型已释放 (当前内存 {memory} MB)", memory=f"{mem:.0f}"),
-                    "#dadbdf")
-            except ImportError:
-                self._set_status(ui_i18n.tr("模型已释放"), "#dadbdf")
+            # unload_all 内部只清引用；MOSS 这类 mmap 权重留下的文件页
+            # 要显式 EmptyWorkingSet 才会还给系统，这里再补一刀。
+            delta = _mem.release_memory()
+            after = delta.get("rss_after", _mem.rss_mb())
+            vram = delta.get("vram_after") or (-1, -1, -1)
+            parts = [ui_i18n.trf(
+                "模型已释放：进程内存 {a} MB → {b} MB", a=f"{before:.0f}", b=f"{after:.0f}")]
+            if vram[2] >= 0:
+                parts.append(ui_i18n.trf(
+                    "显存空闲 {free} MB", free=f"{vram[2]:.0f}"))
+            self._set_status("；".join(parts), _DEFAULT_FG)
         except Exception as e:
             QMessageBox.critical(self, ui_i18n.tr("释放失败"), str(e))
 
     def _show_memory(self):
         from PyQt6.QtWidgets import QMessageBox
-        try:
-            import psutil
-            mem = psutil.Process().memory_info().rss / 1024 / 1024
-            QMessageBox.information(
-                self, ui_i18n.tr("内存使用情况"),
-                ui_i18n.trf(
-                    "当前进程内存: {memory} MB\n\n如果数值过大,可以点'释放内存'清理。",
-                    memory=f"{mem:.1f}"))
-        except ImportError:
-            QMessageBox.information(
-                self, ui_i18n.tr("提示"), ui_i18n.tr("请安装 psutil: pip install psutil"))
+        from utils import mem as _mem
+
+        rss = _mem.rss_mb()
+        alloc, reserved, free = _mem.vram_mb()
+        lines = [ui_i18n.trf("进程内存: {v} MB", v=f"{rss:.0f}") if rss >= 0
+                 else ui_i18n.tr("进程内存: 不可用")]
+        if free >= 0:
+            lines.append(ui_i18n.trf(
+                "显存: 已分配 {a} MB / 已保留 {r} MB / 空闲 {f} MB",
+                a=f"{alloc:.0f}", r=f"{reserved:.0f}", f=f"{free:.0f}"))
+        lines.append("")
+        lines.append(ui_i18n.tr(
+            "换了模型之后如果这两个数字没有降下来，点『释放内存』："
+            "它会卸载模型、回收显存，并把进程工作集还给系统。"))
+        QMessageBox.information(
+            self, ui_i18n.tr("内存使用情况"), "\n".join(lines))
 
     def _goto_page(self, page_id: str):
         page = getattr(self, "_pages", {}).get(page_id)
         if page is None:
-            logger.warning(f"⚠️ 页面不存在: {page_id}")
+            logger.warning(f"页面不存在: {page_id}")
             return None
         if hasattr(self, "nav"):
             self.nav.select(page_id)
@@ -1165,6 +1281,6 @@ class ShellMixin:
         fn = getattr(page, method, None) if page else None
         if callable(fn):
             return fn(*args)
-        logger.warning(f"⚠️ 页面 {page_id} 无方法 {method}")
+        logger.warning(f"页面 {page_id} 无方法 {method}")
         return None
 

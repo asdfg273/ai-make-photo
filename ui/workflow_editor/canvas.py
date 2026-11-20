@@ -11,6 +11,11 @@
 · 点连线选中 + Del        断开
 · 选中节点 + Del          删除节点
 · 双击节点              居中/展开（由窗口层接参数面板）
+· 双击空白 / Ctrl+F      弹节点搜索（参考 ComfyUI）
+· 从端口拖到空白松手      弹只列"能接住该类型"的搜索，选中即自动连线
+· Ctrl+C / Ctrl+V / Ctrl+D  复制 / 粘贴 / 原地再制
+· Ctrl+A                 全选；Ctrl+Z / Ctrl+Shift+Z 撤销重做（窗口层接线）
+· 把图片文件拖进画布      自动建一个 LoadImage 节点（带预览）
 
 节点状态直接用颜色表示（运行中/成功/复用缓存/失败），失败节点会被
 标红并自动选中 —— 这是"失败时能看出是哪个节点"的界面落点。
@@ -296,7 +301,7 @@ class NodeItem(QGraphicsItem):
                     w.currentTextChanged.connect(
                         lambda v, n=name: on_change(n, str(v)))
                 elif pspec.source:
-                    # ★ 本地文件参数（底模 / LoRA / VAE / 图片）→ 下拉框，
+                    #  本地文件参数（底模 / LoRA / VAE / 图片）→ 下拉框，
                     #   用户从**已下载的本地文件**里选，不用手打文件名。
                     #   仍然可编辑，方便填绝对路径或还没进目录的文件。
                     w = QComboBox()
@@ -628,6 +633,10 @@ class GraphScene(QGraphicsScene):
     nodeSelected = pyqtSignal(str)          # node_id，"" 表示取消选择
     statusMessage = pyqtSignal(str)
     paramChanged = pyqtSignal(str, str, object)   # node_id, param, value
+    # 请求弹"添加节点"搜索：位置, 期望能接住的类型（空串=不限）
+    nodeSearchRequested = pyqtSignal(object, str)
+    # 拖入的文件：路径列表, 落点
+    filesDropped = pyqtSignal(list, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -637,6 +646,13 @@ class GraphScene(QGraphicsScene):
         self.link_items: list[LinkItem] = []
         self._temp_link: QGraphicsPathItem | None = None
         self._link_src: PortItem | None = None
+        # 撤销栈由窗口层注入（None 表示不记录，方便单测/无头使用）
+        self.history = None
+        self._suspend_history = 0
+        # 拖线到空白处松手后，等用户从搜索结果里挑节点再连线
+        self._pending_link_src: PortItem | None = None
+        # 复制/粘贴的剪贴板（放在场景上：QGraphicsScene 不是 QWidget，没有 window()）
+        self.clipboard_payload: dict | None = None
         self.selectionChanged.connect(self._on_selection)
         ui_i18n.language_changed.connect(self.retranslate_dynamic)
 
@@ -673,6 +689,31 @@ class GraphScene(QGraphicsScene):
         # 先摆好再连线
         for (src, sp, dst, dp) in wf.links:
             self._make_link(src, sp, dst, dp)
+
+    # ---------------------------------------------------------------- 快照/撤销
+    def snapshot(self) -> dict:
+        """当前整图状态（可直接 JSON 序列化，也用于撤销）。"""
+        return self.to_workflow().to_dict()
+
+    def restore_snapshot(self, data: dict):
+        """从快照恢复（撤销/重做用）。恢复期间不记录历史。"""
+        if not data:
+            return
+        self._suspend_history += 1
+        try:
+            self.load_workflow(Workflow.from_dict(data), reset_view=False)
+        finally:
+            self._suspend_history -= 1
+        self.graphChanged.emit()
+
+    def _mark(self, label: str):
+        """改动前记一份快照。"""
+        if self.history is None or self._suspend_history:
+            return
+        try:
+            self.history.push(label, self.snapshot())
+        except Exception as exc:                      # 记录失败不该影响编辑
+            logger.debug(f"撤销快照失败: {exc}")
 
     def _on_param_edit(self, node_id: str, name: str, value):
         """卡片内控件被改动 → 写回数据层。"""
@@ -739,11 +780,80 @@ class GraphScene(QGraphicsScene):
                              lk.dst.node_item.node_id, lk.dst.name))
         return wf
 
+    # ---------------------------------------------------------------- 复制/粘贴
+    def copy_selection(self) -> dict | None:
+        """把选中的节点（含它们之间的连线）打包成可粘贴的字典。"""
+        ids = [i.node_id for i in self.selectedItems() if isinstance(i, NodeItem)]
+        if not ids:
+            return None
+        keep = set(ids)
+        nodes = []
+        for nid in ids:
+            src_node = self.wf.node(nid)
+            item = self.node_items.get(nid)
+            if src_node is None or item is None:
+                continue
+            nodes.append({
+                "id": nid,
+                "type": item.ntype,
+                "inputs": {k: list(v) for k, v in src_node.inputs.items()},
+                "params": dict(src_node.params),
+                "pos": [item.pos().x(), item.pos().y()],
+            })
+        links = [list(l) for l in self.wf.links if l[0] in keep and l[2] in keep]
+        return {"nodes": nodes, "links": links}
+
+    def paste_payload(self, payload: dict, at: QPointF | None = None,
+                      label: str = "") -> list[str]:
+        """粘贴：分配新 id、按偏移摆放、内部连线一起重建。返回新 id 列表。"""
+        if not payload or not payload.get("nodes"):
+            return []
+        self._mark(label or ui_i18n.tr("粘贴"))
+        # 以选区左上角为锚点，整体平移到目标位置
+        xs = [n["pos"][0] for n in payload["nodes"]]
+        ys = [n["pos"][1] for n in payload["nodes"]]
+        if at is not None:
+            dx, dy = at.x() - min(xs), at.y() - min(ys)
+        else:
+            dx, dy = 36.0, 36.0
+        mapping: dict[str, str] = {}
+        for n in payload["nodes"]:
+            new_id = self._unique_id(n["type"])
+            mapping[n["id"]] = new_id
+            node = Node(new_id, n["type"], {}, dict(n.get("params") or {}))
+            self.wf.add(node)
+            item = NodeItem(new_id, n["type"])
+            item.build_param_widgets(
+                node, lambda name, val, _nid=new_id: self._on_param_edit(_nid, name, val))
+            item.setPos(float(n["pos"][0]) + dx, float(n["pos"][1]) + dy)
+            self.addItem(item)
+            self.node_items[new_id] = item
+        for (s, sp, d, dp) in payload.get("links") or []:
+            if s in mapping and d in mapping:
+                self._make_link(mapping[s], sp, mapping[d], dp)
+        self.refresh_links()
+        self.graphChanged.emit()
+        self.statusMessage.emit(ui_i18n.trf(
+            "已粘贴 {count} 个节点", count=len(mapping)))
+        return list(mapping.values())
+
+    def duplicate_selection(self) -> list[str]:
+        payload = self.copy_selection()
+        if not payload:
+            return []
+        return self.paste_payload(payload, label=ui_i18n.tr("再制节点"))
+
+    def select_all(self):
+        for it in self.node_items.values():
+            it.setSelected(True)
+        self._on_selection()
+
     # ---------------------------------------------------------------- 节点
     def add_node(self, ntype: str, pos: QPointF | None = None) -> str | None:
         if not registry.exists(ntype):
             self.statusMessage.emit(ui_i18n.trf("未注册的节点类型：{type}", type=ntype))
             return None
+        self._mark(ui_i18n.trf("添加 {type}", type=ntype))
         nid = self._unique_id(ntype)
         spec = registry.get(ntype)
         params = dict(spec.param_defaults())
@@ -770,6 +880,7 @@ class GraphScene(QGraphicsScene):
         item = self.node_items.pop(nid, None)
         if item is None:
             return
+        self._mark(ui_i18n.trf("删除 {id}", id=nid))
         for lk in list(self.link_items):
             if lk.src.node_item.node_id == nid or lk.dst.node_item.node_id == nid:
                 self._drop_link(lk)
@@ -835,6 +946,7 @@ class GraphScene(QGraphicsScene):
                 "类型不匹配：{source} → {target}（不会自动转换）",
                 source=a.value, target=b.value))
             return False
+        self._mark(ui_i18n.tr("连接"))
         # 一个输入口只接一条线
         for lk in list(self.link_items):
             if lk.dst is dst:
@@ -882,9 +994,30 @@ class GraphScene(QGraphicsScene):
                 target = item
                 break
         if target is None:
-            self.statusMessage.emit(ui_i18n.tr("（未连到端口，已取消）"))
+            # 参考 ComfyUI：拖着线松在空白处 → 弹出只列"能接住该类型"的搜索
+            self._pending_link_src = src
+            self.nodeSearchRequested.emit(scene_pos, src.dtype.value)
             return False
         return self.connect_ports(src, target)
+
+    def complete_pending_link(self, node_id: str) -> bool:
+        """搜索添加完节点后，把手里的线接到它的第一个兼容输入口。"""
+        src = self._pending_link_src
+        self._pending_link_src = None
+        if src is None:
+            return False
+        item = self.node_items.get(node_id)
+        if item is None:
+            return False
+        for port in item.ports_in.values():
+            if types_compatible(src.dtype, port.dtype) and not port.connected:
+                return self.connect_ports(src, port)
+        # 都占用/不兼容时退回第一个兼容口（覆盖旧线）
+        for port in item.ports_in.values():
+            if types_compatible(src.dtype, port.dtype):
+                return self.connect_ports(src, port)
+        self.statusMessage.emit(ui_i18n.tr("新节点没有能接住这条线的输入口"))
+        return False
 
     # ---------------------------------------------------------------- 状态
     def apply_states(self, states: dict, cached: list | None = None):
@@ -927,7 +1060,27 @@ class GraphScene(QGraphicsScene):
 
     # ---------------------------------------------------------------- 键盘/鼠标
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+        mods = event.modifiers()
+        ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
+        key = event.key()
+        if ctrl and key == Qt.Key.Key_C:
+            payload = self.copy_selection()
+            if payload:
+                self.clipboard_payload = payload
+                self.statusMessage.emit(ui_i18n.trf(
+                    "已复制 {count} 个节点", count=len(payload["nodes"])))
+            return
+        if ctrl and key == Qt.Key.Key_V:
+            if self.clipboard_payload:
+                self.paste_payload(self.clipboard_payload)
+            return
+        if ctrl and key == Qt.Key.Key_D:
+            self.duplicate_selection()
+            return
+        if ctrl and key == Qt.Key.Key_A:
+            self.select_all()
+            return
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             for lk in self.selected_links():
                 self._drop_link(lk)
                 self.graphChanged.emit()
@@ -951,6 +1104,39 @@ class GraphView(QGraphicsView):
             QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._linking = False
+
+    def dragEnterEvent(self, event):
+        md = event.mimeData()
+        if md.hasUrls():
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        md = event.mimeData()
+        if md.hasUrls():
+            paths = [u.toLocalFile() for u in md.urls() if u.isLocalFile()]
+            sc = self.scene()
+            if paths and isinstance(sc, GraphScene):
+                sc.filesDropped.emit(paths, self.mapToScene(event.position().toPoint()))
+                event.acceptProposedAction()
+                return
+        super().dropEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        sc = self.scene()
+        item = self.itemAt(event.pos())
+        if isinstance(sc, GraphScene) and not isinstance(item, (NodeItem, PortItem, LinkItem)):
+            sc.nodeSearchRequested.emit(self.mapToScene(event.pos()), "")
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def wheelEvent(self, event):
         f = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15

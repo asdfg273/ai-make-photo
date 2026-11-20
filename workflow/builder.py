@@ -227,13 +227,23 @@ def build_from_context(host, c: Dict[str, Any], *,
     _add(wf, model_id, "LoadCheckpoint", cp_params)
 
     # ---- LoRA ----
-    loras = list(c.get("lora_meta_info") or [])
+    # 优先用 _gt_aux_state 给出的 (名字, 权重) 列表（与真实生成同一套读数）；
+    # 没有时退回 lora_meta_info 的 "名字:权重" 字符串形式
+    loras = list(c.get("lora_list") or [])
+    if not loras:
+        for t in (c.get("lora_meta_info") or []):
+            nm, wt = _parse_lora_tag(t)
+            if nm and nm != "无":
+                loras.append((nm, wt))
     lora_id = None
     if loras:
         lora_id = "lora_1"
         params: Dict[str, Any] = {}
-        for i, tag in enumerate(loras[:3], start=1):
-            nm, wt = _parse_lora_tag(tag)
+        for i, item in enumerate(loras[:3], start=1):
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                nm, wt = str(item[0]), float(item[1])
+            else:
+                nm, wt = _parse_lora_tag(item)
             params[f"lora_{i}"] = nm
             params[f"weight_{i}"] = wt
         _add(wf, lora_id, "LoadLoRA", params)
@@ -274,7 +284,73 @@ def build_from_context(host, c: Dict[str, Any], *,
             src = cn_id
 
     # ---- IP-Adapter ----
-    if c.get("use_ipa"):
+    # ① 多参考图（主界面「🎭 多参考图」）优先：每张图编译成一个角色节点
+    #    （IPAdapterIdentity / IPAdapterStyle / IPAdapterComposition），
+    #    串联起来由采样层**一次**装 N 个适配器。
+    # ② 没有多参考图时才走旧的「单张 IPAdapterApply」。
+    #    ⚠️ 不能两个都发：`load_ip_adapter()` 第二次调用是**覆盖**语义，
+    #    两条路同时存在会把多参考图整体冲掉（界面上看起来"设了没用"）。
+    used_multi_refs = False
+    ref_entries = [r for r in (c.get("ipa_refs")
+                               or getattr(cfg, "ipa_refs", None) or [])
+                   if isinstance(r, dict) and r.get("enabled", True)]
+    use_refs = bool(c.get("use_ipa_refs")
+                    or (getattr(cfg, "use_ipa_refs", False) and ref_entries))
+    if use_refs and ref_entries:
+        try:
+            from core import ipa_multi as ipa_mod
+        except Exception as e:                       # pragma: no cover - 防御
+            logger.warning(f"[builder] 读取多参考图角色表失败: {e}")
+            ipa_mod = None
+        if ipa_mod is not None:
+            ref_src = src
+            added = 0
+            for _i, _r in enumerate(ref_entries, start=1):
+                role = ipa_mod.normalize_role(_r.get("role"))
+                label = ipa_mod.role_label(role)
+                node_type = {
+                    "identity": "IPAdapterIdentity",
+                    "style": "IPAdapterStyle",
+                    "composition": "IPAdapterComposition",
+                }.get(role, "IPAdapterStyle")
+                _path = str(_r.get("path") or "")
+                _src_id = _add_image_source(wf, f"ipa_ref_image_{_i}", _path)
+                if _src_id is None:
+                    warnings.append(
+                        f"多参考图第 {_i} 张（{label}）找不到图片文件，"
+                        "本次未加入工作流（请重新选择图片）")
+                    logger.warning("[builder] %s", warnings[-1])
+                    continue
+                try:
+                    _weight = float(_r.get("weight",
+                                           ipa_mod.DEFAULT_WEIGHT))
+                except (TypeError, ValueError):
+                    _weight = float(ipa_mod.DEFAULT_WEIGHT)
+                _id = f"ipa_ref_{_i}"
+                _add(wf, _id, node_type, {
+                    "weight": max(0.0, min(2.0, _weight)),
+                    "enabled": True,
+                    "start_at": 0.0, "end_at": 1.0})
+                wf.connect(ref_src, "model", _id, "model")
+                wf.connect(_src_id, "image", _id, "image")
+                ref_src = _id
+                added += 1
+            if added:
+                src = ref_src
+                used_multi_refs = True
+                wf.metadata["ipa_refs"] = added
+                # 与界面摘要同一套说法（"3 张参考：身份(0.50) 风格(0.70)"）
+                try:
+                    from ui.ipa_editor import summary_text
+                    wf.metadata["ipa_refs_summary"] = summary_text(ref_entries)
+                except Exception:
+                    pass
+            else:
+                warnings.append("多参考图已启用，但没有一张参考图路径可用，"
+                                "本次未加入工作流（请重新选择图片）")
+                logger.warning("[builder] %s", warnings[-1])
+
+    if c.get("use_ipa") and not used_multi_refs:
         ipa_path = (_host_image_path(host, "ipa_image_path", "ref_image_path")
                     or init_path)
         ipa_src = _add_image_source(wf, "ipa_image_1", ipa_path)
@@ -458,11 +534,54 @@ def build_from_context(host, c: Dict[str, Any], *,
 
 
 def build_from_ui(host, *, name: str = "简易模式流程") -> Workflow:
-    """便捷入口：先让界面算出 ctx，再编译成图。"""
+    """便捷入口：先让界面算出 ctx，再**补齐辅助项**，最后编译成图。
+
+    ⚠️ 为什么必须补这一步（这是曾经的 P0 静默降级）
+    ------------------------------------------------
+    `_gt_prepare_context()` 返回的 ctx 里，这三项是**硬编码初值**：
+
+        'use_ipa': False   'use_pose': False   'lora_meta_info': []
+
+    真实值要等 `_gt_setup_ipa` / `_gt_apply_loras` / `_gt_run_pose_transfer`
+    写进去，而那三个函数**只在 `start_generation` 主流程里被调用**。
+    所以只调 `_gt_prepare_context()` 的话，界面勾了 LoRA / ControlNet /
+    IP-Adapter，生成的图里一个对应节点都没有 —— 而且不报错不警告，
+    用户以为用了，实际根本没跑。
+
+    现在通过 `_gt_aux_state()`（纯读、无副作用）把这三项补齐：
+    不加载权重、不跑推理，只是把"用户想要什么"读出来。
+    """
     prep = getattr(host, "_gt_prepare_context", None)
     if not callable(prep):
         raise RuntimeError("宿主没有 _gt_prepare_context()，无法从界面编译工作流")
-    return build_from_context(host, prep(), name=name)
+    c = prep()
+
+    aux = getattr(host, "_gt_aux_state", None)
+    if callable(aux):
+        try:
+            st = aux(c)
+            c["use_ipa"] = st["use_ipa"]
+            c["use_pose"] = st["use_pose"]
+            c["ipa_image_path"] = st["ipa_image_path"]
+            c["ipa_scale"] = st["ipa_scale"]
+            c["ipa_variant"] = st["ipa_variant"]
+            # 多参考图：与真实生成读的是同一份（_gt_aux_state）
+            c["use_ipa_refs"] = st.get("use_ipa_refs", False)
+            c["ipa_refs"] = st.get("ipa_refs", []) or []
+            c["pose_image_path"] = st["pose_image_path"]
+            c["lora_meta_info"] = st["lora_meta_info"]
+            c["lora_list"] = st["lora_list"]
+            logger.debug(
+                "[builder] 辅助项补齐: lora=%s cn=%s ipa=%s ipa_refs=%s",
+                len(st["lora_list"]), st["use_pose"], st["use_ipa"],
+                len(st.get("ipa_refs") or []))
+        except Exception as e:
+            logger.warning(f"[builder] 辅助项读取失败（可能漏掉 LoRA/CN/IPA）: {e}")
+    else:
+        logger.warning("[builder] 宿主没有 _gt_aux_state()，"
+                       "LoRA/ControlNet/IP-Adapter 可能不会进工作流")
+
+    return build_from_context(host, c, name=name)
 
 
 def describe(wf: Workflow) -> str:

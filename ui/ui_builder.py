@@ -1563,7 +1563,10 @@ class UIBuilderMixin:
             )
             btn_row.addWidget(b)
         preview_layout.addLayout(btn_row)
-        self.btn_open_editor.clicked.connect(self.open_gallery_to_edit)
+        # 「编辑」直接编辑预览区当前这张图（不再先弹文件夹选图）
+        self.btn_open_editor.setToolTip("编辑预览区当前的这张图")
+        self.btn_edit = self.btn_open_editor  # 旧别名: 生成中禁用/恢复用的就是它
+        self.btn_open_editor.clicked.connect(self.open_editor)
         self.btn_save_as.clicked.connect(self.save_current_image_as)
         self.btn_send_img2img.clicked.connect(self.send_preview_to_img2img)
         self.btn_send_inpaint.clicked.connect(self.send_preview_to_inpaint)
@@ -2298,7 +2301,7 @@ class UIBuilderMixin:
 
             def _cleanup():
                 try: w.setGraphicsEffect(None)
-                except: pass
+                except Exception as e: logger.debug(f"清除图形效果失败(忽略): {e}")
 
             anim.finished.connect(_cleanup)
             anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
@@ -2326,7 +2329,7 @@ class UIBuilderMixin:
                 if isinstance(b, float) and isinstance(a, float):
                     if abs(b - a) < 1e-4:
                         continue
-            except: pass
+            except Exception as e: logger.debug(f"参数比较跳过: {e}")
             if b == a:
                 continue
             # 文本太长截一下

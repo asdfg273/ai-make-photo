@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-                             QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                             QLabel, QListWidget, QListWidgetItem,
                              QPushButton, QSpinBox, QSplitter, QTextEdit,
                              QVBoxLayout, QWidget)
 

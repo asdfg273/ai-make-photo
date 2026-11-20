@@ -18,6 +18,13 @@ os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# ADetailer 检测模型的唯一相对位置（与 utils.paths.ADETAILER_DIR / 扩展市场同源）
+AD_REL_DIR = "models/adetailer"
+
+
+def _ad_rel(fname: str) -> str:
+    return f"{AD_REL_DIR}/{fname}"
+
 # ============================================================
 #  模型注册表
 # ============================================================
@@ -82,7 +89,7 @@ MODEL_REGISTRY = {
         "kind": "file",
         "repo": "Bingsu/adetailer",
         "file": "face_yolov8n.pt",
-        "local": "models/adetailer/face_yolov8n.pt",
+        "local": _ad_rel("face_yolov8n.pt"),
         "check_file": None,
         "size_mb": 6,
         "required": False,
@@ -92,7 +99,7 @@ MODEL_REGISTRY = {
         "kind": "file",
         "repo": "Bingsu/adetailer",
         "file": "hand_yolov8n.pt",
-        "local": "models/adetailer/hand_yolov8n.pt",
+        "local": _ad_rel("hand_yolov8n.pt"),
         "check_file": None,
         "size_mb": 6,
         "required": False,

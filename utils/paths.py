@@ -1,4 +1,5 @@
 # utils/paths.py
+import logging
 import os
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,9 +28,21 @@ CONFIG_FILE  = os.path.join(PROJECT_ROOT, "app_config.json")
 DICT_FILE    = os.path.join(DATA_DIR, "zh_to_en_dict.json")
 LOG_FILE     = os.path.join(LOG_DIR, "app.log")
 
+# ── ADetailer 检测模型：**唯一位置** ────────────────────────────────
+# 历史问题：市场条目、模型下载器、image_processor 都写的是 models/adetailer/，
+# 但旧版本把文件实际下到了 models_cache/adetailer/，于是"文件明明在盘上、
+# 市场却显示未安装"，用户点了下载还会重复拉一遍。
+# 现在统一到 models/adetailer/（用户能自己放、也能被市场认出来），
+# 旧的 models_cache/adetailer/ 只作为**迁移来源**保留一个常量。
+ADETAILER_DIR        = os.path.join(MODEL_DIR, "adetailer")
+LEGACY_ADETAILER_DIR = os.path.join(CACHE_DIR, "adetailer")
+
+_ADETAILER_EXTS = (".pt", ".onnx", ".engine")
+
 _INIT_FAILURES = []
 _RUNTIME_DIRS  = [OUTPUT_DIR, VIDEO_DIR, LORA_DIR, MODEL_DIR,
-                  DATA_DIR, LOG_DIR, CACHE_DIR,CONTROLNET_DIR,]
+                  DATA_DIR, LOG_DIR, CACHE_DIR, CONTROLNET_DIR,
+                  ADETAILER_DIR, ]
 
 for _d in _RUNTIME_DIRS:
     try:
@@ -108,3 +121,74 @@ def host_output_dir(host) -> str:
         return str(resolve_output_dir(getattr(host, "config", None)))
     except Exception:
         return OUTPUT_DIR
+
+
+# ── ADetailer 模型路径 ─────────────────────────────────────────────
+def adetailer_path(name: str) -> str:
+    """把任意写法的 ADetailer 模型名解析成**唯一绝对路径**。
+
+    接受这几种写法（历史上配置里都出现过）：
+      ``face_yolov8n.pt``
+      ``models/adetailer/face_yolov8n.pt``
+      ``models\\adetailer\\face_yolov8n.pt``
+      ``models_cache/adetailer/face_yolov8n.pt``   （旧位置 → 归一到新位置）
+    绝对路径原样返回（用户可能在设置里填了别处的模型）。
+    """
+    raw = str(name or "").replace("\\", "/").strip()
+    if not raw:
+        return ADETAILER_DIR
+
+    if os.path.isabs(raw):
+        return os.path.normpath(raw)
+
+    # 只取文件名：不管带的是哪种前缀，最终都落在 models/adetailer/
+    base = os.path.basename(raw)
+    if base.lower().endswith(_ADETAILER_EXTS) or base:
+        return os.path.join(ADETAILER_DIR, base)
+    return ADETAILER_DIR
+
+
+def migrate_adetailer_models() -> list:
+    """把旧位置 ``models_cache/adetailer/`` 里的模型搬到 ``models/adetailer/``。
+
+    幂等：目标已存在同名文件就不动（不覆盖用户后来下的新版本）。
+    返回真正被移动的文件名列表（空列表 = 什么都没做）。
+    迁移失败不抛异常 —— 检测器那边还有"旧位置兜底"。
+    """
+    _log = logging.getLogger(__name__)
+    moved = []
+    try:
+        if not os.path.isdir(LEGACY_ADETAILER_DIR):
+            return moved
+        os.makedirs(ADETAILER_DIR, exist_ok=True)
+        for fname in sorted(os.listdir(LEGACY_ADETAILER_DIR)):
+            if not fname.lower().endswith(_ADETAILER_EXTS):
+                continue
+            src = os.path.join(LEGACY_ADETAILER_DIR, fname)
+            dst = os.path.join(ADETAILER_DIR, fname)
+            if not os.path.isfile(src) or os.path.exists(dst):
+                continue
+            try:
+                os.replace(src, dst)
+            except OSError:
+                # 跨盘/被占用 → 退回复制
+                import shutil
+                shutil.copy2(src, dst)
+                try:
+                    os.remove(src)
+                except OSError:
+                    pass
+            moved.append(fname)
+        if moved:
+            _log.info(
+                "📦 已把 ADetailer 模型从旧位置 %s 移到 %s：%s",
+                LEGACY_ADETAILER_DIR, ADETAILER_DIR, ", ".join(moved))
+            # 旧目录空了就顺手删掉，免得下次又当成"旧位置有东西"
+            try:
+                if not os.listdir(LEGACY_ADETAILER_DIR):
+                    os.rmdir(LEGACY_ADETAILER_DIR)
+            except OSError:
+                pass
+    except Exception as e:                     # noqa: BLE001
+        _log.warning("ADetailer 模型迁移跳过：%s", e)
+    return moved

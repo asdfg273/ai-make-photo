@@ -14,7 +14,7 @@
 | 🔴 **最大约束** | `ultralytics`（AGPL-3.0）与 `ChatTTS`（AGPL-3.0）是**强 copyleft**。只要你的发行物构成"衍生作品"，整个项目就必须以 AGPL-3.0 发布并附完整源码。**这与"闭源商用"不兼容**；与"开源 + 打赏"兼容（前提是项目本身也以 AGPL-3.0 发布）。 |
 | 🟠 次要约束 | 底模权重（SD1.5 / SDXL 系）多为 **CreativeML Open RAIL-M**，带**使用限制条款**（禁止违法/伤害性用途等），不是传统开源许可；商用需遵守其 Use-based Restrictions。 |
 | ✅ 无约束 | 项目自研代码、以及 MIT/BSD/Apache-2.0 的多数依赖（torch、diffusers、transformers、PyQt6 商业许可除外见下）。 |
-| ⚠️ **当前缺口** | 仓库**没有 LICENSE 文件**，也没有任何第三方声明。开源发布前必须补齐，否则"开源"在法律上不成立（默认保留全部权利）。 |
+| ✅ **缺口已补齐** | 仓库现有 `LICENSE`（**AGPL-3.0 全文**，含第 13 条"远程网络交互"）与本文件。关于对话框也写明"本项目以 AGPL-3.0 发布"。发布前仍需确认的一点：`PyQt6` 的 `License-Expression` 是 `GPL-3.0-only`，严格意义上 GPLv3 不允许附加 AGPL 的网络条款；实践上多数项目按 AGPL 发布并接受这一取舍，**若要严格合规，请购买 PyQt6 商业许可或换 PySide6（LGPL）**。 |
 
 ---
 

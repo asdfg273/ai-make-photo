@@ -197,6 +197,14 @@ class Region:
     # 局部附加能力（都可选）
     controlnet: Optional[dict] = None   # {"kind":"openpose","weight":0.8,"image_path":""}
     adetailer: Optional[dict] = None    # {"target":"二次元脸部","strength":0.35}
+    # 局部 IP-Adapter（多参考图）：该区域**额外**参与的参考图。
+    #   {"refs": [{"role":"style","path":"...","weight":0.6,
+    #              "mask_path":""}, ...], "base": ""}
+    # 语义与 IP-Adapter 节点一致：本区域采样时把这几张参考图一起送进去，
+    # 并且**只用本区域的蒙版**限制它们（参考图会先按蒙版抠图）。
+    # 为空 → 本区域不额外引入参考图（但若全局已经装了 IPA，仍要占位，
+    # 详见 `_region_sampler` 里的说明）。
+    ip_adapter: Optional[dict] = None
     feather: int = 16           # 该区域边缘羽化像素
 
     # ------------------------------------------------------------------
@@ -217,6 +225,7 @@ class Region:
         self.shape = shape if shape in ("rect", "mask") else "rect"
         self.controlnet = _d(self.controlnet)
         self.adetailer = _d(self.adetailer)
+        self.ip_adapter = _d(self.ip_adapter)
 
     def to_dict(self) -> dict:
         """转成可 JSON 序列化的 dict（字段齐全，UI/引擎共用一份）。"""
@@ -232,6 +241,7 @@ class Region:
             "enabled": self.enabled,
             "controlnet": dict(self.controlnet) if self.controlnet else None,
             "adetailer": dict(self.adetailer) if self.adetailer else None,
+            "ip_adapter": dict(self.ip_adapter) if self.ip_adapter else None,
             "feather": self.feather,
         }
 
@@ -261,6 +271,7 @@ class Region:
         r.enabled = _b(d.get("enabled"), True)
         r.controlnet = _d(d.get("controlnet"))
         r.adetailer = _d(d.get("adetailer"))
+        r.ip_adapter = _d(d.get("ip_adapter"))
         r.feather = _i(d.get("feather"), 16)
         return r
 
@@ -314,6 +325,27 @@ class Region:
         if not target or target in ("none", "无", "关闭"):
             return None
         d["target"] = target
+        return d
+
+    def merged_ip_adapter(self) -> Optional[dict]:
+        """局部 IP-Adapter 配置；没有任何参考图视为"本区域不额外引入"。
+
+        接受两种写法（都容错）：
+          · {"refs": [ {"role":..,"path":..,"weight":..}, ... ]}
+          · {"role":.., "path":.., "weight":..}     ← 单条参考图
+        """
+        d = dict(self.ip_adapter or {})
+        refs = d.get("refs")
+        if refs is None:
+            # 单条写法：本 dict 自己就是一条参考图（去掉 refs/base 这类键）
+            single = {k: v for k, v in d.items() if k not in ("refs", "base")}
+            if any(single.get(k) for k in ("path", "image_path", "file", "role")):
+                refs = [single]
+        if isinstance(refs, dict):
+            refs = [refs]
+        if not isinstance(refs, (list, tuple)) or not refs:
+            return None
+        d["refs"] = list(refs)
         return d
 
 
@@ -904,9 +936,11 @@ def _region_adetailer(cur, model, adapter, r: Region, mask,
         return None
 
     inpaint_pipe = adapter.pipe(model, "inpaint")
-    if inpaint_pipe is None:
+    i2i_pipe = adapter.pipe(model, "img2img")
+    if inpaint_pipe is None and i2i_pipe is None:
         if log:
-            log(f"⚠️ 区域「{r.display_name()}」没有 inpaint 管线，ADetailer 跳过")
+            log(f"⚠️ 区域「{r.display_name()}」没有 inpaint / img2img 管线，"
+                f"ADetailer 跳过")
         return None
 
     crop, crop_mask, box = _crop_region(cur, mask)
@@ -932,7 +966,8 @@ def _region_adetailer(cur, model, adapter, r: Region, mask,
             crop, inpaint_pipe, "", neg,
             strength=strength, target=target,
             padding_ratio=padding, mask_blur=mask_blur,
-            detail_size=detail_size)
+            detail_size=detail_size,
+            img2img_pipe=i2i_pipe)
     except Exception as e:
         if log:
             log(f"⚠️ 区域「{r.display_name()}」ADetailer 失败（跳过）: "
@@ -968,6 +1003,169 @@ def _paste_mask_full(size, patch_mask, offset):
     full = Image.new("L", size, 0)
     full.paste(patch_mask.convert("L"), offset)
     return full
+
+
+def _region_ip_adapter_refs(r: Region, mask):
+    """本区域的参考图列表（没有配就返回空表）。
+
+    配置形状（两种都认，见 `Region.merged_ip_adapter`）::
+
+        "ip_adapter": {"refs": [{"role":"style","path":"...","weight":0.6}]}
+        "ip_adapter": {"role":"identity","path":"...","weight":0.8}
+
+    每条参考图都会带上**本区域蒙版**（`mask`）作为它的区域掩码 —— 这就是
+    "这张参考图只影响这块区域"的实现方式（参考图抠图 + 注意力掩码）。
+    """
+    cfg = r.merged_ip_adapter()
+    if not cfg:
+        return []
+    from core import ipa_multi as ipa_mod
+    refs = ipa_mod.coerce_references(cfg.get("refs") or [])
+    out = []
+    for ref in refs:
+        if ref.mask is None and not ref.mask_path and mask is not None:
+            ref.mask = mask
+        out.append(ref)
+    return out
+
+
+def _apply_region_ip_adapter(ai, kw: dict, r: Region, mask, cur, *,
+                             status=None, log=None) -> dict:
+    """把该区域的 IP-Adapter 参考图塞进采样参数；返回 `{warning, refs, scales}`。
+
+    设计取舍（诚实说明）
+    --------------------
+    · 区域重绘本身是**顺序蒙版重绘**（一个区域一次采样），所以这里天然是
+      "每个区域一套参考图"，而不是"所有参考图合成一次"。
+    · 参考图数量会被补齐/截断到当前 UNet 上**已安装的适配器数量**
+      （`ai.ipa_adapter_count()`），因为 diffusers 会严格校验长度。
+      补齐用 1x1 黑图 + 强度 0 → 该适配器被跳过，不污染画面。
+    · 采样完把该管线的 scale 恢复成全局值，避免"下一个区域偷偷继承上一个
+      区域的强度"。
+    · 任何失败都只 **warning**：局部参考图是增强项，取不到就退回普通蒙版
+      重绘，绝不让整区域失败（与局部 ControlNet 的策略一致）。
+    """
+    info = {"warning": "", "refs": 0, "scales": []}
+    count = 0
+    try:
+        count = int(ai.ipa_adapter_count()) if ai is not None else 0
+    except Exception:
+        count = 0
+    if count <= 0:
+        return info
+    if ai is None or not getattr(ai, "ip_adapter_loaded", False):
+        return info
+
+    refs = _region_ip_adapter_refs(r, mask)
+    try:
+        builder = getattr(ai, "build_ip_adapter_kwargs", None)
+        if not callable(builder):
+            return info
+        extra, meta = builder(refs if refs else None,
+                              width=cur.width, height=cur.height,
+                              has_masks=bool(refs))
+    except Exception as e:
+        info["warning"] = (f"区域「{r.display_name()}」的局部参考图准备失败"
+                           f"（已退回普通重绘）: {type(e).__name__}: {e}")
+        return info
+
+    if not extra:
+        # 没配参考图但全局装了 IPA：必须给占位图，否则整个采样会抛
+        # TypeError: 'NoneType' object is not iterable（见 sampling_nodes 的说明）
+        try:
+            from PIL import Image as _PIL
+            extra = {"ip_adapter_image":
+                     [_PIL.new("RGB", (1, 1), (0, 0, 0)) for _ in range(count)]}
+            meta = {"scales": [0.0] * count, "notes": ["占位（本区域无参考图）"]}
+        except Exception:
+            return info
+
+    kw.update(extra)
+    scales = list(meta.get("scales") or [])
+    info["refs"] = len(refs)
+    info["scales"] = scales
+
+    # 只改**本区域采样用的那条管线**的强度，并且**记下原值**：
+    # 下一个区域若没有自己的参考图，必须回到全局强度，不能偷偷继承。
+    # ⚠️ 恢复动作在这里立刻做也可以（scale 是在采样前写进 attn processor 的），
+    # 但为了不依赖 diffusers 内部读取时机，仍由调用方在采样后调用
+    # `restore_region_ip_adapter(kw)` 恢复 —— 两条路都留着。
+    restore = []
+    try:
+        targets = [kw.get("_ipa_pipe") or getattr(ai, "inpaint_pipe", None)]
+        setter = getattr(ai, "_set_multi_scale", None)
+        if callable(setter) and scales:
+            # 读不到管线自己的 scale 时，退回管理器记着的全局强度 ——
+            # 总之必须有一个"恢复目标"，否则后一个区域会继承前一个的强度。
+            fallback = list(getattr(ai, "_ipa_scales", None) or [])
+            for p in targets:
+                if p is None:
+                    continue
+                before = read_ipa_scales(p) or fallback or None
+                restore.append((p, before))
+            setter(scales, pipes=targets)
+    except Exception as e:
+        info["warning"] = (f"区域「{r.display_name()}」设置参考图强度失败"
+                           f"（沿用上一步）: {e}")
+
+    kw["_ipa_restore"] = restore
+    for note in (meta.get("notes") or []):
+        if log:
+            log(f"ℹ️ 区域「{r.display_name()}」参考图: {note}")
+    if refs and status:
+        status(f"🎭 区域「{r.display_name()}」参考图 {len(refs)} 条"
+               f"（只作用于本区域）")
+    return info
+
+
+def read_ipa_scales(pipe):
+    """读出某条管线当前的 per-adapter scale（读不到返回 None）。"""
+    if pipe is None:
+        return None
+    unet = getattr(pipe, "unet", None)
+    procs = getattr(unet, "attn_processors", None)
+    if not procs:
+        return None
+    for name, proc in procs.items():
+        if "attn2" not in name:
+            continue
+        scale = getattr(proc, "scale", None)
+        if scale is None:
+            continue
+        if isinstance(scale, (list, tuple)):
+            return [float(s) for s in scale]
+        try:
+            return [float(scale)]
+        except Exception:
+            continue
+    return None
+
+
+def restore_region_ip_adapter(kw: dict, ai=None) -> int:
+    """区域采样结束后把 IPA 强度恢复成采样前的值，返回恢复的管线数。
+
+    为什么必须恢复：scale 是写在注意力处理器上的**全局状态**，
+    区域之间共用同一条 inpaint 管线。不恢复的话，第一个区域的参考图强度
+    会被后面所有区域继承（"我只给区域 A 配了参考图，结果 B、C 也变了"）。
+    """
+    restore = kw.pop("_ipa_restore", None) or []
+    n = 0
+    for pipe, before in restore:
+        if pipe is None:
+            continue
+        try:
+            setter = getattr(pipe, "set_ip_adapter_scale", None)
+            if not callable(setter):
+                continue
+            if before is None:
+                continue
+            payload = before[0] if len(before) == 1 else before
+            setter(payload)
+            pipe._ai_ipa_scale = max(before) if before else 0.0
+            n += 1
+        except Exception as e:
+            logger.warning(f"⚠️ 恢复区域 IPA 强度失败: {e}")
+    return n
 
 
 class _DeviceHolder:
@@ -1049,6 +1247,18 @@ def _region_sampler(model, adapter, ai, r: Region, cur, mask, *, steps: int,
         kw["mask_image"] = mask
         kw["strength"] = max(0.0, min(1.0, float(r.weight)))
 
+    # ── 局部 IP-Adapter（多参考图按区域生效）─────────────────────────
+    # 怎么做到"只影响该区域"，两步缺一不可：
+    #   1) 参考图侧：按本区域蒙版把参考图抠出来（区域外内容不进 CLIP）；
+    #   2) 注意力侧：把本区域蒙版当 ip_adapter_masks 传进去，
+    #      限制该参考图只在蒙版范围内参与注意力（=真正的"局部"）。
+    # ⚠️ 只要 UNet 上装了 IPA，每次调用都必须给 ip_adapter_image，
+    #    否则 diffusers 会在 UNet 里抛一个与 IPA 无关的 TypeError，
+    #    所以没有配参考图的区域也要送占位图（强度 0）。
+    ipa_info = _apply_region_ip_adapter(ai, kw, r, mask, cur,
+                                       status=status, log=log)
+    warning = warning or ipa_info.get("warning") or None
+
     # 尺寸交给输入图决定（与 Inpaint 节点一致，避免被拉成别的比例）
     kw.pop("width", None)
     kw.pop("height", None)
@@ -1057,7 +1267,13 @@ def _region_sampler(model, adapter, ai, r: Region, cur, mask, *, steps: int,
     kw = _sanitize_call_kwargs(pipe, kw)
 
     with torch.inference_mode():
-        res = pipe(**kw)
+        try:
+            res = pipe(**kw)
+        finally:
+            # 采样一结束就把 IPA 强度还回去：不还的话，本区域的参考图强度
+            # 会被**后面所有区域**继承（"我只给 A 配了参考图，B/C 也变了"）。
+            if kw.get("_ipa_restore"):
+                restore_region_ip_adapter(kw, ai)
 
     imgs = getattr(res, "images", None)
     if imgs is None:

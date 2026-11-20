@@ -2,6 +2,17 @@
 """
 GPT-SoVITS 最小合成测试
 """
+import sys
+
+# Windows 控制台默认 GBK，脚本里带 emoji 的 print 会
+# UnicodeEncodeError（被重定向到文件时会直接炸掉整个测试）。
+# 这里和 utils/system_utils.py 一样放宽一下编码错误处理。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
 import torchaudio
 import soundfile as sf
 import torch
@@ -20,11 +31,31 @@ import sys
 from pathlib import Path
 
 # ========== 路径注入 ==========
-ROOT = Path(__file__).parent
+# ⚠️ 必须是项目根，不是 tests/ —— GPT-SoVITS 装在 <项目根>/third_party/ 下。
+# 原先写 Path(__file__).parent 会指向 tests/，于是报
+# FileNotFoundError: ...\tests\third_party\GPT-SoVITS
+# 放宽 stdout 编码：中文 Windows 上重定向输出时是 GBK，
+# 脚本里的 emoji 会抛 UnicodeEncodeError，看起来像「功能坏了」，
+# 其实只是打印编码问题。
+import _bootstrap  # noqa: F401,E402
+
+ROOT = Path(__file__).resolve().parent.parent
 SOVITS_ROOT = ROOT / "third_party" / "GPT-SoVITS"
 sys.path.insert(0, str(SOVITS_ROOT))
 sys.path.insert(0, str(SOVITS_ROOT / "GPT_SoVITS"))
 sys.path.insert(0, str(SOVITS_ROOT / "GPT_SoVITS" / "eres2net"))
+
+# 旧版 gradio 会 rom huggingface_hub import HfFolder，而 hf_hub 1.x 删了这个类
+# → 不补的话 import GPT_SoVITS.inference_webui 直接 ImportError。
+# 注意：不能写 rom utils.hf_compat import ... —— 上面把 GPT-SoVITS 根目录
+# 插进了 sys.path[0]，它自带的 utils.py 会把本项目的 utils 包遮住。
+import importlib.util as _ilu  # noqa: E402
+_spec = _ilu.spec_from_file_location(
+    "hf_compat", str(ROOT / "utils" / "hf_compat.py"))
+_hfcompat = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_hfcompat)
+_hfcompat.ensure_hf_folder()
+
 
 # ========== 环境变量(GPT-SoVITS 要读) ==========
 os.environ["is_half"] = "True"      # fp16

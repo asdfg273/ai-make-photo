@@ -12,15 +12,13 @@ class CollapsibleSection(QWidget):
         root.setSpacing(2)
 
         self._btn = QToolButton()
+        self._btn.setObjectName("collapsibleHeader")   # theme.py 的 QSS 钩子
         self._btn.setText(title)
         self._btn.setCheckable(True)
         self._btn.setChecked(not collapsed)
         self._btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._btn.setArrowType(Qt.ArrowType.RightArrow if collapsed
                                else Qt.ArrowType.DownArrow)
-        self._btn.setStyleSheet(
-            "QToolButton { background:#22303d; border:none; border-radius:6px;"
-            " padding:8px; font-weight:bold; text-align:left; }")
         self._btn.toggled.connect(self._on_toggled)
         root.addWidget(self._btn)
 

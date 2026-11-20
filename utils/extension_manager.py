@@ -29,6 +29,16 @@ def _proj(p: str) -> str:
     return str(_resolve_path(p))
 
 
+# ADetailer 检测模型的唯一相对位置（与 utils.paths.ADETAILER_DIR 同源）。
+# 历史 bug：市场检查写 models/adetailer/，旧版代码却把文件下到
+# models_cache/adetailer/ → "文件在盘上、市场说未安装"，现在只认这一处。
+_AD_REL_DIR = "models/adetailer"
+
+
+def _ad_rel(fname: str) -> str:
+    return f"{_AD_REL_DIR}/{fname}"
+
+
 # ============================================================
 #  扩展定义
 # ============================================================
@@ -117,7 +127,7 @@ EXTENSIONS = {
         "size_mb": 6,
         "required": False,
         "desc": "自动检测人脸并重绘 (YOLOv8n)",
-        "check": ["models/adetailer/face_yolov8n.pt"],
+        "check": [_ad_rel("face_yolov8n.pt")],
     },
     "adetailer_hand": {
         "name": "ADetailer 手部修复",
@@ -125,7 +135,7 @@ EXTENSIONS = {
         "size_mb": 6,
         "required": False,
         "desc": "自动检测手部并重绘 (YOLOv8n)",
-        "check": ["models/adetailer/hand_yolov8n.pt"],
+        "check": [_ad_rel("hand_yolov8n.pt")],
     },
 
     # ---------- 视频 ----------
@@ -243,6 +253,32 @@ EXTENSIONS = {
             "models/flux_engine/dev/text_encoder_2/config.json",
             "models/flux_engine/dev/vae/config.json",
         ],
+        "check_mode": "all",
+    },
+
+    # ---------- 现代视频架构：只留入口，不提供下载 ----------
+    # 与 Flux 同样是"用户自己下、程序只认目录"，区别是这两个引擎**尚未接通**：
+    # 现在放进去会被架构检测正确识别，加载时会明确告知未接通。
+    "ltxvideo_entry": {
+        "name": "LTX-Video（引擎未接通 · 仅入口）",
+        "category": "新架构引擎",
+        "size_mb": 12000,
+        "required": False,
+        "desc": "DiT 视频架构，入口已预留但本版不加载。"
+                "需自行下载 diffusers 目录形式权重到 models/ltxvideo/；"
+                "8GB 显存需要 fp8/量化 + 分块 offload 才有希望跑",
+        "check": ["models/ltxvideo/model_index.json"],
+        "check_mode": "all",
+    },
+    "wan21_entry": {
+        "name": "Wan2.1-T2V-1.3B（引擎未接通 · 仅入口）",
+        "category": "新架构引擎",
+        "size_mb": 16000,
+        "required": False,
+        "desc": "Wan2.1-T2V-1.3B 原生 81 帧 @480p，入口已预留但本版不加载。"
+                "需自行下载 diffusers 目录形式权重到 models/wan21/；"
+                "官方显存口径 8.19GB，本机 8GB 卡要靠 offload 慢跑",
+        "check": ["models/wan21/model_index.json"],
         "check_mode": "all",
     },
 }
@@ -507,7 +543,7 @@ def _dl_controlnet_sdxl(cb, control_type):
 
 def _dl_adetailer(cb, kind):
     fname = f"{kind}_yolov8n.pt"
-    _hf_single_file("Bingsu/adetailer", fname, _proj(f"models/adetailer/{fname}"), cb)
+    _hf_single_file("Bingsu/adetailer", fname, _proj(_ad_rel(fname)), cb)
 
 
 def _dl_flux_engine(cb, variant):
@@ -643,7 +679,24 @@ def _dl_gpt_sovits(cb):
 #  下载调度中心
 # ------------------------------------------------------------
 
+def _dl_manual(cb, label, target_rel, kind="weights"):
+    """"入口"类扩展的占位下载器：不联网，只把话说清楚。
+
+    kind="weights" 是模型权重（diffusers 目录形式），kind="tool" 是工具（解压即用）。
+    """
+    if kind == "tool":
+        msg = (f"{label} 需要你自己下载：本项目不提供该工具的下载入口。"
+               f"解压后放到 {target_rel} 再重启即可（届时会显示已就位）。")
+    else:
+        msg = (f"{label} 需要你自己下载：本项目不提供该架构的下载入口。"
+               f"把 diffusers 目录形式的权重放到 {target_rel} 后重启即可（届时会显示已就位）。")
+    _emit(cb, 0, msg)
+    raise RuntimeError(msg)
+
+
 DOWNLOADERS = {
+    "ltxvideo_entry":        lambda cb: _dl_manual(cb, "LTX-Video", "models/ltxvideo/"),
+    "wan21_entry":           lambda cb: _dl_manual(cb, "Wan2.1-T2V-1.3B", "models/wan21/"),
     "qwen2vl_2b":            _dl_qwen2vl_2b,
     "nllb_600m":             _dl_nllb_600m,
     "controlnet_openpose":   lambda cb: _dl_controlnet(cb, "openpose"),

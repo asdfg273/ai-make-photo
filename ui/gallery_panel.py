@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPoint, QTimer, QObject
 from PyQt6.QtGui import QPixmap, QIcon, QWheelEvent
 
+from ui.theme import PALETTE
 from ui.i18n import ui_i18n
 from utils.paths import DATA_DIR
 import logging
@@ -46,7 +47,7 @@ def is_nsfw_prompt(text: str) -> bool:
 class ImageViewerDialog(QDialog):
     def __init__(self, path: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"🖼️ {os.path.basename(path)}")
+        self.setWindowTitle(os.path.basename(path))
         self.resize(1000, 800)
         self.path = path
         self.scale_factor = 1.0
@@ -55,9 +56,9 @@ class ImageViewerDialog(QDialog):
         layout = QVBoxLayout(self)
 
         toolbar = QHBoxLayout()
-        btn_zoom_in = QPushButton("🔍+ 放大")
-        btn_zoom_out = QPushButton("🔍- 缩小")
-        btn_fit = QPushButton("📐 适配窗口")
+        btn_zoom_in = QPushButton("+ 放大")
+        btn_zoom_out = QPushButton("- 缩小")
+        btn_fit = QPushButton("适配窗口")
         btn_actual = QPushButton("1:1 原始")
         self.lbl_zoom = QLabel("100%")
         self.lbl_zoom.setProperty("role", "value")
@@ -71,7 +72,6 @@ class ImageViewerDialog(QDialog):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(False)
         self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        from ui.theme import PALETTE
         self.scroll.setStyleSheet(f"background:{PALETTE['bg']};")
         self.lbl_img = QLabel()
         self.lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -136,7 +136,7 @@ class MetadataPanel(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        title = QLabel("📋 元数据")
+        title = QLabel(" 元数据")
         title.setProperty("role", "title")
         layout.addWidget(title)
 
@@ -174,8 +174,8 @@ class MetadataPanel(QWidget):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
-        self.btn_copy_prompt = QPushButton("📋 复制 Prompt")
-        self.btn_apply = QPushButton("↩️ 套用全部参数")
+        self.btn_copy_prompt = QPushButton("复制 Prompt")
+        self.btn_apply = QPushButton("↩ 套用全部参数")
         for b in (self.btn_copy_prompt, self.btn_apply):
             b.setFixedHeight(30)
         btn_row.addWidget(self.btn_copy_prompt)
@@ -233,7 +233,7 @@ class MetadataPanel(QWidget):
             val = str(v)
             if len(val) > 60:
                 val = val[:57] + "..."
-            lines.append(f"<b style='color:#89b4fa'>{k}</b>: {val}")
+            lines.append(f"<b style='color:{PALETTE['accent_hi']}'>{k}</b>: {val}")
         self.lbl_params.setText("<br>".join(lines) if lines else "(无其他参数)")
 
     def clear(self, hint: str = ""):
@@ -262,12 +262,12 @@ class GalleryPanel(QWidget):
     image_selected      = pyqtSignal(str)
     image_deleted       = pyqtSignal(str)
     apply_params_signal = pyqtSignal(dict)
-    reuse_params_signal = pyqtSignal(str)   # 🔁 复用 PNG 参数
-    send_to_i2i_signal  = pyqtSignal(str)   # 🛠 发送到 img2img
-    send_to_face_signal = pyqtSignal(str)   # 😀 发送到修脸
-    send_to_editor_signal = pyqtSignal(str) # ✏️ 载入预览并打开修图编辑器
-    video_selected      = pyqtSignal(str)   # ▶️ 双击视频条目（交由宿主播放）
-    items_changed       = pyqtSignal()      # 🔄 可见列表重建完成（供胶片条联动）
+    reuse_params_signal = pyqtSignal(str)   #  复用 PNG 参数
+    send_to_i2i_signal  = pyqtSignal(str)   #  发送到 img2img
+    send_to_face_signal = pyqtSignal(str)   #  发送到修脸
+    send_to_editor_signal = pyqtSignal(str) #  载入预览并打开修图编辑器
+    video_selected      = pyqtSignal(str)   # ▶ 双击视频条目（交由宿主播放）
+    items_changed       = pyqtSignal()      #  可见列表重建完成（供胶片条联动）
 
     IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
     VIDEO_EXT = {".mp4", ".gif", ".webm", ".mov"}
@@ -303,21 +303,21 @@ class GalleryPanel(QWidget):
         search_row.setSpacing(4)
 
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("🔍 搜索文件名或 prompt 关键字...")
+        self.search_box.setPlaceholderText("搜索文件名或 prompt 关键字...")
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(300)   # 防抖 300ms
         self._search_timer.timeout.connect(self._apply_filter)
         self.search_box.textChanged.connect(self._search_text_changed)
 
-        self.btn_clear_search = QPushButton("✖")
+        self.btn_clear_search = QPushButton("×")
         self.btn_clear_search.setToolTip("清空搜索")
         self.btn_clear_search.clicked.connect(lambda: self.search_box.clear())
         self.btn_semantic = QPushButton("语义")
         self.btn_semantic.setToolTip("使用本地 CLIP 按文本语义搜索，或从图片菜单查找相似图")
         self.btn_semantic.clicked.connect(self.start_semantic_search)
 
-        self.btn_only_fav = QPushButton("⭐")
+        self.btn_only_fav = QPushButton("收藏")
         self.btn_only_fav.setCheckable(True)
         self.btn_only_fav.setToolTip("仅显示收藏")
 
@@ -330,7 +330,7 @@ class GalleryPanel(QWidget):
         self.btn_show_nsfw.toggled.connect(self._apply_filter)
 
 
-        self.btn_show_meta = QPushButton("📋")
+        self.btn_show_meta = QPushButton("元数据")
         self.btn_show_meta.setToolTip("显示/隐藏元数据面板")
         self.btn_show_meta.clicked.connect(self._toggle_meta_panel)
 
@@ -368,7 +368,7 @@ class GalleryPanel(QWidget):
         self.list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.list_widget.setSpacing(6)
         self.list_widget.setMovement(QListWidget.Movement.Static)
-        # ⭐ 开启多选
+        #  开启多选
         self.list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list_widget.customContextMenuRequested.connect(self._show_menu)
@@ -390,7 +390,7 @@ class GalleryPanel(QWidget):
         # ── 元数据浮窗 ──
         self.meta_panel = MetadataPanel()
         self.meta_panel.setWindowFlags(Qt.WindowType.Tool)
-        self.meta_panel.setWindowTitle("📋 图片元数据")
+        self.meta_panel.setWindowTitle("图片元数据")
         self.meta_panel.resize(380, 520)
         self.meta_panel.apply_params_signal.connect(self.apply_params_signal)
         self.meta_panel.hide()
@@ -419,7 +419,7 @@ class GalleryPanel(QWidget):
                 with open(self._favs_path, "r", encoding="utf-8") as f:
                     return set(json.load(f))
         except Exception as e:
-            logger.warning(f"⚠️ 加载收藏失败: {e}")
+            logger.warning(f" 加载收藏失败: {e}")
         return set()
 
     def _save_favs(self):
@@ -427,7 +427,7 @@ class GalleryPanel(QWidget):
             with open(self._favs_path, "w", encoding="utf-8") as f:
                 json.dump(sorted(self._favs), f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.warning(f"⚠️ 保存收藏失败: {e}")
+            logger.warning(f" 保存收藏失败: {e}")
 
     # ========== 数据管理 ==========
     @classmethod
@@ -588,7 +588,6 @@ class GalleryPanel(QWidget):
         time_idx = self.combo_time.currentIndex() if hasattr(self, "combo_time") else 0
         sort_idx = self.combo_sort.currentIndex() if hasattr(self, "combo_sort") else 0
 
-        # 时间过滤阈值
         cutoff = None
         if time_idx == 1:
             cutoff = _time.time() - 86400
@@ -598,7 +597,6 @@ class GalleryPanel(QWidget):
             cutoff = _time.time() - 30 * 86400
 
         items = list(self._all_items)
-        # 排序
         if sort_idx == 0:
             items.sort(key=lambda it: -self._mtime(it[0]))
         elif sort_idx == 1:
@@ -640,9 +638,9 @@ class GalleryPanel(QWidget):
         if cls._video_thumb_cache is None:
             from PyQt6.QtGui import QColor, QPainter
             pix = QPixmap(110, 110)
-            pix.fill(QColor("#2a2a3c"))
+            pix.fill(QColor(PALETTE["bg_soft"]))
             p = QPainter(pix)
-            p.setPen(QColor("#cdd6f4"))
+            p.setPen(QColor(PALETTE["fg_mute"]))
             f = p.font(); f.setPointSize(28); p.setFont(f)
             p.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, "▶")
             p.end()
@@ -684,7 +682,7 @@ class GalleryPanel(QWidget):
                 tw = p.fontMetrics().horizontalAdvance(label) + 8
                 p.fillRect(pix.width() - tw - 2, pix.height() - 18, tw, 16,
                            QColor(0, 0, 0, 160))
-                p.setPen(QColor("#ffffff"))
+                p.setPen(QColor(PALETTE["on_accent"]))
                 p.drawText(pix.width() - tw, pix.height() - 5, label)
                 # 左下 ▶ 标记
                 p.setPen(QColor(255, 255, 255, 200))
@@ -719,7 +717,7 @@ class GalleryPanel(QWidget):
             item.setIcon(icon)
         name = os.path.basename(path)[:20]
         if os.path.abspath(path) in self._favs:
-            name = f"⭐ {name}"
+            name = f"★ {name}"
         item.setText(name)
         item.setData(Qt.ItemDataRole.UserRole, path)
         item.setToolTip(path)
@@ -871,13 +869,13 @@ class GalleryPanel(QWidget):
 
         # ─────── 多选菜单 ───────
         if is_multi:
-            menu.addAction(f"📦 已选 {len(selected_paths)} 张").setEnabled(False)
+            menu.addAction(f" 已选 {len(selected_paths)} 张").setEnabled(False)
             menu.addSeparator()
-            act_batch_fav    = menu.addAction("⭐ 批量切换收藏")
-            act_batch_export = menu.addAction("📤 批量导出到…")
+            act_batch_fav    = menu.addAction("批量切换收藏")
+            act_batch_export = menu.addAction("批量导出到…")
             menu.addSeparator()
-            act_batch_remove = menu.addAction("🗑 从画廊移除")
-            act_batch_delete = menu.addAction("❌ 删除文件 (不可恢复)")
+            act_batch_remove = menu.addAction("从画廊移除")
+            act_batch_delete = menu.addAction("删除文件 (不可恢复)")
 
             chosen = menu.exec(self.list_widget.viewport().mapToGlobal(pos))
             if chosen == act_batch_fav:
@@ -895,13 +893,13 @@ class GalleryPanel(QWidget):
 
         # 视频条目：简化菜单（播放/文件夹/收藏/移除/删除）
         if self.media_kind(path) == "video":
-            act_play   = menu.addAction("▶️ 播放")
+            act_play   = menu.addAction("▶ 播放")
             is_fav = os.path.abspath(path) in self._favs
-            act_fav    = menu.addAction("💔 取消收藏" if is_fav else "⭐ 加入收藏")
-            act_folder = menu.addAction("📁 打开所在文件夹")
+            act_fav    = menu.addAction("取消收藏" if is_fav else " 加入收藏")
+            act_folder = menu.addAction("打开所在文件夹")
             menu.addSeparator()
-            act_remove = menu.addAction("🗑 从画廊移除")
-            act_del    = menu.addAction("❌ 删除文件")
+            act_remove = menu.addAction("从画廊移除")
+            act_del    = menu.addAction("删除文件")
 
             chosen = menu.exec(self.list_widget.viewport().mapToGlobal(pos))
             if chosen == act_play:
@@ -916,22 +914,22 @@ class GalleryPanel(QWidget):
                 self._batch_delete_files([path])
             return
 
-        act_open   = menu.addAction("🖼️ 大图查看")
-        act_edit   = menu.addAction("✏️ 载入预览/发送到编辑")
+        act_open   = menu.addAction("大图查看")
+        act_edit   = menu.addAction("载入预览/发送到编辑")
         act_similar = menu.addAction("查找相似图")
         menu.addSeparator()
-        act_reuse  = menu.addAction("🔁 复用参数")
-        act_i2i    = menu.addAction("🛠 发送到 img2img")
-        act_face   = menu.addAction("😀 发送到修脸")
+        act_reuse  = menu.addAction("复用参数")
+        act_i2i    = menu.addAction("发送到 img2img")
+        act_face   = menu.addAction("发送到修脸")
         menu.addSeparator()
         is_fav = os.path.abspath(path) in self._favs
-        act_fav    = menu.addAction("💔 取消收藏" if is_fav else "⭐ 加入收藏")
-        act_copy_p = menu.addAction("📋 复制 Prompt")
-        act_meta   = menu.addAction("📋 查看元数据")
-        act_folder = menu.addAction("📁 打开所在文件夹")
+        act_fav    = menu.addAction("取消收藏" if is_fav else " 加入收藏")
+        act_copy_p = menu.addAction("复制 Prompt")
+        act_meta   = menu.addAction("查看元数据")
+        act_folder = menu.addAction("打开所在文件夹")
         menu.addSeparator()
-        act_remove = menu.addAction("🗑 从画廊移除")
-        act_del    = menu.addAction("❌ 删除文件")
+        act_remove = menu.addAction("从画廊移除")
+        act_del    = menu.addAction("删除文件")
 
         chosen = menu.exec(self.list_widget.viewport().mapToGlobal(pos))
         if chosen == act_open:
@@ -969,7 +967,7 @@ class GalleryPanel(QWidget):
             else:
                 self._favs.add(ap); n_add += 1
         self._save_favs()
-        self._apply_filter()  # 刷新 ⭐ 前缀
+        self._apply_filter()  # 刷新  前缀
         QMessageBox.information(
             self, ui_i18n.tr("收藏"),
             ui_i18n.trf(
@@ -989,7 +987,7 @@ class GalleryPanel(QWidget):
                 shutil.copy2(p, os.path.join(dst_dir, os.path.basename(p)))
                 ok += 1
             except Exception as e:
-                logger.warning(f"⚠️ 导出失败 {p}: {e}")
+                logger.warning(f"导出失败 {p}: {e}")
                 fail += 1
         QMessageBox.information(
             self, ui_i18n.tr("批量导出"),
@@ -1026,7 +1024,7 @@ class GalleryPanel(QWidget):
                 deleted.append(p)
                 ok += 1
             except Exception as e:
-                logger.warning(f"⚠️ 删除失败 {p}: {e}")
+                logger.warning(f"删除失败 {p}: {e}")
                 fail += 1
         self._remove_from_view(deleted)
         # 同步清空收藏中已删除的条目
@@ -1077,7 +1075,7 @@ class GalleryPanel(QWidget):
             else:
                 subprocess.Popen(['xdg-open', os.path.dirname(path)])
         except Exception as e:
-            logger.warning(f"⚠️ 打开文件夹失败: {e}")
+            logger.warning(f" 打开文件夹失败: {e}")
 
     def closeEvent(self, event):
         self._hover_timer.stop()

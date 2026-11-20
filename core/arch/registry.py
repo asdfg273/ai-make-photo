@@ -48,6 +48,40 @@ REGISTRY: dict[str, ArchInfo] = {
         txt2img=True,
     ),
     ),
+    "mossimage": ArchInfo(
+        arch_id="mossimage",
+        display_name="MOSS-Image (5B DiT)",
+        engine_id="mossimage",
+        supported=True,
+        model_subdir="mossimage",
+        # 官方权重是 **diffusers 目录**（带自定义管线 pipeline_moss_image.py），
+        # 不是单文件检查点；把它整个目录放进 models/mossimage/ 即可。
+        extra_components=("Diffusers 目录形式权重（含 pipeline_moss_image.py）",),
+        extra_download_size="约 25GB（bf16：transformer 9.7GB + 文本编码器 16GB）",
+        caps=Capabilities(
+            is_base_model=True,
+            # 唯一一个「原生吃中文」的架构：文本编码器是 Qwen 系，
+            # 官方示例直接写中文，连画面里的中文字都能画准。
+            supports_zh_prompt=True,
+            supports_lora=False,
+            supports_compel=False,       # 不是 CLIP，权重语法无效
+            supports_vpred=False,
+            needs_fp32_vae=True,         # 官方 torch_dtype 里 vae 明确用 float32
+            heavy_vram=True,
+            txt2img=True,
+            img2img=False,               # 官方 API 只有文生图 + layout 控制
+            inpaint=False,
+            controlnet=False,
+            ip_adapter=False,
+            lora=False,
+            compel_weighting=False,
+            scheduler_switch=False,      # 用官方 Flow-matching Euler + shift 5
+            clip_skip=False,
+            hires_fix=False,
+            adetailer=False,
+            vpred_toggle=False,
+        ),
+    ),
     "flux": ArchInfo(
         "flux", "FLUX.1", "diffusers", True, _TXT2IMG_ONLY,
         model_subdir="flux", lora_subdir="flux",
@@ -67,6 +101,35 @@ REGISTRY: dict[str, ArchInfo] = {
         model_subdir="sd3", lora_subdir="sd3",
         unsupported_reason="SD3 单文件加载依赖本地 diffusers 配置与完整检查点。",
         extra_components=("T5-XXL 文本编码器", "双 CLIP 编码器"),
+    ),
+    # ---------------- 现代视频架构：只留「入口」，不接线 ----------------
+    # 和 Flux 同一套做法：用户能选中、能看到要下什么、能自己放进目录，
+    # 但引擎不接通，选了会给出明确原因（而不是一句"未识别的架构"）。
+    "ltxvideo": ArchInfo(
+        "ltxvideo", "LTX-Video", "ltxvideo", False, _NOTHING,
+        model_subdir="ltxvideo",
+        unsupported_reason=(
+            "LTX-Video 入口已预留，但引擎尚未接通（本版不提供加载）。\n"
+            "它属于 DiT 视频架构，8GB 显存需要 fp8/量化 + 分块 offload 才有希望跑起来，\n"
+            "而本项目现有视频链路（AnimateDiff + SD1.5 motion module）是另一套。\n"
+            "现在能做的：把 diffusers 目录形式的权重放到 models/ltxvideo/，\n"
+            "等引擎接通后即可直接使用。"
+        ),
+        extra_components=("diffusers 目录形式权重（含 model_index.json）",),
+        extra_download_size="约 8~20GB（视版本与精度）",
+    ),
+    "wan21": ArchInfo(
+        "wan21", "Wan2.1", "wan21", False, _NOTHING,
+        model_subdir="wan21",
+        unsupported_reason=(
+            "Wan2.1 入口已预留，但引擎尚未接通（本版不提供加载）。\n"
+            "它是 1.3B/14B 的视频 DiT，14B 在 8GB 卡上只能靠 CPU offload 慢慢跑；\n"
+            "1.3B 相对可行，但仍需要新的采样/VAE 通路。\n"
+            "现在能做的：把 diffusers 目录形式的权重放到 models/wan21/，\n"
+            "等引擎接通后即可直接使用。"
+        ),
+        extra_components=("diffusers 目录形式权重（含 model_index.json）",),
+        extra_download_size="1.3B 约 5GB / 14B 约 30GB",
     ),
     "controlnet": ArchInfo(
         "controlnet", "ControlNet 模型（非底模）", "none", False, _NOT_A_MODEL,

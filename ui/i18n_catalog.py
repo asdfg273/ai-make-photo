@@ -353,6 +353,32 @@ TRANSLATIONS = {
         "Apache-2.0 commercial license. Includes T5/CLIP/VAE; download the transformer weights into models/puton/",
         "Apache-2.0 で商用可。T5/CLIP/VAE を同梱。transformer の重みは models/puton/ に配置",
     ),
+    # ---- 现代视频架构入口（仅入口，引擎未接通） ----
+    "LTX-Video（引擎未接通 · 仅入口）": (
+        "LTX-Video (Engine Not Wired · Entry Only)",
+        "LTX-Video（エンジン未接続・入口のみ）",
+    ),
+    "DiT 视频架构，入口已预留但本版不加载。需自行下载 diffusers 目录形式权重到 models/ltxvideo/；8GB 显存需要 fp8/量化 + 分块 offload 才有希望跑": (
+        "DiT video architecture. The entry is reserved but this build does not load it. "
+        "Download the diffusers-format weights into models/ltxvideo/ yourself; on 8GB VRAM "
+        "it needs fp8/quantization plus block offloading to be usable.",
+        "DiT 動画アーキテクチャ。入口は用意済みですが本バージョンでは読み込みません。"
+        "diffusers 形式の重みを models/ltxvideo/ に配置してください。8GB の VRAM では "
+        "fp8/量子化とブロック単位のオフロードが必要です。",
+    ),
+    "Wan2.1-T2V-1.3B（引擎未接通 · 仅入口）": (
+        "Wan2.1-T2V-1.3B (Engine Not Wired · Entry Only)",
+        "Wan2.1-T2V-1.3B（エンジン未接続・入口のみ）",
+    ),
+    "Wan2.1-T2V-1.3B 原生 81 帧 @480p，入口已预留但本版不加载。需自行下载 diffusers 目录形式权重到 models/wan21/；官方显存口径 8.19GB，本机 8GB 卡要靠 offload 慢跑": (
+        "Wan2.1-T2V-1.3B generates 81 frames natively at 480p. The entry is reserved but "
+        "this build does not load it. Download the diffusers-format weights into models/wan21/ "
+        "yourself; the official VRAM figure is 8.19GB, so an 8GB card needs offloading and "
+        "will be slow.",
+        "Wan2.1-T2V-1.3B は 480p で 81 フレームをネイティブ生成できます。入口は用意済みですが"
+        "本バージョンでは読み込みません。diffusers 形式の重みを models/wan21/ に配置してください。"
+        "公式の VRAM 目安は 8.19GB のため、8GB の GPU ではオフロードが必要で低速になります。",
+    ),
     "Flux 引擎组件（dev · 不可商用）": (
         "Flux Engine Components (dev · Non-commercial)",
         "Flux エンジンコンポーネント（dev・商用不可）",
@@ -567,6 +593,10 @@ TRANSLATIONS = {
     "基于 Stable Diffusion + ADetailer<br>支持 LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer": (
         "Based on Stable Diffusion + ADetailer<br>Supports LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer",
         "Stable Diffusion + ADetailer ベース<br>LoRA / ControlNet / Hires.fix / IP-Adapter / Pose Transfer に対応",
+    ),
+    "本项目以 AGPL-3.0 发布，完整许可见 LICENSE": (
+        "Released under AGPL-3.0. See LICENSE for the full text.",
+        "本プロジェクトは AGPL-3.0 で公開されています。全文は LICENSE を参照してください。",
     ),
 
     # 视频校验与操作状态
